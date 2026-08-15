@@ -26,5 +26,4 @@ Build an **A2A (Agent-to-Agent) routing system** into our own coding agent harne
    (why a given task went to a given model).
 
 ## Environment
-- Termux (Android). No Docker guaranteed; prefer local Python/Node toolchain.
 - Git remote: `https://github.com/huncijr/tset` (private).

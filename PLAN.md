@@ -77,7 +77,7 @@ phase 0.
 ### Phase 0 — setup and decision (now)
 - [x] Repo, agent .md files, .gitignore.
 - [x] Plan (this file) + fork/repo review (`FORK_REVIEW.md`).
-- [ ] Spike: run routerccode locally on Termux, list concrete issues.
+- [ ] Spike: run routerccode locally, list concrete issues.
 - [ ] Decision: B vs. C (based on the spike).
 
 ### Phase 1 — Router core + registry

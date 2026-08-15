@@ -12,7 +12,7 @@ This is the second plan file: which forks could work, and — if we use
 | **sst/opencode** | TS | MIT | modern CLI/TUI, plugin system, model-agnostic provider layer | TS; the plugin API changes fast |
 | **cline/cline** | TS | Apache-2.0 | mature tool use, MCP support | VS Code extension — hard to port into a CLI harness |
 | **AiderX/aider** | Python | Apache-2.0 | excellent edit formats, repo-map | single-model design, no orchestration |
-| **block/goose** | Rust | Apache-2.0 | extension system, multi-provider | Rust; hard to iterate quickly on Termux |
+| **block/goose** | Rust | Apache-2.0 | extension system, multi-provider | Rust; slower iteration |
 | **All-Hands-AI/OpenHands** | Python | MIT | multi-agent out of the box | huge, hard to trim into "our own harness" |
 
 **Conclusion:** if we fork, then **opencode** (TS, provider layer is
@@ -60,7 +60,7 @@ Reviewed: ~4000 lines of Python (`src/openrouter_agent/`), 4 test files
    tests.
 6. **Fragile Node wrapper**: `bin/routercode.js` looks for the
    `routercode` binary on PATH, with a `python -m ...` fallback — but many
-   systems (including Termux) have `python3`, not `python`. Fix: explicit
+   systems only have `python3`, not `python`. Fix: explicit
    `python3` / `sys.executable` logic, or drop the wrapper.
 7. **`postinstall: pip install .`** from npm — fragile and suspicious as a
    security pattern; remove it.

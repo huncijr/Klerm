@@ -1,4 +1,4 @@
-# Secrets — SOHA ne commitolj tokeneket / kulcsokat
+# Secrets — NEVER commit tokens / keys
 .env
 .env.*
 *.token
@@ -23,16 +23,15 @@ build/
 node_modules/
 npm-debug.log*
 
-# Szerkesztő / OS
+# Editor / OS
 .DS_Store
 *.swp
 .idea/
 .vscode/
 
-# Termux / lokális munkaanyag
-.termux-local/
+# Logs
 *.log
 
-# Session / cache adatok
+# Session / cache data
 .sessions/
 .cache/
