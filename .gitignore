@@ -1,0 +1,38 @@
+# Secrets — SOHA ne commitolj tokeneket / kulcsokat
+.env
+.env.*
+*.token
+*_token
+secrets/
+credentials.json
+.auth/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Szerkesztő / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Termux / lokális munkaanyag
+.termux-local/
+*.log
+
+# Session / cache adatok
+.sessions/
+.cache/
