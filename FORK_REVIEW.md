@@ -1,100 +1,100 @@
-# FORK_REVIEW.md — fork jelöltek + `greedfinanace/routerccode` elemzés
+# FORK_REVIEW.md — fork candidates + `greedfinanace/routerccode` analysis
 
-Ez a második terv-fájl: milyen forkok jöhetnek szóba, és ha a
-`routerccode`-ot használjuk, **mit kell rajta javítani**.
+This is the second plan file: which forks could work, and — if we use
+`routerccode` — **what needs to be fixed in it**.
 
 ---
 
-## A) Fork jelöltek (saját harnessbe konvertáláshoz)
+## A) Fork candidates (for converting into our own harness)
 
-| Repo | Nyelv | Licenc | Előny | Hátrány |
+| Repo | Language | License | Pros | Cons |
 |---|---|---|---|---|
-| **sst/opencode** | TS | MIT | modern CLI/TUI, plugin rendszer, modell-független provider réteg | TS; a plugin API gyorsan változik |
-| **cline/cline** | TS | Apache-2.0 | érett tool use, MCP támogatás | VS Code extension — CLI harnessbe nehéz átemelni |
-| **AiderX/aider** | Python | Apache-2.0 | nagyon jó edit-formátumok, repo-map | single-model szemlélet, nincs orchestráció |
-| **block/goose** | Rust | Apache-2.0 | extension rendszer, multi-provider | Rust; nehéz gyorsan módosítani Termuxon |
-| **All-Hands-AI/OpenHands** | Python | MIT | multi-agent alapból | hatalmas, nehéz belőni mint "saját harness" |
+| **sst/opencode** | TS | MIT | modern CLI/TUI, plugin system, model-agnostic provider layer | TS; the plugin API changes fast |
+| **cline/cline** | TS | Apache-2.0 | mature tool use, MCP support | VS Code extension — hard to port into a CLI harness |
+| **AiderX/aider** | Python | Apache-2.0 | excellent edit formats, repo-map | single-model design, no orchestration |
+| **block/goose** | Rust | Apache-2.0 | extension system, multi-provider | Rust; hard to iterate quickly on Termux |
+| **All-Hands-AI/OpenHands** | Python | MIT | multi-agent out of the box | huge, hard to trim into "our own harness" |
 
-**Következtetés:** ha fork, akkor **opencode** (TS, provider réteg
-kicserélhető) vagy **aider** (Python, mi építjük rá a routert). De egyikben
-sincs kész A2A routing — azt mindenképp mi írjuk. Ezért a fő csapásirány a
-`PLAN.md` szerinti **B+C hibrid**: routerccode referencia + saját minimál
-harness.
+**Conclusion:** if we fork, then **opencode** (TS, provider layer is
+swappable) or **aider** (Python, we build the router on top). But none of
+them ship A2A routing — we have to build that ourselves either way. That is
+why the main direction is the **B+C hybrid** from `PLAN.md`: routerccode as
+reference + our own minimal harness.
 
 ---
 
-## B) `greedfinanace/routerccode` állapota (repo review)
+## B) State of `greedfinanace/routerccode` (repo review)
 
-Átnézve: ~4000 sor Python (`src/openrouter_agent/`), 4 tesztfájl (26
-teszteset), Node wrapper (`bin/routercode.js`).
+Reviewed: ~4000 lines of Python (`src/openrouter_agent/`), 4 test files
+(26 test cases), Node wrapper (`bin/routercode.js`).
 
-### Ami JOUL használható
-- `subagent.py`: fan-out orchestrátor, szerep-alapú subagent konfiguráció
+### What is usable
+- `subagent.py`: fan-out orchestrator, role-based subagent configs
   (`test_writer`, `security_auditor`, `doc_writer`, `debugger`), git
-  worktree integráció, `model_override` olcsóbb modellhez — **ez majdnem
-  pont a mi router koncepciónk magja**.
-- `context.py`: többrétegű context compression.
-- `tools.py` + `lazy_tools.py`: tool implementációk (read/write/search/run).
+  worktree integration, `model_override` for a cheaper model — **this is
+  almost exactly the core of our router concept**.
+- `context.py`: multi-layer context compression.
+- `tools.py` + `lazy_tools.py`: tool implementations (read/write/search/run).
 - `session.py`: continue/fork/rewind.
-- `security.py`: alap védelmek.
+- `security.py`: basic protections.
 
-### Ami ROSSZ állapotú / javítandó
+### What is in BAD shape / needs fixing
 
-**Architektúra**
-1. **OpenRouter hard dependency**: `api_client.py` egyetlen endpoint
-   (`openrouter.ai/api/v1`). Nincs provider-absztrakció — a Claude API
-   plan és a Codex OAuth bekötéséhez kell egy közös `Adapter` interface
-   és 3 új adapter. Ez a legnagyobb munka.
-2. **Nincs router/triage logika**: a subagent rendszer szerep-alapú, de
-   nem dönt *méret* alapján (kis task → lokális modell, nagy task →
-   cloud). Kell egy `router/` modul + capability registry.
-3. **`model_override` csak "olcsóbb modell"** egy providerein belül —
-   nincs cross-provider delegáció (Codex OAuth ↔ Claude API).
-4. **`main.py` 871 soros monolit**: REPL, parancsok, loop egyben.
-   Szét kell bontani (cli / loop / commands).
+**Architecture**
+1. **Hard dependency on OpenRouter**: `api_client.py` targets a single
+   endpoint (`openrouter.ai/api/v1`). There is no provider abstraction —
+   wiring in a Claude API plan and Codex OAuth requires a common `Adapter`
+   interface and 3 new adapters. This is the biggest piece of work.
+2. **No router/triage logic**: the subagent system is role-based, but it
+   does not decide by *size* (small task → local model, big task → cloud).
+   We need a `router/` module + capability registry.
+3. **`model_override` only means "cheaper model"** within one provider —
+   there is no cross-provider delegation (Codex OAuth ↔ Claude API).
+4. **`main.py` is an 871-line monolith**: REPL, commands, loop all in one.
+   Needs splitting (cli / loop / commands).
 
-**Minőség / megbízhatóság**
-5. **Gyenge tesztlefedettség**: 26 teszt, és egyik sem fedi a
-   `main.py`-t, `api_client`-et, `subagent.py`-t (a számunkra
-   legfontosabb részt!). Kell: subagent fan-out tesztek mock clienttel,
-   provider adapter tesztek.
-6. **Node wrapper törékeny**: `bin/routercode.js` a PATH-on keresi a
-   `routercode` binárist, fallback `python -m ...` — de `python` helyett
-   sok rendszeren `python3` van; Termuxon is. Fix: explicit
-   `python3` + `sys.executable` logika, vagy a wrapper elhagyása.
-7. **`postinstall: pip install .`** npm-ből — fragile és security-szempontból
-   is gyanús pattern; kivezetni.
-8. **Nincs CI** (GitHub Actions: pytest + ruff + típusellenőrzés).
-9. `pyproject.toml`-ban `requires-python >= 3.11` rendben, de a
-   függőségek nincsenek felső korláttal; lock file (uv) kell.
+**Quality / reliability**
+5. **Weak test coverage**: 26 tests, none covering `main.py`, the
+   `api_client`, or `subagent.py` (the part that matters most to us!).
+   Needed: subagent fan-out tests with a mock client, provider adapter
+   tests.
+6. **Fragile Node wrapper**: `bin/routercode.js` looks for the
+   `routercode` binary on PATH, with a `python -m ...` fallback — but many
+   systems (including Termux) have `python3`, not `python`. Fix: explicit
+   `python3` / `sys.executable` logic, or drop the wrapper.
+7. **`postinstall: pip install .`** from npm — fragile and suspicious as a
+   security pattern; remove it.
+8. **No CI** (GitHub Actions: pytest + ruff + type checking).
+9. `pyproject.toml` has `requires-python >= 3.11`, which is fine, but the
+   dependencies have no upper bounds; we need a lock file (uv).
 
-**Hiányzó funkciók a célunkhoz**
-10. Capability registry (modell profilok YAML-ben).
-11. TaskPackage/TaskResult protokoll (pydantic sémák).
-12. OAuth flow (Codex) — jelenleg csak API kulcs / keyring van
+**Missing features for our goal**
+10. Capability registry (model profiles in YAML).
+11. TaskPackage/TaskResult protocol (pydantic schemas).
+12. OAuth flow (Codex) — currently only API key / keyring exists
     (`key_manager.py`).
-13. Budget/circuit breaker a delegációkra (részben van self-heal breaker,
-    de a subagent timeout csak 120 s fix érték).
-14. Döntési napló (JSONL): melyik task miért melyik modellhez ment.
+13. Budget/circuit breaker for delegations (there is a partial self-heal
+    breaker, but the subagent timeout is a fixed 120 s).
+14. Decision log (JSONL): which task went to which model and why.
 
-### Javítási terv routerccode használata esetén (prioritási sorrend)
-1. Provider-absztrakció: `Adapter` interface + OpenRouter/Claude/Codex/
-   Ollama adapterek (1–2. hiba).
-2. Router modul + capability registry (2–3. hiba).
-3. `subagent.py` kibővítése cross-provider delegációra, `model_override`
-   → `provider_profile_id`.
-4. `main.py` darabolás (4. hiba).
-5. Tesztek + CI (5., 8. hiba).
-6. Node wrapper fix vagy törlés (6–7. hiba).
+### Fix plan if we use routerccode (priority order)
+1. Provider abstraction: `Adapter` interface + OpenRouter/Claude/Codex/
+   Ollama adapters (issues 1–2).
+2. Router module + capability registry (issues 2–3).
+3. Extend `subagent.py` with cross-provider delegation,
+   `model_override` → `provider_profile_id`.
+4. Split up `main.py` (issue 4).
+5. Tests + CI (issues 5, 8).
+6. Fix or delete the Node wrapper (issues 6–7).
 
 ---
 
-## C) Javaslat (összefoglaló)
+## C) Recommendation (summary)
 
-- **Nem forkolunk** első körben: egyik forkban sincs A2A routing, és a
-  konvertálás több munka, mint a saját minimál harness.
-- **routerccode**: referencia + kódlopás forrás (`subagent.py`,
-  `context.py`, `tools.py`), de a fenti 6 pontos javítási terv nélkül
-  nem használható élesben.
-- A 0. fázis spike-ja dönti el, hogy a routerccode-ot ténylegesen
-  forkoljuk (B), vagy csak ihletet merítünk és zöldmezősen építkezünk (C).
+- **No forking** in the first round: none of the forks ship A2A routing,
+  and converting one is more work than building our own minimal harness.
+- **routerccode**: reference + code to lift from (`subagent.py`,
+  `context.py`, `tools.py`), but without the 6-point fix plan above it is
+  not usable in production.
+- The phase-0 spike will decide whether we actually fork routerccode (B)
+  or only take inspiration and build greenfield (C).

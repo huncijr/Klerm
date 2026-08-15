@@ -1,25 +1,30 @@
-# AGENTS.md — utasítások a coding agenteknek ehhez a repóhoz
+# AGENTS.md — instructions for coding agents working in this repo
 
-## Projekt célja
-Egy **A2A (Agent-to-Agent) routing rendszer** építése a saját coding agent harnessünkbe:
-- Egy **kisebb/lokális modell** (router) kezeli a kis taskokat.
-- Nagyobb taskoknál a router **magától meghív egy erősebb modellt** (Qwen, Codex, Claude).
-- A router **ismeri a bekötött modellek képességeit** (capability registry), és ez alapján dönt.
-- Működhet két cloud között is: pl. **Claude API plan** + **Codex OAuth**.
+## Project goal
+Build an **A2A (Agent-to-Agent) routing system** into our own coding agent harness:
+- A **small/local model** (the router) handles small tasks.
+- For larger tasks the router **autonomously delegates to a stronger model**
+  (Qwen, Codex, Claude).
+- The router **knows the capabilities of every wired-in model**
+  (capability registry) and decides based on that.
+- It also works **between two clouds**: e.g. **Claude API plan** +
+  **Codex OAuth**.
 
-## Repó struktúra
-- `PLAN.md` — a teljes projekt terv (fázisok, döntések).
-- `FORK_REVIEW.md` — fork jelöltek + a `greedfinanace/routerccode` repo elemzése és javítási lista.
-- Később: `harness/` (saját kód), `docs/`.
+## Repo structure
+- `PLAN.md` — the full project plan (phases, decisions).
+- `FORK_REVIEW.md` — fork candidates + analysis of the
+  `greedfinanace/routerccode` repo and the fix list.
+- Later: `harness/` (our own code), `docs/`.
 
-## Szabályok az agenteknek
-1. Olvasd el a `PLAN.md`-t és a `FORK_REVIEW.md`-t, mielőtt bármit módosítasz.
-2. Kis, review-zható commitok; commit üzenet angolul, imperatívuszban.
-3. Ne commitolj titkokat (API kulcsok, OAuth tokenek) — lásd `.gitignore`.
-4. Python kód: `>=3.11`, type hintek, `ruff` + `black` formázás.
-5. Új funkcióhoz tesztek (pytest). Nincs merge zöld tesztek nélkül.
-6. A router döntési logikája mindig legyen determinisztikusan naplózható (miért melyik modell kapta a taskot).
+## Rules for agents
+1. Read `PLAN.md` and `FORK_REVIEW.md` before changing anything.
+2. Small, reviewable commits; commit messages in English, imperative mood.
+3. Never commit secrets (API keys, OAuth tokens) — see `.gitignore`.
+4. Python code: `>=3.11`, type hints, formatted with `ruff` + `black`.
+5. New features require tests (pytest). No merging without green tests.
+6. Router decisions must always be deterministically logged
+   (why a given task went to a given model).
 
-## Környezet
-- Termux (Android). Nincs garantiert Docker; inkább lokális Python/Node toolchain.
-- Git remote: `https://github.com/huncijr/tset` (privát).
+## Environment
+- Termux (Android). No Docker guaranteed; prefer local Python/Node toolchain.
+- Git remote: `https://github.com/huncijr/tset` (private).

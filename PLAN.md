@@ -1,117 +1,118 @@
-# PLAN.md — A2A Routing rendszer a saját coding agent harnessbe
+# PLAN.md — A2A routing system for our own coding agent harness
 
-## 1. Cél
+## 1. Goal
 
-Egy olyan coding agent harness, ahol:
+A coding agent harness where:
 
-- Egy **kicsi, lokális modell** (router/orchestrator) futtatja a kis taskokat
-  (fájl olvasás, kis edit, grep, egyszerű refactor).
-- Ha a task **nagy vagy komplex**, a router **magától delegál** egy erősebb
-  modellnek: **Qwen**, **Codex** (OpenAI), vagy **Claude**.
-- A router **tudja, milyen modellek vannak bekötve** és azok képességeit
-  (context window, erősségek, ár, auth típus) — ebből dönt.
-- A rendszer **cloud-cloud között is működik**: pl. Claude API plan mint
-  fő worker + Codex OAuth mint másodlagos worker (vagy fordítva).
+- A **small, local model** (router/orchestrator) runs the small tasks
+  (file reads, small edits, grep, simple refactors).
+- When a task is **large or complex**, the router **delegates on its own**
+  to a stronger model: **Qwen**, **Codex** (OpenAI), or **Claude**.
+- The router **knows which models are wired in** and their capabilities
+  (context window, strengths, cost, auth type) — and decides based on that.
+- It also works **cloud-to-cloud**: e.g. a Claude API plan as the main
+  worker + Codex OAuth as a secondary worker (or the other way around).
 
-## 2. Alapelvek
+## 2. Principles
 
-1. **Router first**: minden task először a lokális modellhez megy. Ő dönt:
+1. **Router first**: every task goes to the local model first. It decides:
    `SELF` / `DELEGATE(model_id, reason)`.
-2. **Capability registry**: minden bekötött modell egy deklarativ profil
-   (név, provider, auth, context limit, tool support, költség, mikor jó).
-   A router promptja ezt a registry-t kapja meg.
-3. **Task handoff protokoll**: a delegációhoz strukturált csomag kell
-   (cél, kontextus fájlok, elfogadási kritériumok, budget/token limit,
-   visszajelzés formátuma). A worker eredményt ad vissza, nem "veszi át" a
-   sessiont.
-4. **Költség- és token-kontroll**: minden delegációnak van max token /
-   max lépés limitje; a router összegez és validál.
+2. **Capability registry**: every wired-in model has a declarative profile
+   (name, provider, auth, context limit, tool support, cost, what it is
+   good at). The router prompt receives this registry.
+3. **Task handoff protocol**: delegation needs a structured package
+   (goal, context files, acceptance criteria, budget/token limit,
+   response format). The worker returns a result; it does not "take over"
+   the session.
+4. **Cost and token control**: every delegation has a max-token /
+   max-step limit; the router summarizes and validates.
 
-## 3. Architektúra
+## 3. Architecture
 
 ```
             ┌──────────────────────────────┐
- user ───▶  │  Router (kicsi lokális modell)│
+ user ───▶  │  Router (small local model)   │
             │  - task triage                │
             │  - capability registry        │
             └───────┬──────────────┬───────┘
                     │ SELF         │ DELEGATE
                     ▼              ▼
-             lokális toolok   Provider Adapterek
-             (read/edit/sh)    ├─ Anthropic API (Claude plan / API key)
-                               ├─ Codex OAuth (OpenAI)
-                               ├─ Qwen (API vagy lokális)
-                               └─ Ollama / llama.cpp (lokális)
+             local tools      Provider adapters
+             (read/edit/sh)   ├─ Anthropic API (Claude plan / API key)
+                              ├─ Codex OAuth (OpenAI)
+                              ├─ Qwen (API or local)
+                              └─ Ollama / llama.cpp (local)
 ```
 
-Komponensek:
-- `router/` — triage logika, döntési prompt, naplózás.
-- `registry/` — modell profilok (YAML/JSON), auth-konfiguráció.
-- `adapters/` — providerenként 1 adapter, közös interface:
+Components:
+- `router/` — triage logic, decision prompt, logging.
+- `registry/` — model profiles (YAML/JSON), auth configuration.
+- `adapters/` — one adapter per provider, common interface:
   `run_task(task_pkg) -> TaskResult`.
-- `protocol/` — TaskPackage / TaskResult sémák (pydantic).
-- `tools/` — read/edit/bash/search toolok, amiket a router és a workerek
-  is használhatnak.
-- `harness_cli/` — a TUI/CLI réteg.
+- `protocol/` — TaskPackage / TaskResult schemas (pydantic).
+- `tools/` — read/edit/bash/search tools usable by both the router and
+  the workers.
+- `harness_cli/` — the TUI/CLI layer.
 
-## 4. Út döntése: fork vs. routerccode vs. zöldmezős
+## 4. Path decision: fork vs. routerccode vs. greenfield
 
-Részletes elemzés: **`FORK_REVIEW.md`**. Röviden:
+Detailed analysis: **`FORK_REVIEW.md`**. In short:
 
-- **A) Forkolni** (opencode / cline / aider / goose) → erős alap, de nehéz
-  "saját harnessbe" konvertálni és az A2A réteget így is mi építjük.
-- **B) routerccode javítása** → kicsi (~4k LOC), van subagent modulja,
-  de sok javítás kell (lásd FORK_REVIEW.md).
-- **C) Saját minimál harness** → csak a fenti 5 komponens, provider adapter
-  mintával. A routerccode-ból a `subagent.py` fan-out/worktree logika
-  átvehető.
+- **A) Fork** (opencode / cline / aider / goose) → strong base, but hard
+  to convert into "our own harness", and we still have to build the A2A
+  layer ourselves.
+- **B) Fix routerccode** → small (~4k LOC), has a subagent module,
+  but needs many fixes (see FORK_REVIEW.md).
+- **C) Our own minimal harness** → only the 5 components above, with the
+  provider adapter pattern. The fan-out/worktree logic from routerccode's
+  `subagent.py` can be lifted.
 
-**Javaslat:** B+C hibrid — routerccode-ot referencia-alapként használjuk,
-a saját harnessünk saját protokollal épül, és ami ott jó (session, tools,
-context compression) azt átemeljük. Végső döntés a 0. fázis végén.
+**Proposal:** B+C hybrid — use routerccode as a reference base, build our
+own harness with our own protocol, and port whatever is good there
+(session, tools, context compression). Final decision at the end of
+phase 0.
 
-## 5. Fázisok
+## 5. Phases
 
-### 0. fázis — setup és döntés (most)
-- [x] Repo, agent .md fájlok, .gitignore.
-- [x] Terv (ez a fájl) + fork/repo review (`FORK_REVIEW.md`).
-- [ ] Spike: routerccode futtatása lokálisan Termuxon, hiányosságok listája
-      konkrétan.
-- [ ] Döntés: B vs. C (a spike alapján).
+### Phase 0 — setup and decision (now)
+- [x] Repo, agent .md files, .gitignore.
+- [x] Plan (this file) + fork/repo review (`FORK_REVIEW.md`).
+- [ ] Spike: run routerccode locally on Termux, list concrete issues.
+- [ ] Decision: B vs. C (based on the spike).
 
-### 1. fázis — Router core + registry
-- [ ] Capability registry séma (YAML), 2 példa profil (Claude, Codex).
-- [ ] Router döntési prompt + teszt szett (kis/nagy task példák).
-- [ ] Döntési napló (JSONL): task → döntés → indok.
+### Phase 1 — Router core + registry
+- [ ] Capability registry schema (YAML), 2 example profiles (Claude, Codex).
+- [ ] Router decision prompt + test set (small/large task examples).
+- [ ] Decision log (JSONL): task → decision → reason.
 
-### 2. fázis — Provider adapterek
-- [ ] Közös `Adapter` interface: auth, run_task, token accounting.
-- [ ] Anthropic adapter (API kulcs / Claude plan).
-- [ ] Codex adapter (OAuth token flow; Codex CLI reuse ha van).
-- [ ] Lokális adapter (Ollama / llama.cpp) a Qwen-kicsi és a router miatt.
+### Phase 2 — Provider adapters
+- [ ] Common `Adapter` interface: auth, run_task, token accounting.
+- [ ] Anthropic adapter (API key / Claude plan).
+- [ ] Codex adapter (OAuth token flow; reuse Codex CLI if available).
+- [ ] Local adapter (Ollama / llama.cpp) for small Qwen and the router.
 
-### 3. fázis — Delegációs protokoll
-- [ ] TaskPackage/TaskResult pydantic sémák.
-- [ ] Kontextus csomagolás: releváns fájlok kiválasztása a router által.
-- [ ] Budget enforcement (max token, max iteráció, circuit breaker).
-- [ ] Eredmény validáció: a router ellenőrzi a worker outputját
-      (diff review, tesztfuttatás).
+### Phase 3 — Delegation protocol
+- [ ] TaskPackage/TaskResult pydantic schemas.
+- [ ] Context packaging: router selects the relevant files.
+- [ ] Budget enforcement (max tokens, max iterations, circuit breaker).
+- [ ] Result validation: the router verifies the worker's output
+      (diff review, running tests).
 
-### 4. fázis — Cloud-cloud mód
-- [ ] Claude API plan + Codex OAuth párhuzamos bekötése.
-- [ ] Fallback lánc: ha az egyik worker auth-ja lejárt/rate limited,
-      megy a másiknak.
-- [ ] Költség dashboard (sessionnkénti token/ár riport).
+### Phase 4 — Cloud-cloud mode
+- [ ] Wire up Claude API plan + Codex OAuth simultaneously.
+- [ ] Fallback chain: if one worker's auth expires / is rate limited,
+      hand off to the other.
+- [ ] Cost dashboard (per-session token/cost report).
 
-### 5. fázis — Hardening
-- [ ] Tool sandbox (bash engedélylista), secret-szivárgás elleni védelem.
-- [ ] Session continue/rewind, párhuzamos subagent fan-out (worktree-kkel).
-- [ ] CI: pytest + ruff; e2e tesztek mock providerrel.
+### Phase 5 — Hardening
+- [ ] Tool sandbox (bash allowlist), secret-leak protection.
+- [ ] Session continue/rewind, parallel subagent fan-out (with worktrees).
+- [ ] CI: pytest + ruff; e2e tests with a mocked provider.
 
-## 6. Nyitott kérdések
-- Qwen melyik formában: OpenRouter-en át, saját API, vagy lokális GGUF?
-- Codex OAuth token refresh: a hivatalos Codex CLI-t használjuk token
-  forrásként, vagy saját OAuth flow?
-- A router modell mérete: 3B–8B elég-e a triage-hoz? (benchmark a
-  döntési teszt szetten)
-- Licenc kompatibilitás, ha forkolunk (opencode: MIT, cline: Apache-2.0).
+## 6. Open questions
+- Which form of Qwen: via OpenRouter, its own API, or a local GGUF?
+- Codex OAuth token refresh: use the official Codex CLI as the token
+  source, or our own OAuth flow?
+- Router model size: is 3B–8B enough for triage? (benchmark on the
+  decision test set)
+- License compatibility if we fork (opencode: MIT, cline: Apache-2.0).
