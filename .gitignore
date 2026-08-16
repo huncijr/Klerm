@@ -35,3 +35,8 @@ npm-debug.log*
 # Session / cache data
 .sessions/
 .cache/
+
+# Local-only docs — do not push
+AGENTS.md
+FORK_REVIEW.md
+PLAN.md
