@@ -71,6 +71,18 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		// Add title
 		const title = mode === "login" ? "Select provider to configure:" : "Select provider to logout:";
 		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
+		if (mode === "login") {
+			this.addChild(
+				new TruncatedText(
+					theme.fg(
+						"muted",
+						"Interactive authentication providers only. Use `klerm providers` to inspect all providers.",
+					),
+					1,
+					0,
+				),
+			);
+		}
 		this.addChild(new Spacer(1));
 
 		this.searchInput = new Input();

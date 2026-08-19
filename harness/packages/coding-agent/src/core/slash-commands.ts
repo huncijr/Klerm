@@ -19,6 +19,22 @@ export interface BuiltinSlashCommand {
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "settings", description: "Open settings menu" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
+	{
+		name: "local",
+		description: "Configure local models or run one local task",
+		argumentHint: "<model [reference]|status|models|off|task <prompt>>",
+	},
+	{
+		name: "frontier",
+		description: "Configure frontier models or run one frontier task",
+		argumentHint: "<model [reference]|status|off|task <prompt>>",
+	},
+	{
+		name: "routing",
+		description: "Configure Klerm routing and frontier fallback",
+		argumentHint: "<status|off|local|frontier|auto|fallback on|off>",
+	},
+	{ name: "klerm", description: "Show Klerm A2A routing status" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
 	{ name: "import", description: "Import and resume a session from a JSONL file" },

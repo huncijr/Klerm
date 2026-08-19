@@ -7,6 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
+import type { KlermRoutingMode } from "../klerm/config.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -50,6 +51,10 @@ export interface Args {
 	tuiMode?: TuiMode;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
+	routing?: KlermRoutingMode;
+	localModel?: string;
+	frontierModel?: string;
+	allowFrontierFallback?: boolean;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
@@ -98,6 +103,16 @@ export function parseArgs(args: string[]): Args {
 			result.model = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
 			result.apiKey = args[++i];
+		} else if (arg === "--routing" && i + 1 < args.length) {
+			const mode = args[++i];
+			if (mode === "off" || mode === "local" || mode === "frontier" || mode === "auto") result.routing = mode;
+			else result.diagnostics.push({ type: "error", message: `Invalid routing mode "${mode}"` });
+		} else if (arg === "--local-model" && i + 1 < args.length) {
+			result.localModel = args[++i];
+		} else if (arg === "--frontier-model" && i + 1 < args.length) {
+			result.frontierModel = args[++i];
+		} else if (arg === "--allow-frontier-fallback") {
+			result.allowFrontierFallback = true;
 		} else if (arg === "--system-prompt" && i + 1 < args.length) {
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
@@ -259,17 +274,24 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
   ${APP_NAME} remove <source> [-l]      Remove extension source from settings
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
+  ${APP_NAME} update [source|self]      Update Klerm resources or model catalogs
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
-  ${APP_NAME} klerm route <task>        Select an agent and model for a task (mock routing)
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/klerm
+  ${APP_NAME} local <status|models>     Inspect the local Ollama runtime
+  ${APP_NAME} providers                 List all model providers and status
+  ${APP_NAME} debug route <task>        Preview a mock routing decision
+  ${APP_NAME} debug decisions           Print Klerm routing decisions
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/debug
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
+  --routing <mode>               Klerm routing: off, local, frontier, or auto
+  --local-model <provider/model> Local router and worker model
+  --frontier-model <provider/model> Frontier worker model
+  --allow-frontier-fallback      Allow explicit fallback when local routing is unavailable
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
@@ -307,7 +329,7 @@ ${chalk.bold("Options:")}
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
+  --offline                      Disable startup network operations (same as KLERM_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -346,6 +368,9 @@ ${chalk.bold("Examples:")}
 
   # Use model with provider prefix (no --provider needed)
   ${APP_NAME} --model openai/gpt-4o "Help me refactor this code"
+
+  # Use a local router/worker and frontier worker
+  ${APP_NAME} --routing auto --local-model ollama/qwen2.5-coder:7b --frontier-model openai-codex/gpt-5.5
 
   # Use model with thinking level shorthand
   ${APP_NAME} --model sonnet:high "Solve this complex problem"
@@ -418,7 +443,7 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+  KLERM_OFFLINE                    - Disable startup network operations when set to 1/true/yes
   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 

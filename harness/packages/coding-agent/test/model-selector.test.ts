@@ -46,4 +46,31 @@ describe("model selector", () => {
 			expect(rendered).toContain("Could not refresh 2 model catalogs (openai, anthropic); showing cached models.");
 		});
 	});
+
+	it("can select a lane model without changing the default model setting", async () => {
+		harness = await createHarness();
+		const setDefault = vi.spyOn(harness.settingsManager, "setDefaultModelAndProvider");
+		const onSelect = vi.fn();
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			undefined,
+			harness.settingsManager,
+			harness.session.modelRuntime,
+			[],
+			onSelect,
+			() => {},
+			undefined,
+			{ persistDefault: false },
+		);
+		const select = (
+			ModelSelectorComponent.prototype as unknown as {
+				handleSelect(this: ModelSelectorComponent, model: Harness["models"][number]): void;
+			}
+		).handleSelect;
+
+		select.call(selector, harness.getModel());
+
+		expect(onSelect).toHaveBeenCalledWith(harness.getModel());
+		expect(setDefault).not.toHaveBeenCalled();
+	});
 });

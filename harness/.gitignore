@@ -32,6 +32,7 @@ coverage/
 tui-debug.log
 compaction-results/
 .opencode/
+.klerm/
 syntax.jsonl
 out.jsonl
 pi-*.html

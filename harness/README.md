@@ -1,27 +1,131 @@
 <p align="center">
-  <a href="https://pi.dev">
-    <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
-  </a>
-</p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
+  <img alt="Klerm logo" src="../Logo/Klerm_logo_no_background.png" width="192">
 </p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+# Klerm Agent Harness
 
-# Pi Agent Harness
+Klerm is an A2A coding agent and routing system built on the Pi agent harness.
+It keeps Pi's provider, agent, session, protocol, and TUI foundations while
+adding Klerm routing and product behavior.
 
-This is the home of the Pi agent harness project including our self extensible coding agent.
+Klerm is derived from `earendil-works/pi` under the MIT license. Original Pi
+copyright and license notices are preserved.
 
 * **[@earendil-works/pi-coding-agent](packages/coding-agent)**: Interactive coding agent CLI
 * **[@earendil-works/pi-agent-core](packages/agent)**: Agent runtime with tool calling and state management
 * **[@earendil-works/pi-ai](packages/ai)**: Unified multi-provider LLM API (OpenAI, Anthropic, Google, …)
 
-To learn more about Pi:
+For upstream Pi documentation:
 
 * [Visit pi.dev](https://pi.dev), the project website with demos
 * [Read the documentation](https://pi.dev/docs/latest), but you can also ask the agent to explain itself
+
+## Try Klerm Locally
+
+Install dependencies and build the local CLI:
+
+```bash
+npm install --ignore-scripts
+npm run build:offline
+npm link --ignore-scripts --workspace=@earendil-works/pi-coding-agent
+```
+
+Open a new folder and start the interactive Klerm CLI:
+
+```bash
+mkdir -p /tmp/klerm-smoke
+cd /tmp/klerm-smoke
+klerm
+```
+
+Enter a task in the interactive prompt, for example:
+
+```text
+Create a small website with a hero section and three pricing cards.
+```
+
+Use `/model` inside the interactive CLI to open the model selector. You can
+also select a model at startup or run one non-interactive prompt:
+
+```bash
+klerm --list-models
+klerm --model google/gemini-3.5-flash-lite
+klerm --model google/gemini-3.5-flash-lite -p "Say exactly: ok"
+```
+
+The selected provider must be authenticated. Set its API key before starting
+Klerm, or run `klerm`, enter `/login`, and select a supported subscription
+provider. Klerm stores its user configuration under `~/.klerm/agent/`.
+
+## Local Worker And A2A Routing
+
+Klerm discovers installed Ollama models without downloading them:
+
+```bash
+klerm local status
+klerm local models
+klerm providers
+```
+
+Install the local model separately, then start Klerm from any project directory:
+
+```bash
+ollama pull qwen3.5:9b-q4_K_M
+klerm
+```
+
+Inside the interactive CLI:
+
+```text
+/local model ollama/qwen3.5:9b-q4_K_M
+/frontier model openai-codex/gpt-5.6-sol
+/routing fallback on
+/routing auto
+/klerm
+/local task Say exactly: local-ok
+/frontier task Say exactly: frontier-ok
+```
+
+`/local` selects the Ollama or llama.cpp model used as both router and local
+worker. `/frontier` selects the model that receives complex or escalated work.
+`/model` remains the direct/current model selector used when routing is off.
+`/local task <prompt>` and `/frontier task <prompt>` force one task onto the
+selected lane without changing the persisted routing mode. Use `/routing local`
+for local-only work, `/routing frontier` for frontier-only work, `/routing auto`
+for A2A routing, and `/routing off` to use the normal `/model` selection.
+
+The same setup can be supplied for one CLI invocation:
+
+```bash
+klerm --routing auto \
+  --local-model ollama/qwen3.5:9b-q4_K_M \
+  --frontier-model openai-codex/gpt-5.6-sol
+```
+
+Routing modes:
+
+- `off`: use the model selected by `/model` directly;
+- `local`: always run the local model with the normal read/edit/write/bash tool loop;
+- `frontier`: always run the configured frontier model;
+- `auto`: ask the local model to route, run simple work locally, and delegate complex work.
+
+The local worker can call the `delegate_frontier` control tool. Klerm then
+switches models between agent turns while preserving the same session,
+transcript, working directory, and tool results. Deterministic thresholds also
+escalate after repeated tool errors, repeated calls, or the configured local
+turn limit. Klerm never silently uses a frontier fallback unless
+`--allow-frontier-fallback` is supplied.
+
+Routing configuration is stored in `~/.klerm/agent/klerm.json`. Per-project
+decisions are written to `.klerm/router-decisions.jsonl`.
+
+Router diagnostics are separate from the normal chat workflow:
+
+```bash
+klerm debug route "fix auth"
+klerm debug decisions
+klerm debug registry
+```
 
 ## All Packages
 
@@ -57,7 +161,7 @@ npm run build         # Refresh model data, then build all packages
 npm run build:offline # Rebuild using existing model data without network access
 npm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (can be run from any directory)
+./klerm-test.sh      # Run Klerm from sources (can be run from any directory)
 ```
 
 ## Building standalone binaries from release source

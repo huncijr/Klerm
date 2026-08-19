@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Run Klerm directly from TypeScript sources without requiring a build.
+
 # Check for --no-env flag
 NO_ENV=false
 ARGS=()

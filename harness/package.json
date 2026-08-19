@@ -1,5 +1,5 @@
 {
-	"name": "pi-monorepo",
+	"name": "klerm-monorepo",
 	"private": true,
 	"type": "module",
 	"workspaces": [

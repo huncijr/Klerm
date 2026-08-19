@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CONFIG_DIR_NAME } from "../src/config.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
 /**
  * Tests for the fix to a bug where external file changes to arrays were overwritten.
  *
  * The bug scenario was:
- * 1. Pi starts with settings.json containing packages: ["npm:some-pkg"]
+ * 1. The app starts with settings.json containing packages: ["npm:some-pkg"]
  * 2. User externally edits file to packages: []
  * 3. User changes an unrelated setting (e.g., theme) via UI
  * 4. save() would overwrite packages back to ["npm:some-pkg"] from stale in-memory state
@@ -25,7 +26,7 @@ describe("SettingsManager - External Edit Preservation", () => {
 			rmSync(testDir, { recursive: true });
 		}
 		mkdirSync(agentDir, { recursive: true });
-		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		mkdirSync(join(projectDir, CONFIG_DIR_NAME), { recursive: true });
 	});
 
 	afterEach(() => {
@@ -46,7 +47,7 @@ describe("SettingsManager - External Edit Preservation", () => {
 			}),
 		);
 
-		// Pi starts up, loads settings into memory
+		// The app starts up and loads settings into memory
 		const manager = SettingsManager.create(projectDir, agentDir);
 
 		// At this point, globalSettings.packages = ["npm:pi-mcp-adapter"]
@@ -100,7 +101,7 @@ describe("SettingsManager - External Edit Preservation", () => {
 	});
 
 	it("should preserve external project settings changes when updating unrelated project field", async () => {
-		const projectSettingsPath = join(projectDir, ".pi", "settings.json");
+		const projectSettingsPath = join(projectDir, CONFIG_DIR_NAME, "settings.json");
 		writeFileSync(
 			projectSettingsPath,
 			JSON.stringify({
@@ -124,7 +125,7 @@ describe("SettingsManager - External Edit Preservation", () => {
 	});
 
 	it("should let in-memory project changes override external changes for the same project field", async () => {
-		const projectSettingsPath = join(projectDir, ".pi", "settings.json");
+		const projectSettingsPath = join(projectDir, CONFIG_DIR_NAME, "settings.json");
 		writeFileSync(
 			projectSettingsPath,
 			JSON.stringify({

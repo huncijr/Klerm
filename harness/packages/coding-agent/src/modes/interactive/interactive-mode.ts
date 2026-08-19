@@ -99,6 +99,8 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { getOllamaServerUrl, OllamaClient, ollamaModelId } from "../../extensions/ollama/client.ts";
+import type { KlermRoutingMode } from "../../klerm/config.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -211,6 +213,30 @@ type CompactionCostNotice = {
 };
 
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
+
+export type KlermLaneCommand =
+	| { action: "selector" }
+	| { action: "model"; reference: string }
+	| { action: "status" }
+	| { action: "models" }
+	| { action: "off" }
+	| { action: "task"; prompt: string };
+
+export function parseKlermLaneCommand(argument: string): KlermLaneCommand {
+	const command = argument.trimStart();
+	if (!command || command === "model") return { action: "selector" };
+	if (command.startsWith("model ")) {
+		const reference = command.slice(6).trim();
+		return reference ? { action: "model", reference } : { action: "selector" };
+	}
+	if (command === "status") return { action: "status" };
+	if (command === "models") return { action: "models" };
+	if (command === "off") return { action: "off" };
+	if (command === "task" || command.startsWith("task ")) {
+		return { action: "task", prompt: command.slice(4).trimStart() };
+	}
+	return { action: "model", reference: command.trim() };
+}
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -701,6 +727,55 @@ export class InteractiveMode {
 			};
 		}
 
+		for (const lane of ["local", "frontier"] as const) {
+			const command = slashCommands.find((candidate) => candidate.name === lane);
+			if (!command) continue;
+			command.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const actions =
+					lane === "local" ? ["model", "status", "models", "off", "task"] : ["model", "status", "off", "task"];
+				if (!prefix.startsWith("model ")) {
+					return createFuzzyAutocompleteItems(
+						actions,
+						prefix,
+						(action) => action,
+						(action) => ({
+							value: action,
+							label: action,
+						}),
+					);
+				}
+				const modelPrefix = prefix.slice(6);
+				const models = this.session.modelRuntime
+					.getAvailableSnapshot()
+					.filter((model) =>
+						lane === "local"
+							? model.provider === "ollama" || model.provider === "llama.cpp"
+							: model.provider !== "ollama" && model.provider !== "llama.cpp",
+					);
+				return createFuzzyAutocompleteItems(models, modelPrefix, getModelSearchText, (model) => ({
+					value: `model ${model.provider}/${model.id}`,
+					label: model.id,
+					description: model.provider,
+				}));
+			};
+		}
+
+		const routingCommand = slashCommands.find((command) => command.name === "routing");
+		if (routingCommand) {
+			routingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const options = ["status", "off", "local", "frontier", "auto", "fallback on", "fallback off"];
+				return createFuzzyAutocompleteItems(
+					options,
+					prefix,
+					(option) => option,
+					(option) => ({
+						value: option,
+						label: option,
+					}),
+				);
+			};
+		}
+
 		const loginCommand = slashCommands.find((command) => command.name === "login");
 		if (loginCommand) {
 			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
@@ -974,7 +1049,7 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
+				"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
@@ -2915,6 +2990,7 @@ export class InteractiveMode {
 
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
+			const rawText = text;
 			text = text.trim();
 			if (!text) return;
 
@@ -2933,6 +3009,26 @@ export class InteractiveMode {
 				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
 				await this.handleModelCommand(searchTerm);
+				return;
+			}
+			if (text === "/local" || text.startsWith("/local ")) {
+				this.editor.setText("");
+				await this.handleKlermModelCommand("local", rawText.trimStart().slice(6));
+				return;
+			}
+			if (text === "/frontier" || text.startsWith("/frontier ")) {
+				this.editor.setText("");
+				await this.handleKlermModelCommand("frontier", rawText.trimStart().slice(9));
+				return;
+			}
+			if (text === "/routing" || text.startsWith("/routing ")) {
+				this.editor.setText("");
+				await this.handleKlermRoutingCommand(text.slice(8).trim());
+				return;
+			}
+			if (text === "/klerm") {
+				this.editor.setText("");
+				this.showKlermStatus();
 				return;
 			}
 			if (text === "/export" || text.startsWith("/export ")) {
@@ -3143,6 +3239,14 @@ export class InteractiveMode {
 
 			case "queue_update":
 				this.updatePendingMessagesDisplay();
+				this.ui.requestRender();
+				break;
+
+			case "routing_changed":
+				this.footerDataProvider.setExtensionStatus(
+					"klerm-routing",
+					`route: ${event.state.lane}${event.state.selectedTarget ? ` · ${event.state.selectedTarget}` : ""}`,
+				);
 				this.ui.requestRender();
 				break;
 
@@ -4707,6 +4811,172 @@ export class InteractiveMode {
 		this.showModelSelector(searchTerm);
 	}
 
+	private async handleKlermModelCommand(lane: "local" | "frontier", argument: string): Promise<void> {
+		const routing = this.session.klermRouting;
+		if (!routing) {
+			this.showError("Klerm routing is unavailable in this session.");
+			return;
+		}
+
+		const command = parseKlermLaneCommand(argument);
+		if (command.action === "task") {
+			if (!command.prompt.trim()) {
+				this.showError(`Usage: /${lane} task <prompt>`);
+				return;
+			}
+			if (this.session.isStreaming) {
+				this.showWarning(`Cannot run /${lane} task while a response is in progress.`);
+				return;
+			}
+			if (this.session.isCompacting) {
+				this.showWarning(`Cannot run /${lane} task while compaction is in progress.`);
+				return;
+			}
+			try {
+				await this.session.prompt(command.prompt, {
+					expandPromptTemplates: false,
+					routingOverride: lane,
+				});
+			} catch (error) {
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+			return;
+		}
+
+		if (lane === "local" && (command.action === "status" || command.action === "models")) {
+			try {
+				const client = new OllamaClient(getOllamaServerUrl());
+				const models = await client.list(AbortSignal.timeout(5000));
+				if (command.action === "status") {
+					this.showStatus(
+						`Ollama: running at ${client.serverUrl} (${models.length} model(s))\nConfigured local model: ${routing.config.localModel ?? "not configured"}`,
+					);
+				} else {
+					this.showStatus(
+						models.length > 0
+							? `Ollama models: ${models.map((model) => ollamaModelId(model)).join(", ")}`
+							: "No local Ollama models installed. Suggested: ollama pull qwen2.5-coder:7b",
+					);
+				}
+				await this.session.modelRuntime.refresh({
+					providers: ["ollama"],
+					allowNetwork: true,
+					signal: AbortSignal.timeout(5000),
+				});
+			} catch (error) {
+				if (command.action === "status") {
+					this.showStatus(
+						`Ollama: unavailable (${error instanceof Error ? error.message : String(error)})\nConfigured local model: ${routing.config.localModel ?? "not configured"}`,
+					);
+				} else {
+					this.showError(`Ollama unavailable: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+			return;
+		}
+
+		if (lane === "frontier" && command.action === "status") {
+			const reference = routing.config.frontierModel;
+			const model = reference
+				? findExactModelReferenceMatch(reference, [...this.session.modelRuntime.getAvailableSnapshot()])
+				: undefined;
+			const selectable = model !== undefined && this.session.modelRuntime.hasConfiguredAuth(model.provider);
+			this.showStatus(`Frontier model: ${reference ?? "not configured"}\nSelectable: ${selectable ? "yes" : "no"}`);
+			return;
+		}
+
+		if (command.action === "off") {
+			if (lane === "local") await routing.setLocalModel(undefined);
+			else await routing.setFrontierModel(undefined);
+			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model disabled`);
+			return;
+		}
+
+		if (command.action === "selector") {
+			this.showKlermModelSelector(lane);
+			return;
+		}
+
+		if (command.action === "models") {
+			this.showError(`Usage: /${lane} model [reference]`);
+			return;
+		}
+		if (command.action !== "model") {
+			this.showError(`Usage: /${lane} model [reference]`);
+			return;
+		}
+		try {
+			if (lane === "local") {
+				const cached = findExactModelReferenceMatch(command.reference, [
+					...this.session.modelRuntime.getAvailableSnapshot(),
+				]);
+				const provider = command.reference.slice(0, command.reference.indexOf("/"));
+				if (!cached && (provider === "ollama" || provider === "llama.cpp")) {
+					await this.session.modelRuntime.refresh({
+						providers: [provider],
+						allowNetwork: true,
+						signal: AbortSignal.timeout(5000),
+					});
+				}
+				await routing.setLocalModel(command.reference);
+			} else {
+				await routing.setFrontierModel(command.reference);
+			}
+			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${command.reference}`);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async handleKlermRoutingCommand(argument: string): Promise<void> {
+		const routing = this.session.klermRouting;
+		if (!routing) {
+			this.showError("Klerm routing is unavailable in this session.");
+			return;
+		}
+		if (!argument) {
+			const modes: KlermRoutingMode[] = ["auto", "local", "frontier", "off"];
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					"Klerm routing mode",
+					modes,
+					(mode) => {
+						done();
+						void routing.setRoutingMode(mode as KlermRoutingMode).then(() => this.showStatus(`Routing: ${mode}`));
+					},
+					() => done(),
+				);
+				return { component: selector, focus: selector };
+			});
+			return;
+		}
+		if (argument === "status") {
+			this.showStatus(routing.describe());
+			return;
+		}
+		if (argument === "fallback on" || argument === "fallback off") {
+			const enabled = argument === "fallback on";
+			await routing.setAllowFrontierFallback(enabled);
+			this.showStatus(`Frontier fallback: ${enabled ? "on" : "off"}`);
+			return;
+		}
+		if (argument === "fallback" || argument.startsWith("fallback ")) {
+			this.showError("Usage: /routing fallback on|off");
+			return;
+		}
+		if (argument !== "off" && argument !== "local" && argument !== "frontier" && argument !== "auto") {
+			this.showError("Routing mode must be off, local, frontier, or auto.");
+			return;
+		}
+		await routing.setRoutingMode(argument);
+		this.showStatus(`Routing: ${argument}`);
+	}
+
+	private showKlermStatus(): void {
+		const routing = this.session.klermRouting;
+		this.showStatus(routing?.describe() ?? "Klerm routing is unavailable in this session.");
+	}
+
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
 		const cachedModels =
 			this.session.scopedModels.length > 0
@@ -4859,6 +5129,43 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				initialSearchInput,
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private showKlermModelSelector(lane: "local" | "frontier", initialSearchInput?: string): void {
+		const routing = this.session.klermRouting;
+		if (!routing) return;
+		this.showSelector((done) => {
+			const selector = new ModelSelectorComponent(
+				this.ui,
+				undefined,
+				this.settingsManager,
+				this.session.modelRuntime,
+				[],
+				async (model) => {
+					try {
+						const reference = `${model.provider}/${model.id}`;
+						if (lane === "local") await routing.setLocalModel(reference);
+						else await routing.setFrontierModel(reference);
+						done();
+						this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${reference}`);
+					} catch (error) {
+						done();
+						this.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
+				() => done(),
+				initialSearchInput,
+				{
+					filter: (model) =>
+						lane === "local"
+							? model.provider === "ollama" || model.provider === "llama.cpp"
+							: model.provider !== "ollama" && model.provider !== "llama.cpp",
+					hint: lane === "local" ? "Local Ollama and llama.cpp models" : "Configured frontier models",
+					persistDefault: false,
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});

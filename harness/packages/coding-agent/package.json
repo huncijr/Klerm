@@ -1,13 +1,14 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.84.2",
-	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"description": "Klerm coding agent CLI and A2A routing harness",
 	"type": "module",
 	"piConfig": {
-		"configDir": ".pi"
+		"name": "klerm",
+		"configDir": ".klerm"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"klerm": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -99,7 +100,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/huncijr/Klerm.git",
 		"directory": "packages/coding-agent"
 	},
 	"engines": {

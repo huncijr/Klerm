@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { KlermRouteDecision } from "./types.ts";
 
@@ -13,4 +13,13 @@ export async function appendKlermRouteDecision(cwd: string, decision: KlermRoute
 	const directory = join(cwd, KLERM_DECISION_LOG_DIRECTORY);
 	await mkdir(directory, { recursive: true });
 	await appendFile(getKlermDecisionLogPath(cwd), `${JSON.stringify(decision)}\n`, "utf8");
+}
+
+export async function readKlermRouteDecisionLog(cwd: string): Promise<string> {
+	try {
+		return await readFile(getKlermDecisionLogPath(cwd), "utf8");
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+		throw error;
+	}
 }

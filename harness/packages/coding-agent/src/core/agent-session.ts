@@ -46,6 +46,8 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { type KlermRoutingController, projectKlermHandoffContext } from "../klerm/router/runtime.ts";
+import type { KlermPromptRoutingOverride, KlermRoutingState } from "../klerm/router/types.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -157,6 +159,7 @@ export type AgentSessionEvent =
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "routing_changed"; state: KlermRoutingState }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -227,6 +230,8 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Optional Klerm A2A routing controller. */
+	klermRoutingController?: KlermRoutingController;
 }
 
 export interface ExtensionBindings {
@@ -248,6 +253,8 @@ export interface PromptOptions {
 	streamingBehavior?: "steer" | "followUp";
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
 	source?: InputSource;
+	/** Force the initial Klerm lane for this prompt without changing persisted routing. */
+	routingOverride?: KlermPromptRoutingOverride;
 	/** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
 	preflightResult?: (success: boolean) => void;
 }
@@ -364,6 +371,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	private readonly _klermRoutingController?: KlermRoutingController;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -382,7 +390,11 @@ export class AgentSession {
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
-		this._customTools = config.customTools ?? [];
+		this._klermRoutingController = config.klermRoutingController;
+		this._customTools = [
+			...(config.customTools ?? []),
+			...(this._klermRoutingController ? [this._klermRoutingController.createDelegationTool()] : []),
+		];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._extensionRunnerRef = config.extensionRunnerRef;
@@ -396,6 +408,7 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installKlermContextProjection();
 		this._installAgentNextTurnRefresh();
 
 		this._buildRuntime({
@@ -406,6 +419,10 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	get klermRouting(): KlermRoutingController | undefined {
+		return this._klermRoutingController;
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -534,6 +551,16 @@ export class AgentSession {
 		};
 	}
 
+	private _installKlermContextProjection(): void {
+		const controller = this._klermRoutingController;
+		if (!controller) return;
+		const previousTransformContext = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			return projectKlermHandoffContext(transformed, this.agent.state.model, controller.routingState);
+		};
+	}
+
 	private _installAgentNextTurnRefresh(): void {
 		const previousPrepareNextTurnWithContext =
 			this.agent.prepareNextTurnWithContext ??
@@ -543,6 +570,8 @@ export class AgentSession {
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 			const previousContext = previousSnapshot?.context ?? turn.context;
+			const transition = await this._klermRoutingController?.prepareNextTurn(turn);
+			if (transition) await this._applyRoutedModel(transition.model);
 
 			return {
 				...previousSnapshot,
@@ -555,6 +584,26 @@ export class AgentSession {
 				thinkingLevel: this.agent.state.thinkingLevel,
 			};
 		};
+	}
+
+	private async _applyRoutedModel(model: Model<any>): Promise<void> {
+		if (modelsAreEqual(this.model, model)) return;
+		if (!(await this._modelRuntime.checkAuth(model.provider))) {
+			throw new Error(`No authentication configured for routed model ${model.provider}/${model.id}`);
+		}
+		const previousModel = this.model;
+		const previousThinkingLevel = this.agent.state.thinkingLevel;
+		this.agent.state.model = model;
+		this.agent.state.thinkingLevel = clampThinkingLevel(model, previousThinkingLevel) as ThinkingLevel;
+		this.sessionManager.appendModelChange(model.provider, model.id);
+		if (this.agent.state.thinkingLevel !== previousThinkingLevel) {
+			this.sessionManager.appendThinkingLevelChange(this.agent.state.thinkingLevel);
+			this._emit({ type: "thinking_level_changed", level: this.agent.state.thinkingLevel });
+		}
+		await this._emitModelSelect(model, previousModel, "route");
+		if (this._klermRoutingController) {
+			this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
+		}
 	}
 
 	// =========================================================================
@@ -1068,14 +1117,31 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+	private async _finishKlermPrompt(success: boolean, restoreModel?: Model<any>): Promise<void> {
+		try {
+			await this._klermRoutingController?.recordCompletion(success);
+		} finally {
+			if (restoreModel) await this._applyRoutedModel(restoreModel);
+			if (this._klermRoutingController) {
+				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
+			}
+		}
+	}
+
+	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[], restoreModel?: Model<any>): Promise<void> {
 		this._isAgentRunActive = true;
+		let succeeded = false;
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
 			}
+			const lastAssistant = [...this.agent.state.messages]
+				.reverse()
+				.find((message): message is AssistantMessage => message.role === "assistant");
+			succeeded = lastAssistant?.stopReason !== "error" && lastAssistant?.stopReason !== "aborted";
 		} finally {
+			await this._finishKlermPrompt(succeeded, restoreModel);
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			await this._emitAgentSettled();
@@ -1087,6 +1153,16 @@ export class AgentSession {
 		this._lastAssistantMessage = undefined;
 		if (!msg) {
 			return false;
+		}
+
+		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+			const transition = await this._klermRoutingController?.handleLocalFailure(msg.errorMessage);
+			if (transition) {
+				await this._applyRoutedModel(transition.model);
+				const messages = this.agent.state.messages;
+				if (messages[messages.length - 1] === msg) messages.pop();
+				return true;
+			}
 		}
 
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
@@ -1125,6 +1201,8 @@ export class AgentSession {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
+		let routedPromptStarted = false;
+		let restoreModel: Model<any> | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1186,6 +1264,14 @@ export class AgentSession {
 				preflightResult?.(true);
 				return;
 			}
+
+			const modelBeforeRouting = this.model;
+			const routedModel = await this._klermRoutingController?.routePrompt(expandedText, options?.routingOverride);
+			routedPromptStarted = this._klermRoutingController?.routingState.taskId !== undefined;
+			if (options?.routingOverride && this._klermRoutingController?.config.routing === "off") {
+				restoreModel = modelBeforeRouting;
+			}
+			if (routedModel) await this._applyRoutedModel(routedModel.model);
 
 			// Flush any pending bash messages before the new prompt
 			this._flushPendingBashMessages();
@@ -1268,6 +1354,7 @@ export class AgentSession {
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 			}
 		} catch (error) {
+			if (routedPromptStarted) await this._finishKlermPrompt(false, restoreModel);
 			preflightResult?.(false);
 			throw error;
 		}
@@ -1277,7 +1364,7 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		await this._runAgentPrompt(messages);
+		await this._runAgentPrompt(messages, restoreModel);
 	}
 
 	/**
@@ -1575,7 +1662,7 @@ export class AgentSession {
 	private async _emitModelSelect(
 		nextModel: Model<any>,
 		previousModel: Model<any> | undefined,
-		source: "set" | "cycle" | "restore",
+		source: "set" | "cycle" | "restore" | "route",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
 		await this._extensionRunner.emit({

@@ -60,7 +60,11 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
-import { runKlermCommand } from "./klerm/cli/route-command.ts";
+import { runKlermLocalCommand } from "./klerm/cli/local-command.ts";
+import { runKlermProvidersCommand } from "./klerm/cli/providers-command.ts";
+import { runKlermDebugCommand } from "./klerm/cli/route-command.ts";
+import { KlermConfigStore } from "./klerm/config.ts";
+import { KlermRoutingController } from "./klerm/router/runtime.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -570,13 +574,19 @@ export interface MainOptions {
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+	const offlineMode =
+		args.includes("--offline") ||
+		isTruthyEnvFlag(process.env.KLERM_OFFLINE) ||
+		isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
 		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
-	if (await runKlermCommand(args)) {
+	if (await runKlermDebugCommand(args)) {
+		return;
+	}
+	if (await runKlermLocalCommand(args)) {
 		return;
 	}
 
@@ -786,6 +796,13 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRuntime, resourceLoader } = services;
+		const klermConfigStore = await KlermConfigStore.load(agentDir, {
+			routing: parsed.routing,
+			localModel: parsed.localModel,
+			frontierModel: parsed.frontierModel,
+			allowFrontierFallback: parsed.allowFrontierFallback,
+		});
+		const klermRoutingController = new KlermRoutingController(cwd, modelRuntime, klermConfigStore);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
@@ -836,6 +853,7 @@ export async function main(args: string[], options?: MainOptions) {
 			excludeTools: sessionOptions.excludeTools,
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
+			klermRoutingController,
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
@@ -859,6 +877,11 @@ export async function main(args: string[], options?: MainOptions) {
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+
+	if (await runKlermProvidersCommand(args, modelRuntime)) {
+		process.exit(process.exitCode ?? 0);
+		return;
+	}
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

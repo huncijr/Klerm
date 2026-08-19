@@ -1,4 +1,4 @@
-const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
+const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120" role="img" aria-label="Klerm"><defs><linearGradient id="k" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff9d00"/><stop offset="1" stop-color="#ff4d00"/></linearGradient><linearGradient id="c" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe12b"/><stop offset="1" stop-color="#ffae00"/></linearGradient></defs><path fill="url(#k)" d="M12 18h22v32l29-32h28L54 58l39 44H64L34 68v34H12z"/><path fill="#09090b" stroke="#18181b" stroke-width="5" d="M91 17l137 43-137 43 20-43z"/><path fill="url(#c)" d="M98 24l119 36-119 36 18-36z"/><text x="113" y="70" fill="#111" font-family="ui-sans-serif,system-ui,sans-serif" font-size="28" font-weight="800">Klerm</text><circle cx="191" cy="66" r="4" fill="#ff4d00"/></svg>`;
 
 function escapeHtml(value: string): string {
 	return value
@@ -52,8 +52,8 @@ function renderPage(options: { title: string; heading: string; message: string; 
       justify-content: center;
     }
     .logo {
-      width: 72px;
-      height: 72px;
+      width: 168px;
+      height: 84px;
       display: block;
       margin-bottom: 24px;
     }

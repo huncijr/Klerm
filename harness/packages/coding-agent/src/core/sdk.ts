@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
+import type { KlermRoutingController } from "../klerm/router/runtime.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
@@ -84,6 +85,8 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Optional Klerm A2A routing controller. */
+	klermRoutingController?: KlermRoutingController;
 }
 
 /** Result from createAgentSession */
@@ -390,6 +393,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		klermRoutingController: options.klermRoutingController,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

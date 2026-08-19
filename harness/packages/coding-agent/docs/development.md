@@ -14,7 +14,7 @@ npm run build
 Run from source:
 
 ```bash
-/path/to/pi-mono/pi-test.sh
+/path/to/Klerm/harness/klerm-test.sh
 ```
 
 The script can be run from any directory. Pi keeps the caller's current working directory.
