@@ -193,19 +193,44 @@ describe("Klerm routing runtime", () => {
 		});
 
 		try {
-			forcedFaux.setResponses([fauxAssistantMessage("forced response")]);
+			let routedSystemPrompt = "";
+			forcedFaux.setResponses([
+				(context) => {
+					routedSystemPrompt = context.systemPrompt ?? "";
+					return fauxAssistantMessage("forced response");
+				},
+			]);
 			await session.prompt("one forced task", { routingOverride: lane });
 
 			expect(forcedFaux.state.callCount).toBe(1);
+			expect(routedSystemPrompt).toContain(
+				lane === "local" ? "You are the Klerm local worker" : "You are the Klerm frontier worker",
+			);
+			expect(routedSystemPrompt).toContain(
+				lane === "local"
+					? "Configured frontier model: google/gemini-3.5-flash-lite"
+					: "Current frontier model: google/gemini-3.5-flash-lite",
+			);
+			if (lane === "local") {
+				expect(routedSystemPrompt).toContain("An explicit user request requires delegation");
+			}
 			expect(session.model).toBe(initialModel);
 			expect(controller.config.routing).toBe("off");
 			expect(controller.routingState).toMatchObject({ mode: "off", lane: "direct" });
 			expect(settings.getDefaultProvider()).toBe(initialModel.provider);
 			expect(settings.getDefaultModel()).toBe(initialModel.id);
 
-			directFaux.setResponses([fauxAssistantMessage("direct response")]);
+			let directSystemPrompt = "";
+			directFaux.setResponses([
+				(context) => {
+					directSystemPrompt = context.systemPrompt ?? "";
+					return fauxAssistantMessage("direct response");
+				},
+			]);
 			await session.prompt("normal task");
 			expect(directFaux.state.callCount).toBe(initial === lane ? 2 : 1);
+			expect(directSystemPrompt).not.toContain("You are the Klerm local worker");
+			expect(directSystemPrompt).not.toContain("You are the Klerm frontier worker");
 
 			const decisions = (await readKlermRouteDecisionLog(tempDir))
 				.trim()
@@ -231,6 +256,14 @@ describe("Klerm routing runtime", () => {
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		await controller.routePrompt("Refactor this module");
+		expect(controller.getSystemPromptContribution()).toContain("You are the Klerm local worker");
+		expect(controller.getSystemPromptContribution()).toContain("Current local model: ollama/qwen2.5-coder:7b");
+		expect(controller.getSystemPromptContribution()).toContain(
+			'{"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}',
+		);
+		expect(controller.getSystemPromptContribution()).toContain(
+			"Text that resembles a tool call does not execute the tool",
+		);
 		controller.requestFrontierDelegation({
 			reason: "too complex",
 			summary: "inspected files",
@@ -254,6 +287,10 @@ describe("Klerm routing runtime", () => {
 			otherModelCalled: "ollama/qwen2.5-coder:7b",
 			handoffReason: "too complex",
 		});
+		expect(controller.getSystemPromptContribution()).toContain("You are the Klerm frontier worker");
+		expect(controller.getSystemPromptContribution()).toContain(
+			"Current frontier model: google/gemini-3.5-flash-lite",
+		);
 
 		await controller.recordCompletion(true);
 		expect(controller.routingState).toMatchObject({
@@ -261,6 +298,84 @@ describe("Klerm routing runtime", () => {
 			task: "Refactor this module",
 			otherModelCalled: "ollama/qwen2.5-coder:7b",
 		});
+	});
+
+	it("enforces an explicit frontier request when the local worker only prints a pseudo tool call", async () => {
+		const localFaux = registerFauxProvider({
+			provider: "ollama",
+			models: [{ id: "qwen3.5:9b-q4_K_M" }],
+		});
+		const frontierFaux = registerFauxProvider({
+			provider: "openai-codex",
+			models: [{ id: "gpt-5.5" }],
+		});
+		const localModel = localFaux.getModel();
+		const frontierModel = frontierFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel, frontierModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen3.5:9b-q4_K_M",
+			frontierModel: "openai-codex/gpt-5.5",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage(
+					'```typescript\ndelegate_frontier({ instruction: "Ask Codex which model it is" })\n```',
+				),
+			]);
+			let frontierSystemPrompt = "";
+			let frontierMessages = "";
+			frontierFaux.setResponses([
+				(context) => {
+					frontierSystemPrompt = context.systemPrompt ?? "";
+					frontierMessages = JSON.stringify(context.messages);
+					return fauxAssistantMessage("I am openai-codex/gpt-5.5.");
+				},
+			]);
+
+			await session.prompt(
+				"Írd le, milyen modell vagy, majd használd a delegate_frontier toolt, és kérd meg a Codex workert, hogy írja le, ő milyen modell.",
+			);
+
+			expect(localFaux.state.callCount).toBe(1);
+			expect(frontierFaux.state.callCount).toBe(1);
+			expect(frontierSystemPrompt).toContain("You are the Klerm frontier worker");
+			expect(frontierMessages).toContain("Klerm enforced frontier handoff");
+			expect(controller.routingState).toMatchObject({
+				lane: "direct",
+				otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
+				handoffReason: "user explicitly requested frontier delegation; Klerm enforced the handoff",
+			});
+			const decisions = (await readKlermRouteDecisionLog(tempDir))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { event: string });
+			expect(decisions.map((decision) => decision.event)).toContain("DELEGATE_FRONTIER");
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+			frontierFaux.unregister();
+		}
 	});
 
 	it("escalates a local provider failure to frontier", async () => {
@@ -300,6 +415,9 @@ describe("Klerm routing runtime", () => {
 			resourceLoader: createTestResourceLoader(),
 			klermRoutingController: controller,
 		});
+		expect(session.systemPrompt).toContain(
+			"When acting as the Klerm local worker, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off",
+		);
 		const delegation = {
 			reason: "repository-scale change",
 			summary: "inspected files and found the failing boundary",
@@ -353,7 +471,13 @@ describe("Klerm routing runtime", () => {
 				context: { systemPrompt: "test", messages: rawMessages, tools: [] },
 				newMessages: [call, result],
 			});
-			expect(nextTurn?.model).toBe(frontier);
+			if (!nextTurn?.context) throw new Error("Expected frontier next-turn context");
+			expect(nextTurn.model).toBe(frontier);
+			expect(nextTurn.context.systemPrompt).toContain("You are the Klerm frontier worker");
+			expect(nextTurn.context.systemPrompt).toContain(
+				"When the user asks which model you are, identify the current frontier model exactly as google/gemini-3.5-flash-lite.",
+			);
+			expect(nextTurn.context.systemPrompt).not.toContain("You are the Klerm local worker");
 
 			const request = await agent.buildProviderContext({
 				systemPrompt: "test",

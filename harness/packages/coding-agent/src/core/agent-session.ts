@@ -572,12 +572,14 @@ export class AgentSession {
 			const previousContext = previousSnapshot?.context ?? turn.context;
 			const transition = await this._klermRoutingController?.prepareNextTurn(turn);
 			if (transition) await this._applyRoutedModel(transition.model);
+			const systemPrompt = this._withKlermSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
+			this.agent.state.systemPrompt = systemPrompt;
 
 			return {
 				...previousSnapshot,
 				context: {
 					...previousContext,
-					systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+					systemPrompt,
 					tools: this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
@@ -996,7 +998,7 @@ export class AgentSession {
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
-		this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
+		this.agent.state.systemPrompt = this._withKlermSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1113,6 +1115,11 @@ export class AgentSession {
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
 
+	private _withKlermSystemPrompt(systemPrompt: string): string {
+		const contribution = this._klermRoutingController?.getSystemPromptContribution();
+		return contribution ? `${systemPrompt}\n\n${contribution}` : systemPrompt;
+	}
+
 	// =========================================================================
 	// Prompting
 	// =========================================================================
@@ -1123,6 +1130,7 @@ export class AgentSession {
 		} finally {
 			if (restoreModel) await this._applyRoutedModel(restoreModel);
 			if (this._klermRoutingController) {
+				this.agent.state.systemPrompt = this._baseSystemPrompt;
 				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
 			}
 		}
@@ -1132,14 +1140,42 @@ export class AgentSession {
 		this._isAgentRunActive = true;
 		let succeeded = false;
 		try {
-			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
-				await this.agent.continue();
+			let nextMessages = messages;
+			while (true) {
+				await this.agent.prompt(nextMessages);
+				while (await this._handlePostAgentRun()) {
+					await this.agent.continue();
+				}
+				const lastAssistant = [...this.agent.state.messages]
+					.reverse()
+					.find((message): message is AssistantMessage => message.role === "assistant");
+				if (!lastAssistant || lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted") {
+					succeeded = false;
+					break;
+				}
+
+				const localResponse = lastAssistant.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text)
+					.join("\n")
+					.trim();
+				const enforcedDelegation =
+					await this._klermRoutingController?.enforceExplicitFrontierDelegation(localResponse);
+				if (!enforcedDelegation) {
+					succeeded = true;
+					break;
+				}
+
+				await this._applyRoutedModel(enforcedDelegation.model);
+				this.agent.state.systemPrompt = this._withKlermSystemPrompt(
+					this._systemPromptOverride ?? this._baseSystemPrompt,
+				);
+				nextMessages = {
+					role: "user",
+					content: [{ type: "text", text: enforcedDelegation.handoffPrompt }],
+					timestamp: Date.now(),
+				};
 			}
-			const lastAssistant = [...this.agent.state.messages]
-				.reverse()
-				.find((message): message is AssistantMessage => message.role === "assistant");
-			succeeded = lastAssistant?.stopReason !== "error" && lastAssistant?.stopReason !== "aborted";
 		} finally {
 			await this._finishKlermPrompt(succeeded, restoreModel);
 			this._systemPromptOverride = undefined;
@@ -1347,11 +1383,11 @@ export class AgentSession {
 			// Apply extension-modified system prompt, or reset to base
 			if (result?.systemPrompt !== undefined) {
 				this._systemPromptOverride = result.systemPrompt;
-				this.agent.state.systemPrompt = result.systemPrompt;
+				this.agent.state.systemPrompt = this._withKlermSystemPrompt(result.systemPrompt);
 			} else {
 				// Ensure we're using the base prompt (in case previous turn had modifications)
 				this._systemPromptOverride = undefined;
-				this.agent.state.systemPrompt = this._baseSystemPrompt;
+				this.agent.state.systemPrompt = this._withKlermSystemPrompt(this._baseSystemPrompt);
 			}
 		} catch (error) {
 			if (routedPromptStarted) await this._finishKlermPrompt(false, restoreModel);

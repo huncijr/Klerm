@@ -101,6 +101,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { getOllamaServerUrl, OllamaClient, ollamaModelId } from "../../extensions/ollama/client.ts";
 import type { KlermRoutingMode } from "../../klerm/config.ts";
+import type { KlermRoutingState } from "../../klerm/router/types.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -451,6 +452,8 @@ export class InteractiveMode {
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private klermRoutingStatus: Text;
+	private renderedKlermHandoffTaskId?: string;
+	private pendingKlermHandoff?: KlermRoutingState;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private editorComponentFactory: EditorFactory | undefined;
@@ -3277,6 +3280,7 @@ export class InteractiveMode {
 				break;
 
 			case "routing_changed":
+				this.queueKlermHandoffCall(event.state);
 				this.updateKlermRoutingStatus();
 				this.ui.requestRender();
 				break;
@@ -3308,6 +3312,7 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.renderPendingKlermHandoffCall();
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
 						this.hideThinkingBlock,
@@ -5035,14 +5040,41 @@ export class InteractiveMode {
 			`Frontier model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
 		lines.push(`Routing: ${state.mode}`);
-		lines.push(`Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`);
-		if (state.otherModelCalled) {
-			const task = state.task?.replace(/\s+/g, " ").trim() || "unknown task";
-			lines.push(`+ ${state.otherModelCalled} called for this task: ${task}`);
-			if (state.handoffReason) lines.push(`handoff reason: ${state.handoffReason}`);
-		}
+		lines.push(
+			state.lane === "direct" && state.handoffReason && state.selectedTarget
+				? `Last route: frontier · ${state.selectedTarget}`
+				: `Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
+		);
 
 		this.klermRoutingStatus.setText(lines.join("\n"));
+	}
+
+	private queueKlermHandoffCall(state: KlermRoutingState): void {
+		if (
+			state.lane !== "frontier" ||
+			!state.taskId ||
+			state.taskId === this.renderedKlermHandoffTaskId ||
+			!state.selectedTarget ||
+			!state.handoffReason
+		) {
+			return;
+		}
+		this.pendingKlermHandoff = { ...state };
+	}
+
+	private renderPendingKlermHandoffCall(): void {
+		const state = this.pendingKlermHandoff;
+		if (!state?.taskId || !state.selectedTarget || !state.handoffReason) return;
+
+		this.pendingKlermHandoff = undefined;
+		this.renderedKlermHandoffTaskId = state.taskId;
+		const call = [
+			theme.bold(theme.fg("warning", "+ called other model")),
+			`  ${theme.fg("warning", "model:")} ${state.selectedTarget}`,
+			`  ${theme.fg("warning", "reason:")} ${state.handoffReason}`,
+		].join("\n");
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(call, this.outputPad, 0));
 	}
 
 	private showKlermStatus(): void {

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
+import { Text } from "../../tui/src/components/text.ts";
 import { type Component, Container, type Focusable, type TUI } from "../../tui/src/tui.ts";
 import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
@@ -10,6 +11,7 @@ import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 function renderLastLine(container: Container, width = 120): string {
 	const last = container.children[container.children.length - 1];
@@ -1247,5 +1249,69 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skill conflicts]");
 		expect(output).not.toContain("[Skills]");
+	});
+});
+
+describe("InteractiveMode Klerm handoff status", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	test("queues the call notice until immediately before the frontier response", () => {
+		const fakeThis: any = {
+			chatContainer: new Container(),
+			outputPad: 1,
+			renderedKlermHandoffTaskId: undefined,
+			pendingKlermHandoff: undefined,
+		};
+		const state = {
+			taskId: "task-1",
+			mode: "auto",
+			lane: "frontier",
+			localModel: "ollama/qwen3.5:9b-q4_K_M",
+			frontierModel: "openai-codex/gpt-5.5",
+			selectedTarget: "openai-codex/gpt-5.5",
+			otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
+			handoffReason: "user requested Codex",
+		};
+
+		(InteractiveMode as any).prototype.queueKlermHandoffCall.call(fakeThis, state);
+		expect(fakeThis.chatContainer.children).toHaveLength(0);
+
+		(InteractiveMode as any).prototype.renderPendingKlermHandoffCall.call(fakeThis);
+		const output = stripAnsi(renderAll(fakeThis.chatContainer));
+		expect(output).toContain("+ called other model");
+		expect(output).toContain("model: openai-codex/gpt-5.5");
+		expect(output).toContain("reason: user requested Codex");
+		expect(output).not.toContain("called this");
+
+		(InteractiveMode as any).prototype.renderPendingKlermHandoffCall.call(fakeThis);
+		expect(fakeThis.chatContainer.children).toHaveLength(2);
+	});
+
+	test("shows the completed frontier route without handoff details in the persistent panel", () => {
+		const state = {
+			taskId: "task-1",
+			mode: "auto",
+			lane: "direct",
+			localModel: "ollama/qwen3.5:9b-q4_K_M",
+			frontierModel: "openai-codex/gpt-5.5",
+			selectedTarget: "openai-codex/gpt-5.5",
+			otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
+			handoffReason: "user requested Codex",
+		};
+		const fakeThis: any = {
+			klermRoutingStatus: new Text("", 0, 0),
+			session: {
+				state: { model: { provider: "openai-codex", id: "gpt-5.5" } },
+				klermRouting: { routingState: state, config: state },
+			},
+		};
+
+		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
+		const output = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
+		expect(output).toContain("Last route: frontier · openai-codex/gpt-5.5");
+		expect(output).not.toContain("called other model");
+		expect(output).not.toContain("reason:");
 	});
 });

@@ -28,6 +28,10 @@ export interface KlermModelTransition {
 	reason: string;
 }
 
+export interface KlermEnforcedDelegation extends KlermModelTransition {
+	handoffPrompt: string;
+}
+
 function hash(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
 }
@@ -164,6 +168,13 @@ function heuristicRoute(task: string): { route: "LOCAL" | "FRONTIER"; reason: st
 		: { route: "LOCAL", reason: "deterministic complexity fallback selected the local worker", complexity: 3 };
 }
 
+function explicitlyRequestsFrontier(task: string): boolean {
+	if (/\bdelegate_frontier\b/iu.test(task)) return true;
+	const target = /\b(frontier|codex|claude|gemini)\b/iu;
+	const action = /\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|hand\s*off)\b/iu;
+	return target.test(task) && action.test(task);
+}
+
 export class KlermRoutingController {
 	private readonly cwd: string;
 	private readonly modelRuntime: ModelRuntime;
@@ -175,6 +186,7 @@ export class KlermRoutingController {
 	private lastToolSignature?: string;
 	private repeatedToolCalls = 0;
 	private task = "";
+	private explicitFrontierRequest = false;
 
 	constructor(cwd: string, modelRuntime: ModelRuntime, configStore: KlermConfigStore) {
 		this.cwd = cwd;
@@ -195,6 +207,44 @@ export class KlermRoutingController {
 
 	get routingState(): Readonly<KlermRoutingState> {
 		return this.state;
+	}
+
+	getSystemPromptContribution(): string | undefined {
+		const localModel = this.config.localModel ?? "not configured";
+		const frontierModel = this.config.frontierModel ?? "not configured";
+		if (this.state.lane === "local") {
+			return [
+				"<klerm_a2a>",
+				"You are the Klerm local worker and may hand work to the configured frontier worker.",
+				`Current local model: ${localModel}`,
+				`Configured frontier model: ${frontierModel}`,
+				"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to the frontier model, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
+				"Also call delegate_frontier when the task exceeds your capability, is unusually risky, or repeated tool attempts fail.",
+				'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}.',
+				"Never print delegate_frontier as TypeScript, JSON, XML, Markdown, or a code block. Text that resembles a tool call does not execute the tool.",
+				"Before delegating, complete any specifically requested local-only observation. Put completed work and findings in summary, and give the frontier worker a precise remainingWork instruction.",
+				"Do not merely say that delegation is unnecessary or describe how to delegate. Invoke delegate_frontier and let Klerm perform the handoff.",
+				"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested frontier handoff.",
+				"Do not claim that the frontier worker answered unless the handoff occurred and the frontier worker actually responded.",
+				"</klerm_a2a>",
+			].join("\n");
+		}
+
+		if (this.state.lane === "frontier") {
+			return [
+				"<klerm_a2a>",
+				"You are the Klerm frontier worker. Continue the current task using the existing session and provider-neutral handoff context.",
+				`Local worker model: ${localModel}`,
+				`Current frontier model: ${frontierModel}`,
+				"Treat [Cross-model handoff] sections as instructions and context supplied by the local worker.",
+				`When the user asks which model you are, identify the current frontier model exactly as ${frontierModel}.`,
+				"Do not call delegate_frontier because you are already the frontier worker.",
+				"Do not restart completed local work unless verification is required; continue from the stated summary and remaining work.",
+				"</klerm_a2a>",
+			].join("\n");
+		}
+
+		return undefined;
 	}
 
 	async setRoutingMode(mode: KlermRoutingMode): Promise<void> {
@@ -333,6 +383,7 @@ export class KlermRoutingController {
 		this.localToolErrors = 0;
 		this.lastToolSignature = undefined;
 		this.repeatedToolCalls = 0;
+		this.explicitFrontierRequest = explicitlyRequestsFrontier(task);
 		const config = this.config;
 		if (config.routing === "off" && !routingOverride) {
 			this.state = {
@@ -441,10 +492,14 @@ export class KlermRoutingController {
 			name: "delegate_frontier",
 			label: "Delegate to frontier",
 			description:
-				"Hand this task to the configured frontier model when it is too complex, risky, or blocked for the local worker.",
-			promptSnippet: "Delegate the current task to the configured frontier model.",
+				"Hand the current task to the configured frontier model. The local worker must use this when the user explicitly asks to consult Codex, a frontier model, or the other configured model, and may use it for complex, risky, or blocked work.",
+			promptSnippet:
+				"Hand the task to the configured frontier worker, including completed work and precise remaining instructions.",
 			promptGuidelines: [
-				"Use delegate_frontier when the task exceeds your capability or repeated tool attempts fail.",
+				"When acting as the Klerm local worker, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Codex, the frontier model, or the other configured model.",
+				"When acting as the Klerm local worker, use delegate_frontier when the task exceeds your capability or repeated tool attempts fail.",
+				"As the local worker, do not replace a requested frontier handoff with a textual explanation; invoke delegate_frontier.",
+				"Call delegate_frontier through the native tool interface with reason, summary, and remainingWork string arguments. Never print a code example that imitates the call.",
 			],
 			parameters: delegateSchema,
 			executionMode: "sequential",
@@ -461,6 +516,54 @@ export class KlermRoutingController {
 				};
 			},
 		});
+	}
+
+	async enforceExplicitFrontierDelegation(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
+		if (this.state.lane !== "local" || !this.explicitFrontierRequest || this.pendingDelegation) return undefined;
+
+		const reason = "user explicitly requested frontier delegation; Klerm enforced the handoff";
+		const summary = localResponse.trim() || "The local worker returned without a native delegation tool call.";
+		this.requestFrontierDelegation({
+			reason,
+			summary,
+			remainingWork: this.task,
+		});
+		const localReference = this.config.localModel;
+		if (!localReference) throw new Error("Cannot enforce frontier delegation without a configured local model.");
+		const localModel = this.resolveModel(localReference, "local");
+		const transition = await this.prepareNextTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: localResponse }],
+				api: localModel.api,
+				provider: localModel.provider,
+				model: localModel.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		});
+		if (!transition) return undefined;
+		return {
+			...transition,
+			handoffPrompt: [
+				"[Klerm enforced frontier handoff]",
+				`Reason: ${reason}`,
+				`Local worker response: ${summary}`,
+				`Original task: ${this.task}`,
+				"Continue the original task as the configured frontier worker and answer the user directly.",
+			].join("\n"),
+		};
 	}
 
 	async prepareNextTurn(turn: PrepareNextTurnContext): Promise<KlermModelTransition | undefined> {
