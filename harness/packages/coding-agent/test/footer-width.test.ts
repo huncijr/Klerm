@@ -25,6 +25,7 @@ function createSession(options: {
 	compactionUsage?: AssistantUsage;
 	toolUsage?: AssistantUsage;
 	usingSubscription?: boolean;
+	klermRouting?: boolean;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -82,6 +83,7 @@ function createSession(options: {
 		modelRuntime: {
 			isUsingSubscription: () => options.usingSubscription ?? false,
 		},
+		klermRouting: options.klermRouting ? {} : undefined,
 	};
 
 	return session as unknown as AgentSession;
@@ -150,6 +152,18 @@ describe("FooterComponent width handling", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("hides the duplicate right-side model when Klerm routing is available", () => {
+		const session = createSession({
+			sessionName: "",
+			modelId: "gpt-5.5",
+			provider: "openai-codex",
+			klermRouting: true,
+		});
+		const footer = new FooterComponent(session, createFooterData(2));
+
+		expect(stripAnsi(footer.render(120)[1])).not.toContain("gpt-5.5");
 	});
 
 	it("includes summary and tool result usage in the total cost", () => {

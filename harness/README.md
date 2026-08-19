@@ -59,65 +59,126 @@ provider. Klerm stores its user configuration under `~/.klerm/agent/`.
 
 ## Local Worker And A2A Routing
 
-Klerm discovers installed Ollama models without downloading them:
+Klerm discovers installed Ollama models without downloading them. Install the
+model yourself, then verify the local runtime:
 
 ```bash
+ollama pull qwen3.5:9b-q4_K_M
 klerm local status
 klerm local models
 klerm providers
 ```
 
-Install the local model separately, then start Klerm from any project directory:
+Start Klerm from any project directory. During source development, invoke the
+source launcher by absolute path so the current project remains the working
+directory:
 
 ```bash
-ollama pull qwen3.5:9b-q4_K_M
+cd ~/Desktop/my-project
 klerm
+
+# Or run the current checkout without rebuilding/linking it:
+~/Desktop/Klerm/harness/klerm-test.sh
 ```
 
-Inside the interactive CLI:
+The startup screen includes a routing quick guide. Configure both A2A lanes and
+the routing mode inside the interactive CLI:
 
 ```text
 /local model ollama/qwen3.5:9b-q4_K_M
-/frontier model openai-codex/gpt-5.6-sol
+/frontier model openai-codex/gpt-5.5
 /routing fallback on
 /routing auto
 /klerm
+```
+
+| Command | Purpose |
+|---|---|
+| `/local` or `/local model` | Open the local Ollama/llama.cpp model selector. |
+| `/local model <provider/model>` | Persist the local router/worker model. |
+| `/frontier` or `/frontier model` | Open the frontier model selector. |
+| `/frontier model <provider/model>` | Persist the frontier worker model. |
+| `/model <provider/model>` | Set the direct model used when routing is `off`. |
+| `/routing auto` | Let the local model route small work locally and difficult work to frontier. |
+| `/routing local` | Send every normal prompt to the local worker. |
+| `/routing frontier` | Send every normal prompt directly to frontier. |
+| `/routing off` | Disable Klerm A2A routing and use `/model` directly. |
+| `/routing fallback on\|off` | Allow or deny explicit frontier fallback when auto routing cannot start locally. |
+| `/local task <prompt>` | Force one task to start locally without changing the saved routing mode. |
+| `/frontier task <prompt>` | Force one task to start on frontier without changing the saved routing mode. |
+| `/klerm` or `/routing status` | Show the current Klerm configuration and routing state. |
+
+The persistent status block directly above the chat input keeps the selected
+models and routing mode visible together. It marks the model currently serving
+the task with a green inline label:
+
+```text
+Local model: ollama/qwen3.5:9b-q4_K_M (currently active)
+Frontier model: openai-codex/gpt-5.5
+Routing: auto
+Active route: local · ollama/qwen3.5:9b-q4_K_M
+```
+
+Missing selections are shown as `none`. When a second model participates in the
+same task, the footer keeps the A2A handoff visible until the next task starts:
+
+```text
+Local model: ollama/qwen3.5:9b-q4_K_M
+Frontier model: openai-codex/gpt-5.5 (currently active)
+Routing: auto
+Active route: frontier · openai-codex/gpt-5.5
++ ollama/qwen3.5:9b-q4_K_M called for this task: <original task>
+handoff reason: <reason supplied by the local worker>
+```
+
+The local worker has the normal read/edit/write/bash tool loop and can call the
+`delegate_frontier` control tool. Klerm then switches models between agent turns
+while preserving the same session, transcript, working directory, and tool
+results. Provider-specific tool history is projected into provider-neutral
+handoff context, so Ollama, Codex, Gemini, and other providers do not need to
+understand each other's private tool metadata.
+
+Deterministic safeguards can also escalate local work after provider failure,
+repeated tool errors, repeated calls, or the configured local turn limit.
+
+Force each lane independently without changing the persisted routing mode:
+
+```text
 /local task Say exactly: local-ok
 /frontier task Say exactly: frontier-ok
 ```
 
-`/local` selects the Ollama or llama.cpp model used as both router and local
-worker. `/frontier` selects the model that receives complex or escalated work.
-`/model` remains the direct/current model selector used when routing is off.
-`/local task <prompt>` and `/frontier task <prompt>` force one task onto the
-selected lane without changing the persisted routing mode. Use `/routing local`
-for local-only work, `/routing frontier` for frontier-only work, `/routing auto`
-for A2A routing, and `/routing off` to use the normal `/model` selection.
+For a real local-to-frontier smoke test:
+
+```text
+/local task Create a directory named a2a-smoke and write spec.txt inside it containing exactly handoff-required. Read it back, then call delegate_frontier and do not finish the task yourself. Tell the frontier worker to read spec.txt, create result.json containing {"success":true,"completedBy":"frontier"}, and reply exactly A2A-SMOKE-PASSED.
+```
+
+Expected lifecycle:
+
+```text
+local router/worker
+→ local tool use
+→ delegate_frontier
+→ frontier worker continues the same session
+→ A2A-SMOKE-PASSED
+```
+
+Inspect the result from inside the TUI with `!cat a2a-smoke/result.json`.
 
 The same setup can be supplied for one CLI invocation:
 
 ```bash
 klerm --routing auto \
   --local-model ollama/qwen3.5:9b-q4_K_M \
-  --frontier-model openai-codex/gpt-5.6-sol
+  --frontier-model openai-codex/gpt-5.5 \
+  --allow-frontier-fallback
 ```
 
-Routing modes:
-
-- `off`: use the model selected by `/model` directly;
-- `local`: always run the local model with the normal read/edit/write/bash tool loop;
-- `frontier`: always run the configured frontier model;
-- `auto`: ask the local model to route, run simple work locally, and delegate complex work.
-
-The local worker can call the `delegate_frontier` control tool. Klerm then
-switches models between agent turns while preserving the same session,
-transcript, working directory, and tool results. Deterministic thresholds also
-escalate after repeated tool errors, repeated calls, or the configured local
-turn limit. Klerm never silently uses a frontier fallback unless
-`--allow-frontier-fallback` is supplied.
-
 Routing configuration is stored in `~/.klerm/agent/klerm.json`. Per-project
-decisions are written to `.klerm/router-decisions.jsonl`.
+decisions are written to `.klerm/router-decisions.jsonl`. A successful A2A
+handoff contains `INITIAL_ROUTE`, `LOCAL_STARTED`, `DELEGATE_FRONTIER`,
+`FRONTIER_STARTED`, and `TASK_COMPLETED` events.
 
 Router diagnostics are separate from the normal chat workflow:
 

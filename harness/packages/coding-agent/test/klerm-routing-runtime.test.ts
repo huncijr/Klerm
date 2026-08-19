@@ -103,7 +103,12 @@ describe("Klerm routing runtime", () => {
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		const transition = await controller.routePrompt("Fix a typo");
 		expect(transition?.model).toBe(local);
-		expect(controller.routingState).toMatchObject({ lane: "local", selectedTarget: "ollama/qwen2.5-coder:7b" });
+		expect(controller.routingState).toMatchObject({
+			task: "Fix a typo",
+			lane: "local",
+			selectedTarget: "ollama/qwen2.5-coder:7b",
+		});
+		expect(controller.routingState.otherModelCalled).toBeUndefined();
 	});
 
 	it("persists the frontier fallback setter", async () => {
@@ -242,7 +247,20 @@ describe("Klerm routing runtime", () => {
 		} as PrepareNextTurnContext;
 		const transition = await controller.prepareNextTurn(turn);
 		expect(transition?.model).toBe(frontier);
-		expect(controller.routingState.lane).toBe("frontier");
+		expect(controller.routingState).toMatchObject({
+			task: "Refactor this module",
+			lane: "frontier",
+			selectedTarget: "google/gemini-3.5-flash-lite",
+			otherModelCalled: "ollama/qwen2.5-coder:7b",
+			handoffReason: "too complex",
+		});
+
+		await controller.recordCompletion(true);
+		expect(controller.routingState).toMatchObject({
+			lane: "direct",
+			task: "Refactor this module",
+			otherModelCalled: "ollama/qwen2.5-coder:7b",
+		});
 	});
 
 	it("escalates a local provider failure to frontier", async () => {

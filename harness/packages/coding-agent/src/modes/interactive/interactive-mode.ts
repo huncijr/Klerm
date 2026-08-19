@@ -450,6 +450,7 @@ export class InteractiveMode {
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
+	private klermRoutingStatus: Text;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private editorComponentFactory: EditorFactory | undefined;
@@ -612,6 +613,7 @@ export class InteractiveMode {
 		this.documentContainer.addChild(this.chatContainer);
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
+		this.klermRoutingStatus = new Text("", 0, 0);
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -979,6 +981,7 @@ export class InteractiveMode {
 			{ component: this.pendingMessagesContainer, shrink: 1, minSize: 0 },
 			{ component: this.statusContainer, shrink: 1, minSize: 0 },
 			{ component: this.widgetContainerAbove, shrink: 1, minSize: 0 },
+			{ component: this.klermRoutingStatus, shrink: 1, minSize: 0 },
 			{ component: this.editorContainer, shrink: 1, minSize: 3 },
 			{ component: this.widgetContainerBelow, shrink: 1, minSize: 0 },
 			{ component: this.footerContainer, shrink: 1, minSize: 1 },
@@ -992,6 +995,7 @@ export class InteractiveMode {
 			this.pendingMessagesContainer,
 			this.statusContainer,
 			this.widgetContainerAbove,
+			this.klermRoutingStatus,
 			this.editorContainer,
 			this.widgetContainerBelow,
 			this.footerContainer,
@@ -1010,7 +1014,25 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const wordmark = [
+				"██╗  ██╗██╗     ███████╗██████╗ ███╗   ███╗",
+				"██║ ██╔╝██║     ██╔════╝██╔══██╗████╗ ████║",
+				"█████╔╝ ██║     █████╗  ██████╔╝██╔████╔██║",
+				"██╔═██╗ ██║     ██╔══╝  ██╔══██╗██║╚██╔╝██║",
+				"██║  ██╗███████╗███████╗██║  ██║██║ ╚═╝ ██║",
+				"╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝",
+			];
+			const wordmarkWidth = Math.max(...wordmark.map((line) => line.length));
+			const logo = [
+				chalk.whiteBright(`╭${"─".repeat(wordmarkWidth + 2)}╮`),
+				...wordmark.map(
+					(line) =>
+						chalk.whiteBright("│ ") +
+						chalk.bold(chalk.hex("#ff8a00")(line.padEnd(wordmarkWidth))) +
+						chalk.whiteBright(" │"),
+				),
+				chalk.whiteBright(`╰${"─".repeat(wordmarkWidth + 2)}╯`) + theme.fg("dim", ` v${this.version}`),
+			].join("\n");
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -1049,7 +1071,18 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
+				[
+					"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
+					"",
+					"Klerm routing quick guide:",
+					"  /local model <model>     set the local Ollama router/worker",
+					"  /frontier model <model>  set the frontier worker, for example Codex",
+					"  /routing auto            local decides: small tasks local, hard tasks frontier",
+					"  /routing local           force normal prompts to local",
+					"  /routing frontier        force normal prompts to frontier",
+					"  /routing off             disable A2A and use /model directly",
+					"  /model <model>            set the direct model used when routing is off",
+				].join("\n"),
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
@@ -1086,6 +1119,7 @@ export class InteractiveMode {
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
+		this.updateKlermRoutingStatus();
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
@@ -3243,10 +3277,7 @@ export class InteractiveMode {
 				break;
 
 			case "routing_changed":
-				this.footerDataProvider.setExtensionStatus(
-					"klerm-routing",
-					`route: ${event.state.lane}${event.state.selectedTarget ? ` · ${event.state.selectedTarget}` : ""}`,
-				);
+				this.updateKlermRoutingStatus();
 				this.ui.requestRender();
 				break;
 
@@ -4797,6 +4828,7 @@ export class InteractiveMode {
 		if (model) {
 			try {
 				await this.session.setModel(model);
+				this.updateKlermRoutingStatus();
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
@@ -4888,6 +4920,7 @@ export class InteractiveMode {
 		if (command.action === "off") {
 			if (lane === "local") await routing.setLocalModel(undefined);
 			else await routing.setFrontierModel(undefined);
+			this.updateKlermRoutingStatus();
 			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model disabled`);
 			return;
 		}
@@ -4922,6 +4955,7 @@ export class InteractiveMode {
 			} else {
 				await routing.setFrontierModel(command.reference);
 			}
+			this.updateKlermRoutingStatus();
 			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${command.reference}`);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -4942,7 +4976,10 @@ export class InteractiveMode {
 					modes,
 					(mode) => {
 						done();
-						void routing.setRoutingMode(mode as KlermRoutingMode).then(() => this.showStatus(`Routing: ${mode}`));
+						void routing.setRoutingMode(mode as KlermRoutingMode).then(() => {
+							this.updateKlermRoutingStatus();
+							this.showStatus(`Routing: ${mode}`);
+						});
 					},
 					() => done(),
 				);
@@ -4957,6 +4994,7 @@ export class InteractiveMode {
 		if (argument === "fallback on" || argument === "fallback off") {
 			const enabled = argument === "fallback on";
 			await routing.setAllowFrontierFallback(enabled);
+			this.updateKlermRoutingStatus();
 			this.showStatus(`Frontier fallback: ${enabled ? "on" : "off"}`);
 			return;
 		}
@@ -4969,11 +5007,47 @@ export class InteractiveMode {
 			return;
 		}
 		await routing.setRoutingMode(argument);
+		this.updateKlermRoutingStatus();
 		this.showStatus(`Routing: ${argument}`);
+	}
+
+	private updateKlermRoutingStatus(): void {
+		const routing = this.session.klermRouting;
+		if (!routing) {
+			this.klermRoutingStatus.setText("");
+			return;
+		}
+
+		const state = routing.routingState;
+		const activeModel = this.session.state.model
+			? `${this.session.state.model.provider}/${this.session.state.model.id}`
+			: undefined;
+		const selectedTarget = state.lane === "direct" ? activeModel : state.selectedTarget;
+		const localModel = state.localModel ?? routing.config.localModel;
+		const frontierModel = state.frontierModel ?? routing.config.frontierModel;
+		const lines: string[] = [];
+
+		const activeLabel = theme.fg("success", "(currently active)");
+		lines.push(
+			`Local model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+		);
+		lines.push(
+			`Frontier model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+		);
+		lines.push(`Routing: ${state.mode}`);
+		lines.push(`Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`);
+		if (state.otherModelCalled) {
+			const task = state.task?.replace(/\s+/g, " ").trim() || "unknown task";
+			lines.push(`+ ${state.otherModelCalled} called for this task: ${task}`);
+			if (state.handoffReason) lines.push(`handoff reason: ${state.handoffReason}`);
+		}
+
+		this.klermRoutingStatus.setText(lines.join("\n"));
 	}
 
 	private showKlermStatus(): void {
 		const routing = this.session.klermRouting;
+		this.updateKlermRoutingStatus();
 		this.showStatus(routing?.describe() ?? "Klerm routing is unavailable in this session.");
 	}
 
@@ -5113,6 +5187,7 @@ export class InteractiveMode {
 				async (model) => {
 					try {
 						await this.session.setModel(model);
+						this.updateKlermRoutingStatus();
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						done();
@@ -5149,6 +5224,7 @@ export class InteractiveMode {
 						const reference = `${model.provider}/${model.id}`;
 						if (lane === "local") await routing.setLocalModel(reference);
 						else await routing.setFrontierModel(reference);
+						this.updateKlermRoutingStatus();
 						done();
 						this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${reference}`);
 					} catch (error) {

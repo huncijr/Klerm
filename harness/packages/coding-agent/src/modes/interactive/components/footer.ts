@@ -164,6 +164,8 @@ export class FooterComponent implements Component {
 		}
 
 		let statsLeft = statsParts.join(" ");
+		const extensionStatuses = this.footerData.getExtensionStatuses();
+		const showRightModel = this.session.klermRouting === undefined;
 
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
@@ -201,7 +203,9 @@ export class FooterComponent implements Component {
 		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
 
 		let statsLine: string;
-		if (totalNeeded <= width) {
+		if (!showRightModel) {
+			statsLine = statsLeft;
+		} else if (totalNeeded <= width) {
 			// Both fit - add padding to right-align model
 			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
 			statsLine = statsLeft + padding + rightSide;
@@ -230,14 +234,15 @@ export class FooterComponent implements Component {
 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
-		const extensionStatuses = this.footerData.getExtensionStatuses();
 		if (extensionStatuses.size > 0) {
-			const sortedStatuses = Array.from(extensionStatuses.entries())
+			const statusLines = Array.from(extensionStatuses.entries())
 				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([, text]) => sanitizeStatusText(text));
-			const statusLine = sortedStatuses.join(" ");
-			// Truncate to terminal width with dim ellipsis for consistency with footer style
-			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+				.flatMap(([, text]) => text.split(/\r?\n/).map((line) => sanitizeStatusText(line)))
+				.filter((line) => line.length > 0);
+			for (const statusLine of statusLines) {
+				// Truncate to terminal width with dim ellipsis for consistency with footer style
+				lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+			}
 		}
 
 		return lines;

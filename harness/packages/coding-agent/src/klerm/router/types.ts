@@ -30,10 +30,13 @@ export interface KlermRouteDecision {
 
 export interface KlermRoutingState {
 	taskId?: string;
+	task?: string;
 	mode: "off" | "local" | "frontier" | "auto";
 	lane: "direct" | "local" | "frontier";
 	localModel?: string;
 	frontierModel?: string;
 	selectedTarget?: string;
+	otherModelCalled?: string;
+	handoffReason?: string;
 	reason?: string;
 }

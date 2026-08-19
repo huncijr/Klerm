@@ -199,7 +199,16 @@ export class KlermRoutingController {
 
 	async setRoutingMode(mode: KlermRoutingMode): Promise<void> {
 		await this.configStore.update({ routing: mode });
-		this.state = { ...this.state, mode };
+		this.state = {
+			...this.state,
+			mode,
+			lane: "direct",
+			task: undefined,
+			selectedTarget: undefined,
+			otherModelCalled: undefined,
+			handoffReason: undefined,
+			reason: undefined,
+		};
 	}
 
 	async setAllowFrontierFallback(enabled: boolean): Promise<void> {
@@ -209,13 +218,25 @@ export class KlermRoutingController {
 	async setLocalModel(reference: string | undefined): Promise<void> {
 		if (reference) this.resolveModel(reference, "local");
 		await this.configStore.update({ localModel: reference });
-		this.state = { ...this.state, localModel: reference };
+		this.state = {
+			...this.state,
+			localModel: reference,
+			task: undefined,
+			otherModelCalled: undefined,
+			handoffReason: undefined,
+		};
 	}
 
 	async setFrontierModel(reference: string | undefined): Promise<void> {
 		if (reference) this.resolveModel(reference, "frontier");
 		await this.configStore.update({ frontierModel: reference });
-		this.state = { ...this.state, frontierModel: reference };
+		this.state = {
+			...this.state,
+			frontierModel: reference,
+			task: undefined,
+			otherModelCalled: undefined,
+			handoffReason: undefined,
+		};
 	}
 
 	getLocalModels(): Model<any>[] {
@@ -314,7 +335,16 @@ export class KlermRoutingController {
 		this.repeatedToolCalls = 0;
 		const config = this.config;
 		if (config.routing === "off" && !routingOverride) {
-			this.state = { ...this.state, mode: "off", lane: "direct", selectedTarget: undefined, reason: undefined };
+			this.state = {
+				...this.state,
+				task,
+				mode: "off",
+				lane: "direct",
+				selectedTarget: undefined,
+				otherModelCalled: undefined,
+				handoffReason: undefined,
+				reason: undefined,
+			};
 			return undefined;
 		}
 
@@ -362,11 +392,13 @@ export class KlermRoutingController {
 		const selectedTarget = modelReference(model);
 		this.state = {
 			taskId,
+			task,
 			mode: config.routing,
 			lane: route === "LOCAL" ? "local" : "frontier",
 			localModel: config.localModel,
 			frontierModel: config.frontierModel,
 			selectedTarget,
+			otherModelCalled: routerModel && routerModel !== selectedTarget ? routerModel : undefined,
 			reason,
 		};
 		await this.log({
@@ -458,7 +490,14 @@ export class KlermRoutingController {
 		const selectedTarget = modelReference(model);
 		const timestamp = new Date().toISOString();
 		const taskId = this.state.taskId ?? `task-${hash(`${timestamp}\n${this.task}`).slice(0, 16)}`;
-		this.state = { ...this.state, lane: "frontier", selectedTarget, reason };
+		this.state = {
+			...this.state,
+			lane: "frontier",
+			selectedTarget,
+			otherModelCalled: this.state.otherModelCalled ?? this.state.selectedTarget ?? this.config.localModel,
+			handoffReason: reason,
+			reason,
+		};
 		await this.log({
 			timestamp,
 			taskId,
@@ -538,11 +577,17 @@ export class KlermRoutingController {
 				cwd: this.cwd,
 			});
 		} finally {
+			const { task, selectedTarget, otherModelCalled, handoffReason, reason } = this.state;
 			this.state = {
+				task,
 				mode: this.config.routing,
 				lane: "direct",
 				localModel: this.config.localModel,
 				frontierModel: this.config.frontierModel,
+				selectedTarget,
+				otherModelCalled,
+				handoffReason,
+				reason,
 			};
 			this.pendingDelegation = undefined;
 		}
@@ -555,6 +600,8 @@ export class KlermRoutingController {
 			`Local model: ${this.config.localModel ?? "not configured"}`,
 			`Frontier model: ${this.config.frontierModel ?? "not configured"}`,
 			`Frontier fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
+			`Other model called: ${this.state.otherModelCalled ?? "none"}`,
+			`Task: ${this.state.task ?? "none"}`,
 			`Last decision: ${this.state.reason ?? "none"}`,
 		].join("\n");
 	}
