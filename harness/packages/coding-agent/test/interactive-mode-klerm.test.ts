@@ -27,11 +27,14 @@ type RoutingContext = {
 			describe: () => string;
 			setRoutingMode: (mode: "off" | "local" | "frontier" | "auto") => Promise<void>;
 			setAllowFrontierFallback: (enabled: boolean) => Promise<void>;
+			setHandbackEnabled: (enabled: boolean) => Promise<void>;
+			setMaxDelegationCycles: (count: number) => Promise<void>;
 		};
 	};
 	showError: (message: string) => void;
 	showStatus: (message: string) => void;
 	showSelector: () => void;
+	updateKlermRoutingStatus: () => void;
 };
 
 type SubmitContext = {
@@ -207,25 +210,34 @@ describe("interactive Klerm commands", () => {
 		}
 	});
 
-	it("updates fallback and includes controller status", async () => {
+	it("updates fallback, handback, cycle budget, and includes controller status", async () => {
 		const routing = {
 			describe: vi.fn(() => "Routing: auto\nFrontier fallback: on"),
 			setRoutingMode: vi.fn(async () => {}),
 			setAllowFrontierFallback: vi.fn(async () => {}),
+			setHandbackEnabled: vi.fn(async () => {}),
+			setMaxDelegationCycles: vi.fn(async () => {}),
 		};
 		const context: RoutingContext = {
 			session: { klermRouting: routing },
 			showError: vi.fn(),
 			showStatus: vi.fn(),
 			showSelector: vi.fn(),
+			updateKlermRoutingStatus: vi.fn(),
 		};
 
 		await prototype.handleKlermRoutingCommand.call(context, "fallback on");
 		await prototype.handleKlermRoutingCommand.call(context, "fallback off");
+		await prototype.handleKlermRoutingCommand.call(context, "handback on");
+		await prototype.handleKlermRoutingCommand.call(context, "handback off");
+		await prototype.handleKlermRoutingCommand.call(context, "cycles 5");
 		await prototype.handleKlermRoutingCommand.call(context, "status");
 
 		expect(routing.setAllowFrontierFallback).toHaveBeenNthCalledWith(1, true);
 		expect(routing.setAllowFrontierFallback).toHaveBeenNthCalledWith(2, false);
+		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(1, true);
+		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(2, false);
+		expect(routing.setMaxDelegationCycles).toHaveBeenCalledWith(5);
 		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: auto\nFrontier fallback: on");
 	});
 

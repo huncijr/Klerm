@@ -33,6 +33,7 @@ import type {
 	ProviderHeaders,
 	TextContent,
 	Usage,
+	UserMessage,
 } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
@@ -46,7 +47,11 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
-import { type KlermRoutingController, projectKlermHandoffContext } from "../klerm/router/runtime.ts";
+import {
+	type KlermModelTransition,
+	type KlermRoutingController,
+	projectKlermHandoffContext,
+} from "../klerm/router/runtime.ts";
 import type { KlermPromptRoutingOverride, KlermRoutingState } from "../klerm/router/types.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
@@ -372,6 +377,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private readonly _klermRoutingController?: KlermRoutingController;
+	private _klermLocalThinkingLevel?: ThinkingLevel;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -393,7 +399,7 @@ export class AgentSession {
 		this._klermRoutingController = config.klermRoutingController;
 		this._customTools = [
 			...(config.customTools ?? []),
-			...(this._klermRoutingController ? [this._klermRoutingController.createDelegationTool()] : []),
+			...(this._klermRoutingController ? this._klermRoutingController.createRoutingTools() : []),
 		];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
@@ -496,7 +502,17 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+		this.agent.beforeToolCall = async ({ assistantMessage, toolCall, args }) => {
+			const toolCalls = assistantMessage.content.filter((part) => part.type === "toolCall");
+			const hasRoutingTool =
+				this._klermRoutingController !== undefined &&
+				toolCalls.some((call) => call.name === "delegate_frontier" || call.name === "return_to_local");
+			if (hasRoutingTool && toolCalls.length !== 1) {
+				return {
+					block: true,
+					reason: "Klerm routing tools must be called alone in a model turn. Retry the routing call separately.",
+				};
+			}
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -571,7 +587,7 @@ export class AgentSession {
 			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
 			const previousContext = previousSnapshot?.context ?? turn.context;
 			const transition = await this._klermRoutingController?.prepareNextTurn(turn);
-			if (transition) await this._applyRoutedModel(transition.model);
+			if (transition) await this._applyKlermTransition(transition, true);
 			const systemPrompt = this._withKlermSystemPrompt(this._systemPromptOverride ?? this._baseSystemPrompt);
 			this.agent.state.systemPrompt = systemPrompt;
 
@@ -588,22 +604,86 @@ export class AgentSession {
 		};
 	}
 
-	private async _applyRoutedModel(model: Model<any>): Promise<void> {
-		if (modelsAreEqual(this.model, model)) return;
-		if (!(await this._modelRuntime.checkAuth(model.provider))) {
-			throw new Error(`No authentication configured for routed model ${model.provider}/${model.id}`);
-		}
+	private async _applyKlermTransition(transition: KlermModelTransition, throwOnFailure = false): Promise<boolean> {
 		const previousModel = this.model;
 		const previousThinkingLevel = this.agent.state.thinkingLevel;
-		this.agent.state.model = model;
-		this.agent.state.thinkingLevel = clampThinkingLevel(model, previousThinkingLevel) as ThinkingLevel;
-		this.sessionManager.appendModelChange(model.provider, model.id);
+		if (
+			transition.state.fromLane === "local" ||
+			(transition.state.kind === "initial" &&
+				transition.state.toLane === "frontier" &&
+				this._klermRoutingController?.routingState.completionOwner === "local")
+		) {
+			this._klermLocalThinkingLevel = previousThinkingLevel;
+		}
+		try {
+			await this._applyRoutedModel(
+				transition.model,
+				false,
+				transition.state.toLane === "local" ? this._klermLocalThinkingLevel : undefined,
+			);
+			await transition.commit();
+			if (transition.state.toLane === "local") {
+				this._klermLocalThinkingLevel = this.agent.state.thinkingLevel;
+			}
+			this.agent.state.systemPrompt = this._withKlermSystemPrompt(
+				this._systemPromptOverride ?? this._baseSystemPrompt,
+			);
+			if (this._klermRoutingController) {
+				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
+			}
+			return true;
+		} catch (error) {
+			if (previousModel && !modelsAreEqual(this.model, previousModel)) {
+				try {
+					await this._applyRoutedModel(previousModel, false, previousThinkingLevel);
+				} catch {
+					this.agent.state.model = previousModel;
+					this.agent.state.thinkingLevel = previousThinkingLevel;
+				}
+			}
+			try {
+				await transition.reject(error);
+			} catch {
+				// Rejection clears the prepared state before writing its failure event.
+			}
+			if (this._klermRoutingController) {
+				this.agent.state.systemPrompt = this._withKlermSystemPrompt(
+					this._systemPromptOverride ?? this._baseSystemPrompt,
+				);
+				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
+			}
+			if (throwOnFailure) throw error;
+			return false;
+		}
+	}
+
+	private async _applyRoutedModel(
+		model: Model<any>,
+		emitRoutingChange = true,
+		preferredThinkingLevel?: ThinkingLevel,
+	): Promise<void> {
+		const previousModel = this.model;
+		const modelChanged = !modelsAreEqual(previousModel, model);
+		if (modelChanged && !(await this._modelRuntime.checkAuth(model.provider))) {
+			throw new Error(`No authentication configured for routed model ${model.provider}/${model.id}`);
+		}
+		const previousThinkingLevel = this.agent.state.thinkingLevel;
+		const nextThinkingLevel = clampThinkingLevel(
+			model,
+			preferredThinkingLevel ?? previousThinkingLevel,
+		) as ThinkingLevel;
+		if (!modelChanged && nextThinkingLevel === previousThinkingLevel) return;
+		if (modelChanged) {
+			this.agent.state.model = model;
+			this.sessionManager.appendModelChange(model.provider, model.id);
+		}
+		this.agent.state.thinkingLevel = nextThinkingLevel;
 		if (this.agent.state.thinkingLevel !== previousThinkingLevel) {
 			this.sessionManager.appendThinkingLevelChange(this.agent.state.thinkingLevel);
 			this._emit({ type: "thinking_level_changed", level: this.agent.state.thinkingLevel });
 		}
-		await this._emitModelSelect(model, previousModel, "route");
-		if (this._klermRoutingController) {
+		if (modelChanged) await this._emitModelSelect(model, previousModel, "route");
+		if (emitRoutingChange && this._klermRoutingController) {
 			this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
 		}
 	}
@@ -1124,11 +1204,15 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
-	private async _finishKlermPrompt(success: boolean, restoreModel?: Model<any>): Promise<void> {
+	private async _finishKlermPrompt(
+		success: boolean,
+		restoreModel?: Model<any>,
+		restoreThinkingLevel?: ThinkingLevel,
+	): Promise<void> {
 		try {
 			await this._klermRoutingController?.recordCompletion(success);
 		} finally {
-			if (restoreModel) await this._applyRoutedModel(restoreModel);
+			if (restoreModel) await this._applyRoutedModel(restoreModel, true, restoreThinkingLevel);
 			if (this._klermRoutingController) {
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
@@ -1136,7 +1220,11 @@ export class AgentSession {
 		}
 	}
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[], restoreModel?: Model<any>): Promise<void> {
+	private async _runAgentPrompt(
+		messages: AgentMessage | AgentMessage[],
+		restoreModel?: Model<any>,
+		restoreThinkingLevel?: ThinkingLevel,
+	): Promise<void> {
 		this._isAgentRunActive = true;
 		let succeeded = false;
 		try {
@@ -1154,22 +1242,24 @@ export class AgentSession {
 					break;
 				}
 
-				const localResponse = lastAssistant.content
+				const response = lastAssistant.content
 					.filter((part) => part.type === "text")
 					.map((part) => part.text)
 					.join("\n")
 					.trim();
 				const enforcedDelegation =
-					await this._klermRoutingController?.enforceExplicitFrontierDelegation(localResponse);
+					this._klermRoutingController?.routingState.lane === "frontier"
+						? await this._klermRoutingController.enforceRequiredLocalReturn(response)
+						: await this._klermRoutingController?.enforceExplicitFrontierDelegation(response);
 				if (!enforcedDelegation) {
 					succeeded = true;
 					break;
 				}
 
-				await this._applyRoutedModel(enforcedDelegation.model);
-				this.agent.state.systemPrompt = this._withKlermSystemPrompt(
-					this._systemPromptOverride ?? this._baseSystemPrompt,
-				);
+				if (!(await this._applyKlermTransition(enforcedDelegation))) {
+					succeeded = false;
+					break;
+				}
 				nextMessages = {
 					role: "user",
 					content: [{ type: "text", text: enforcedDelegation.handoffPrompt }],
@@ -1177,7 +1267,7 @@ export class AgentSession {
 				};
 			}
 		} finally {
-			await this._finishKlermPrompt(succeeded, restoreModel);
+			await this._finishKlermPrompt(succeeded, restoreModel, restoreThinkingLevel);
 			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 			await this._emitAgentSettled();
@@ -1191,12 +1281,24 @@ export class AgentSession {
 			return false;
 		}
 
-		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-			const transition = await this._klermRoutingController?.handleLocalFailure(msg.errorMessage);
+		if (msg.stopReason === "error") {
+			const transition =
+				this._klermRoutingController?.routingState.lane === "frontier"
+					? await this._klermRoutingController.handleFrontierFailure(msg.errorMessage)
+					: await this._klermRoutingController?.handleLocalFailure(msg.errorMessage);
 			if (transition) {
-				await this._applyRoutedModel(transition.model);
+				if (!(await this._applyKlermTransition(transition))) return false;
 				const messages = this.agent.state.messages;
 				if (messages[messages.length - 1] === msg) messages.pop();
+				if (transition.handoffPrompt) {
+					const handoffMessage: UserMessage = {
+						role: "user",
+						content: [{ type: "text", text: transition.handoffPrompt }],
+						timestamp: Date.now(),
+					};
+					messages.push(handoffMessage);
+					this.sessionManager.appendMessage(handoffMessage);
+				}
 				return true;
 			}
 		}
@@ -1239,6 +1341,7 @@ export class AgentSession {
 		let messages: AgentMessage[] | undefined;
 		let routedPromptStarted = false;
 		let restoreModel: Model<any> | undefined;
+		let restoreThinkingLevel: ThinkingLevel | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1302,12 +1405,17 @@ export class AgentSession {
 			}
 
 			const modelBeforeRouting = this.model;
-			const routedModel = await this._klermRoutingController?.routePrompt(expandedText, options?.routingOverride);
+			const thinkingBeforeRouting = this.agent.state.thinkingLevel;
+			const routedTransition = await this._klermRoutingController?.routePrompt(
+				expandedText,
+				options?.routingOverride,
+			);
 			routedPromptStarted = this._klermRoutingController?.routingState.taskId !== undefined;
 			if (options?.routingOverride && this._klermRoutingController?.config.routing === "off") {
 				restoreModel = modelBeforeRouting;
+				restoreThinkingLevel = thinkingBeforeRouting;
 			}
-			if (routedModel) await this._applyRoutedModel(routedModel.model);
+			if (routedTransition) await this._applyKlermTransition(routedTransition, true);
 
 			// Flush any pending bash messages before the new prompt
 			this._flushPendingBashMessages();
@@ -1390,7 +1498,7 @@ export class AgentSession {
 				this.agent.state.systemPrompt = this._withKlermSystemPrompt(this._baseSystemPrompt);
 			}
 		} catch (error) {
-			if (routedPromptStarted) await this._finishKlermPrompt(false, restoreModel);
+			if (routedPromptStarted) await this._finishKlermPrompt(false, restoreModel, restoreThinkingLevel);
 			preflightResult?.(false);
 			throw error;
 		}
@@ -1400,7 +1508,7 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		await this._runAgentPrompt(messages, restoreModel);
+		await this._runAgentPrompt(messages, restoreModel, restoreThinkingLevel);
 	}
 
 	/**

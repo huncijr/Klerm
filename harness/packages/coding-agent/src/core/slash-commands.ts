@@ -31,8 +31,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	},
 	{
 		name: "routing",
-		description: "Configure Klerm routing and frontier fallback",
-		argumentHint: "<status|off|local|frontier|auto|fallback on|off>",
+		description: "Configure Klerm routing, handback, and frontier fallback",
+		argumentHint: "<status|off|local|frontier|auto|fallback on|off|handback on|off|cycles <count>>",
 	},
 	{ name: "klerm", description: "Show Klerm A2A routing status" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },

@@ -1261,7 +1261,7 @@ describe("InteractiveMode Klerm handoff status", () => {
 		const fakeThis: any = {
 			chatContainer: new Container(),
 			outputPad: 1,
-			renderedKlermHandoffTaskId: undefined,
+			renderedKlermTransitionId: undefined,
 			pendingKlermHandoff: undefined,
 		};
 		const state = {
@@ -1273,6 +1273,21 @@ describe("InteractiveMode Klerm handoff status", () => {
 			selectedTarget: "openai-codex/gpt-5.5",
 			otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
 			handoffReason: "user requested Codex",
+			score: 0.58,
+			confidence: 0.62,
+			risk: 0.71,
+			lastTransition: {
+				id: "transition-task-1-2",
+				sequence: 2,
+				kind: "delegate",
+				fromLane: "local",
+				toLane: "frontier",
+				toTarget: "openai-codex/gpt-5.5",
+				reason: "user requested Codex",
+				trigger: "tool",
+				cycle: 1,
+				maxCycles: 3,
+			},
 		};
 
 		(InteractiveMode as any).prototype.queueKlermHandoffCall.call(fakeThis, state);
@@ -1287,6 +1302,27 @@ describe("InteractiveMode Klerm handoff status", () => {
 
 		(InteractiveMode as any).prototype.renderPendingKlermHandoffCall.call(fakeThis);
 		expect(fakeThis.chatContainer.children).toHaveLength(2);
+
+		const returnState = {
+			...state,
+			lane: "local",
+			selectedTarget: "ollama/qwen3.5:9b-q4_K_M",
+			handoffReason: "frontier pass complete",
+			lastTransition: {
+				...state.lastTransition,
+				id: "transition-task-1-3",
+				sequence: 3,
+				kind: "return",
+				fromLane: "frontier",
+				toLane: "local",
+				toTarget: "ollama/qwen3.5:9b-q4_K_M",
+				reason: "frontier pass complete",
+			},
+		};
+		(InteractiveMode as any).prototype.queueKlermHandoffCall.call(fakeThis, returnState);
+		(InteractiveMode as any).prototype.renderPendingKlermHandoffCall.call(fakeThis);
+		expect(stripAnsi(renderAll(fakeThis.chatContainer))).toContain("+ returned to local");
+		expect(fakeThis.chatContainer.children).toHaveLength(4);
 	});
 
 	test("shows the completed frontier route without handoff details in the persistent panel", () => {
@@ -1298,19 +1334,26 @@ describe("InteractiveMode Klerm handoff status", () => {
 			frontierModel: "openai-codex/gpt-5.5",
 			selectedTarget: "openai-codex/gpt-5.5",
 			otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
-			handoffReason: "user requested Codex",
+			decisionSource: "local-model",
+			score: 0.58,
+			confidence: 0.62,
+			risk: 0.71,
 		};
 		const fakeThis: any = {
 			klermRoutingStatus: new Text("", 0, 0),
 			session: {
 				state: { model: { provider: "openai-codex", id: "gpt-5.5" } },
-				klermRouting: { routingState: state, config: state },
+				klermRouting: {
+					routingState: state,
+					config: { ...state, handbackEnabled: true, maxDelegationCycles: 3 },
+				},
 			},
 		};
 
 		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
 		const output = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
 		expect(output).toContain("Last route: frontier · openai-codex/gpt-5.5");
+		expect(output).toContain("Auto score: frontier · capability 58% · confidence 62% · risk 71%");
 		expect(output).not.toContain("called other model");
 		expect(output).not.toContain("reason:");
 	});

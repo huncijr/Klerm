@@ -5,6 +5,7 @@
 ### Added
 
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
+- Added bounded bidirectional Klerm routing with native frontier returns, local verification, deterministic transition logs, and interactive handback controls.
 
 ### Fixed
 

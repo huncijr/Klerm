@@ -15,7 +15,9 @@ and deterministic JSONL decision logs.
 - Local model discovery through Ollama and llama.cpp.
 - Frontier workers through configured providers such as OpenAI Codex or Google.
 - `off`, `local`, `frontier`, and `auto` routing modes.
-- Local-to-frontier handoff in the same session through `delegate_frontier`.
+- Hybrid local capability scoring with deterministic safety overrides.
+- Repeated local-to-frontier-to-local handoffs in the same session through
+  `delegate_frontier` and `return_to_local`.
 - Provider-neutral handoff context between different model APIs.
 - Deterministic per-project routing logs.
 
@@ -83,6 +85,8 @@ Configure the local and frontier workers in the interactive CLI:
 /local model ollama/qwen3.5:9b-q4_K_M
 /frontier model openai-codex/gpt-5.5
 /routing fallback on
+/routing handback on
+/routing cycles 3
 /routing auto
 /klerm
 ```
@@ -94,11 +98,13 @@ Configure the local and frontier workers in the interactive CLI:
 | `/frontier` or `/frontier model` | Open the frontier model selector. |
 | `/frontier model <provider/model>` | Persist the frontier worker model. |
 | `/model <provider/model>` | Set the direct model used when routing is `off`. |
-| `/routing auto` | Let the local router select local or frontier execution. |
+| `/routing auto` | Score local capability, confidence, task risk, and complexity before selecting local or frontier execution. |
 | `/routing local` | Send normal prompts to the local worker. |
 | `/routing frontier` | Send normal prompts directly to the frontier worker. |
 | `/routing off` | Disable A2A routing and use the direct model. |
 | `/routing fallback on\|off` | Control frontier fallback when automatic local routing cannot start. |
+| `/routing handback on\|off` | Control whether local-owned frontier work returns to local for verification. |
+| `/routing cycles <1-20>` | Set the maximum number of frontier visits in one task. |
 | `/local task <prompt>` | Force one task to start locally. |
 | `/frontier task <prompt>` | Force one task to start on the frontier worker. |
 | `/klerm` or `/routing status` | Show the current routing configuration and state. |
@@ -110,8 +116,32 @@ routing mode, active route, and handoff state:
 Local model: ollama/qwen3.5:9b-q4_K_M (currently active)
 Frontier model: openai-codex/gpt-5.5
 Routing: auto
+Return to local: on
+Delegation cycles: 0/3
 Active route: local · ollama/qwen3.5:9b-q4_K_M
+Auto score: local · capability 86% · confidence 84% · risk 12%
 ```
+
+## Automatic Capability Scoring
+
+In `auto` mode the configured local model first receives its model profile and
+the task. It returns a structured self-assessment:
+
+- `score`: estimated ability to finish correctly without frontier help.
+- `confidence`: certainty in that capability assessment and execution.
+- `risk`: consequence of an incorrect local result.
+- `complexity`: task complexity from 1 to 10.
+- `capabilityFactors`: short reasons supporting the assessment.
+
+Klerm selects frontier when the local model requests it, or when `score < 0.65`,
+`confidence < 0.70`, `risk >= 0.65`, or `complexity >= 7`. Deterministic checks
+raise risk and complexity for security, authentication, production,
+data-migration, architectural, and repository-scale work. This prevents an
+overconfident local assessment from bypassing safety policy.
+
+If the local router times out or returns invalid JSON, Klerm uses a
+deterministic fallback assessment. The decision log records `decisionSource` as
+either `local-model` or `deterministic-fallback`.
 
 During a local-to-frontier handoff, Klerm inserts a yellow function-call style
 notice directly before the frontier response:
@@ -135,7 +165,10 @@ Last route: frontier · openai-codex/gpt-5.5
 
 The local worker can call `delegate_frontier` when the user explicitly requests
 the frontier model, or when the task is too complex, risky, or blocked locally.
-Klerm then switches workers between agent turns while preserving the session,
+For local-owned tasks, the frontier worker returns a structured result through
+`return_to_local`. The local worker verifies it, finalizes the user response, or
+delegates another focused issue while the configured cycle budget remains.
+Klerm switches workers between agent turns while preserving the session,
 transcript, working directory, and tool results.
 
 Explicit handoff requests are enforced by the runtime. If a small local model
@@ -155,8 +188,14 @@ Expected lifecycle:
 local router/worker
 -> delegate_frontier
 -> frontier worker continues the same session
--> frontier response
+-> return_to_local
+-> local worker verifies and finalizes
 ```
+
+Automatic routes to frontier are local-owned by default and therefore return to
+local. `/frontier task` and `/routing frontier` are direct frontier-owned tasks
+and do not force a handback. Handback is enabled by default with a three-cycle
+limit.
 
 Force each lane independently without changing the persisted routing mode:
 
@@ -200,8 +239,36 @@ Per-project decisions are written to:
 .klerm/router-decisions.jsonl
 ```
 
-A successful local-to-frontier task includes `INITIAL_ROUTE`, `LOCAL_STARTED`,
-`DELEGATE_FRONTIER`, `FRONTIER_STARTED`, and `TASK_COMPLETED` events.
+A successful local-to-frontier-to-local task includes `INITIAL_ROUTE`,
+`LOCAL_STARTED`, `DELEGATE_FRONTIER`, `FRONTIER_STARTED`,
+`FRONTIER_COMPLETED`, `RETURN_TO_LOCAL`, `LOCAL_RESUMED`, and `TASK_COMPLETED`
+events. Each handoff records a transition ID, cycle counter, trigger, and
+transcript hash. Structured result counts are logged, but frontier response
+content is not written to the decision log.
+Automatic route events also include `score`, `confidence`, `risk`, `complexity`,
+`capabilityFactors`, `policyTriggers`, and `decisionSource` so the handoff can be
+audited after completion.
+
+Inspect the latest automatic decisions:
+
+```bash
+tail -n 10 .klerm/router-decisions.jsonl
+```
+
+Useful smoke prompts in `/routing auto` mode:
+
+```text
+Fix the typo in README.md: change "teh" to "the" and make no other changes.
+Review the authentication system and database migration for security and data-integrity risks.
+Design an architecture for a repository-wide refactor across all packages, including a phased migration plan.
+Explain the unfamiliar provider API in this repository, and delegate if you cannot verify the answer confidently from local context.
+```
+
+The typo task should normally remain local. The authentication/migration and
+repository-architecture tasks must route to frontier because deterministic
+policy applies. The unfamiliar-provider task is intentionally model-dependent:
+use its score, confidence, factors, and policy triggers to evaluate whether the
+local router recognized uncertainty.
 
 Router diagnostics:
 

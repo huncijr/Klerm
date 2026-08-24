@@ -46,6 +46,8 @@ Useful commands:
 /routing frontier
 /routing auto
 /routing fallback on
+/routing handback on
+/routing cycles 3
 /routing status
 /klerm
 ```
@@ -63,6 +65,12 @@ The local worker receives the `delegate_frontier` tool. It must use the tool
 when the user explicitly asks it to consult Codex, the frontier worker, or the
 other configured model. It may also delegate work that is too complex, risky,
 or blocked locally.
+
+For local-owned tasks, the frontier worker receives `return_to_local` and sends
+a structured result back for local verification. This can repeat until the task
+is complete or the configured delegation cycle budget is exhausted. Automatic
+frontier routes return to local by default; explicit `/frontier task` and
+`/routing frontier` tasks remain frontier-owned.
 
 Example:
 

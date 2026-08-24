@@ -452,7 +452,7 @@ export class InteractiveMode {
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private klermRoutingStatus: Text;
-	private renderedKlermHandoffTaskId?: string;
+	private renderedKlermTransitionId?: string;
 	private pendingKlermHandoff?: KlermRoutingState;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
@@ -1083,6 +1083,8 @@ export class InteractiveMode {
 					"  /routing auto            local decides: small tasks local, hard tasks frontier",
 					"  /routing local           force normal prompts to local",
 					"  /routing frontier        force normal prompts to frontier",
+					"  /routing handback on     return frontier work to local for verification",
+					"  /routing cycles <count>  limit frontier visits per task",
 					"  /routing off             disable A2A and use /model directly",
 					"  /model <model>            set the direct model used when routing is off",
 				].join("\n"),
@@ -2114,6 +2116,8 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
+		this.pendingKlermHandoff = undefined;
+		this.renderedKlermTransitionId = undefined;
 		this.pendingTools.clear();
 		this.renderInitialMessages();
 	}
@@ -5007,6 +5011,32 @@ export class InteractiveMode {
 			this.showError("Usage: /routing fallback on|off");
 			return;
 		}
+		if (argument === "handback on" || argument === "handback off") {
+			const enabled = argument === "handback on";
+			await routing.setHandbackEnabled(enabled);
+			this.updateKlermRoutingStatus();
+			this.showStatus(`Return to local: ${enabled ? "on" : "off"}`);
+			return;
+		}
+		if (argument === "handback" || argument.startsWith("handback ")) {
+			this.showError("Usage: /routing handback on|off");
+			return;
+		}
+		if (argument.startsWith("cycles ")) {
+			const count = Number(argument.slice(7).trim());
+			if (!Number.isInteger(count) || count < 1 || count > 20) {
+				this.showError("Usage: /routing cycles <integer from 1 to 20>");
+				return;
+			}
+			await routing.setMaxDelegationCycles(count);
+			this.updateKlermRoutingStatus();
+			this.showStatus(`Delegation cycles: ${count}`);
+			return;
+		}
+		if (argument === "cycles") {
+			this.showError("Usage: /routing cycles <integer from 1 to 20>");
+			return;
+		}
 		if (argument !== "off" && argument !== "local" && argument !== "frontier" && argument !== "auto") {
 			this.showError("Routing mode must be off, local, frontier, or auto.");
 			return;
@@ -5040,20 +5070,33 @@ export class InteractiveMode {
 			`Frontier model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
 		lines.push(`Routing: ${state.mode}`);
+		lines.push(`Return to local: ${routing.config.handbackEnabled ? "on" : "off"}`);
 		lines.push(
-			state.lane === "direct" && state.handoffReason && state.selectedTarget
-				? `Last route: frontier · ${state.selectedTarget}`
-				: `Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
+			`Delegation cycles: ${state.delegationCycle ?? 0}/${state.maxDelegationCycles ?? routing.config.maxDelegationCycles}`,
 		);
+		if (state.lane === "direct" && state.selectedTarget && (state.handoffReason || state.decisionSource)) {
+			const lastRoute = state.selectedTarget === frontierModel ? "frontier" : "local";
+			lines.push(`Last route: ${lastRoute} · ${state.selectedTarget}`);
+		} else {
+			lines.push(`Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`);
+		}
+		if (state.score !== undefined && state.confidence !== undefined && state.risk !== undefined) {
+			const assessedRoute =
+				state.lane === "direct" ? (state.selectedTarget === frontierModel ? "frontier" : "local") : state.lane;
+			lines.push(
+				`Auto score: ${assessedRoute} · capability ${Math.round(state.score * 100)}% · confidence ${Math.round(state.confidence * 100)}% · risk ${Math.round(state.risk * 100)}%`,
+			);
+		}
 
 		this.klermRoutingStatus.setText(lines.join("\n"));
 	}
 
 	private queueKlermHandoffCall(state: KlermRoutingState): void {
+		const transition = state.lastTransition;
 		if (
-			state.lane !== "frontier" ||
-			!state.taskId ||
-			state.taskId === this.renderedKlermHandoffTaskId ||
+			!transition ||
+			transition.kind === "initial" ||
+			transition.id === this.renderedKlermTransitionId ||
 			!state.selectedTarget ||
 			!state.handoffReason
 		) {
@@ -5064,12 +5107,16 @@ export class InteractiveMode {
 
 	private renderPendingKlermHandoffCall(): void {
 		const state = this.pendingKlermHandoff;
-		if (!state?.taskId || !state.selectedTarget || !state.handoffReason) return;
+		const transition = state?.lastTransition;
+		if (!state || !transition || !state.selectedTarget || !state.handoffReason) return;
 
 		this.pendingKlermHandoff = undefined;
-		this.renderedKlermHandoffTaskId = state.taskId;
+		this.renderedKlermTransitionId = transition.id;
+		const isReturn = transition.kind === "return";
 		const call = [
-			theme.bold(theme.fg("warning", "+ called other model")),
+			theme.bold(
+				theme.fg(isReturn ? "success" : "warning", isReturn ? "+ returned to local" : "+ called other model"),
+			),
 			`  ${theme.fg("warning", "model:")} ${state.selectedTarget}`,
 			`  ${theme.fg("warning", "reason:")} ${state.handoffReason}`,
 		].join("\n");

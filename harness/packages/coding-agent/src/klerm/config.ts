@@ -8,6 +8,8 @@ export interface KlermConfig {
 	localModel?: string;
 	frontierModel?: string;
 	allowFrontierFallback: boolean;
+	handbackEnabled: boolean;
+	maxDelegationCycles: number;
 	localMaxTurns: number;
 	localMaxToolErrors: number;
 }
@@ -15,6 +17,8 @@ export interface KlermConfig {
 export const DEFAULT_KLERM_CONFIG: KlermConfig = {
 	routing: "off",
 	allowFrontierFallback: false,
+	handbackEnabled: true,
+	maxDelegationCycles: 3,
 	localMaxTurns: 8,
 	localMaxToolErrors: 3,
 };
@@ -27,8 +31,8 @@ function isRoutingMode(value: unknown): value is KlermRoutingMode {
 	return value === "off" || value === "local" || value === "frontier" || value === "auto";
 }
 
-function positiveInteger(value: unknown, fallback: number): number {
-	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+function positiveInteger(value: unknown, fallback: number, maximum = Number.POSITIVE_INFINITY): number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= maximum ? value : fallback;
 }
 
 export class KlermConfigStore {
@@ -56,6 +60,12 @@ export class KlermConfigStore {
 				overrides.allowFrontierFallback ??
 				stored.allowFrontierFallback ??
 				DEFAULT_KLERM_CONFIG.allowFrontierFallback,
+			handbackEnabled: overrides.handbackEnabled ?? stored.handbackEnabled ?? DEFAULT_KLERM_CONFIG.handbackEnabled,
+			maxDelegationCycles: positiveInteger(
+				overrides.maxDelegationCycles ?? stored.maxDelegationCycles,
+				DEFAULT_KLERM_CONFIG.maxDelegationCycles,
+				20,
+			),
 			localMaxTurns: positiveInteger(
 				overrides.localMaxTurns ?? stored.localMaxTurns,
 				DEFAULT_KLERM_CONFIG.localMaxTurns,

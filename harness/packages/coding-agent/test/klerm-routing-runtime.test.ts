@@ -6,6 +6,7 @@ import {
 	type Api,
 	type AssistantMessage,
 	fauxAssistantMessage,
+	fauxToolCall,
 	type Model,
 	type ToolResultMessage,
 	type UserMessage,
@@ -61,14 +62,17 @@ describe("Klerm routing runtime", () => {
 	let tempDir: string;
 	const local = createModel("ollama", "qwen2.5-coder:7b", "openai-completions");
 	const frontier = createModel("google", "gemini-3.5-flash-lite", "google-generative-ai");
-	const modelRuntime = {
-		getAvailableSnapshot: () => [local, frontier],
-		completeSimple: async () =>
-			assistantMessage([{ type: "text", text: '{"route":"LOCAL","complexity":2,"reason":"small edit"}' }], local),
-		checkAuth: async () => ({ source: "config" }),
-		hasConfiguredAuth: () => true,
-		isUsingOAuth: () => false,
-	} as unknown as ModelRuntime;
+	const createRoutingRuntime = (responseText: string): ModelRuntime =>
+		({
+			getAvailableSnapshot: () => [local, frontier],
+			completeSimple: async () => assistantMessage([{ type: "text", text: responseText }], local),
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		}) as unknown as ModelRuntime;
+	const modelRuntime = createRoutingRuntime(
+		'{"route":"LOCAL","score":0.86,"confidence":0.84,"risk":0.12,"complexity":2,"factors":["focused edit"],"reason":"small edit"}',
+	);
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "klerm-routing-"));
@@ -103,12 +107,129 @@ describe("Klerm routing runtime", () => {
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		const transition = await controller.routePrompt("Fix a typo");
 		expect(transition?.model).toBe(local);
+		await transition?.commit();
 		expect(controller.routingState).toMatchObject({
 			task: "Fix a typo",
 			lane: "local",
 			selectedTarget: "ollama/qwen2.5-coder:7b",
+			score: 0.86,
+			confidence: 0.84,
+			risk: 0.12,
+			complexity: 2,
+			capabilityFactors: ["focused edit"],
+			policyTriggers: [],
+			decisionSource: "local-model",
 		});
 		expect(controller.routingState.otherModelCalled).toBeUndefined();
+		const decisions = (await readKlermRouteDecisionLog(tempDir))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(decisions[0]).toMatchObject({
+			event: "INITIAL_ROUTE",
+			route: "LOCAL",
+			score: 0.86,
+			confidence: 0.84,
+			risk: 0.12,
+			capabilityFactors: ["focused edit"],
+			policyTriggers: [],
+			decisionSource: "local-model",
+		});
+	});
+
+	it("routes low-confidence local assessments to frontier", async () => {
+		const runtime = createRoutingRuntime(
+			'{"route":"LOCAL","score":0.8,"confidence":0.42,"risk":0.2,"complexity":3,"factors":["unfamiliar API"],"reason":"probably manageable"}',
+		);
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+
+		const transition = await controller.routePrompt("Update the unfamiliar client integration");
+
+		expect(transition?.model).toBe(frontier);
+		await transition?.commit();
+		expect(controller.routingState).toMatchObject({
+			lane: "frontier",
+			completionOwner: "local",
+			delegationCycle: 1,
+			score: 0.8,
+			confidence: 0.42,
+			policyTriggers: ["local confidence 0.42 < 0.70"],
+			decisionSource: "local-model",
+		});
+	});
+
+	it("makes an automatic frontier route frontier-owned when handback is disabled", async () => {
+		const runtime = createRoutingRuntime(
+			'{"route":"FRONTIER","score":0.3,"confidence":0.9,"risk":0.4,"complexity":5,"factors":["specialist work"],"reason":"frontier needed"}',
+		);
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+			handbackEnabled: false,
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		await (await controller.routePrompt("Use specialist knowledge"))?.commit();
+
+		expect(controller.routingState).toMatchObject({
+			lane: "frontier",
+			completionOwner: "frontier",
+			handbackEnabled: false,
+			delegationCycle: 0,
+		});
+	});
+
+	it("overrides an overconfident local decision for sensitive work", async () => {
+		const runtime = createRoutingRuntime(
+			'{"route":"LOCAL","score":0.95,"confidence":0.95,"risk":0.1,"complexity":2,"factors":["simple review"],"reason":"easy"}',
+		);
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+
+		const transition = await controller.routePrompt(
+			"Vizsgáld felül a hitelesítés és az adatbázis-migráció biztonsági kockázatait",
+		);
+
+		expect(transition?.model).toBe(frontier);
+		await transition?.commit();
+		expect(controller.routingState).toMatchObject({
+			lane: "frontier",
+			risk: 0.75,
+			complexity: 7,
+			capabilityFactors: ["simple review", "security, production, or data-integrity sensitive work"],
+			policyTriggers: ["task risk 0.75 >= 0.65", "task complexity 7 >= 7"],
+		});
+	});
+
+	it("uses deterministic scoring when the local router response is malformed", async () => {
+		const runtime = createRoutingRuntime("not-json");
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+
+		const transition = await controller.routePrompt("Fix a typo");
+
+		expect(transition?.model).toBe(local);
+		await transition?.commit();
+		expect(controller.routingState).toMatchObject({
+			lane: "local",
+			score: 0.8,
+			confidence: 0.8,
+			risk: 0.2,
+			decisionSource: "deterministic-fallback",
+		});
 	});
 
 	it("persists the frontier fallback setter", async () => {
@@ -124,6 +245,18 @@ describe("Klerm routing runtime", () => {
 
 		await controller.setAllowFrontierFallback(false);
 		expect(controller.config.allowFrontierFallback).toBe(false);
+
+		await controller.setHandbackEnabled(false);
+		await controller.setMaxDelegationCycles(5);
+		expect(JSON.parse(readFileSync(store.path, "utf8"))).toMatchObject({
+			handbackEnabled: false,
+			maxDelegationCycles: 5,
+		});
+		const policyReloaded = await KlermConfigStore.load(tempDir);
+		expect(policyReloaded.get()).toMatchObject({ handbackEnabled: false, maxDelegationCycles: 5 });
+		await expect(controller.setMaxDelegationCycles(0)).rejects.toThrow("between 1 and 20");
+		await store.update({ maxDelegationCycles: 99 });
+		expect((await KlermConfigStore.load(tempDir)).get().maxDelegationCycles).toBe(3);
 	});
 
 	it("keeps the persisted routing mode after a one-prompt override", async () => {
@@ -137,6 +270,7 @@ describe("Klerm routing runtime", () => {
 
 		const transition = await controller.routePrompt("Use local once", "local");
 		expect(transition?.model).toBe(local);
+		await transition?.commit();
 		await controller.recordCompletion(true);
 
 		expect(controller.config.routing).toBe("frontier");
@@ -151,11 +285,11 @@ describe("Klerm routing runtime", () => {
 	])("forces one $lane task and restores the direct model with routing off", async ({ lane, initial }) => {
 		const localFaux = registerFauxProvider({
 			provider: "ollama",
-			models: [{ id: "qwen2.5-coder:7b" }],
+			models: [{ id: "qwen2.5-coder:7b", reasoning: initial === "local" }],
 		});
 		const frontierFaux = registerFauxProvider({
 			provider: "google",
-			models: [{ id: "gemini-3.5-flash-lite" }],
+			models: [{ id: "gemini-3.5-flash-lite", reasoning: initial === "frontier" }],
 		});
 		const localModel = localFaux.getModel();
 		const frontierModel = frontierFaux.getModel();
@@ -180,7 +314,7 @@ describe("Klerm routing runtime", () => {
 		});
 		const agent = new Agent({
 			streamFn: streamSimple,
-			initialState: { model: initialModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+			initialState: { model: initialModel, systemPrompt: "test", tools: [], thinkingLevel: "high" },
 		});
 		const session = new AgentSession({
 			agent,
@@ -215,6 +349,7 @@ describe("Klerm routing runtime", () => {
 				expect(routedSystemPrompt).toContain("An explicit user request requires delegation");
 			}
 			expect(session.model).toBe(initialModel);
+			expect(session.thinkingLevel).toBe("high");
 			expect(controller.config.routing).toBe("off");
 			expect(controller.routingState).toMatchObject({ mode: "off", lane: "direct" });
 			expect(settings.getDefaultProvider()).toBe(initialModel.provider);
@@ -255,7 +390,7 @@ describe("Klerm routing runtime", () => {
 			frontierModel: "google/gemini-3.5-flash-lite",
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
-		await controller.routePrompt("Refactor this module");
+		await (await controller.routePrompt("Refactor this module"))?.commit();
 		expect(controller.getSystemPromptContribution()).toContain("You are the Klerm local worker");
 		expect(controller.getSystemPromptContribution()).toContain("Current local model: ollama/qwen2.5-coder:7b");
 		expect(controller.getSystemPromptContribution()).toContain(
@@ -280,6 +415,7 @@ describe("Klerm routing runtime", () => {
 		} as PrepareNextTurnContext;
 		const transition = await controller.prepareNextTurn(turn);
 		expect(transition?.model).toBe(frontier);
+		await transition?.commit();
 		expect(controller.routingState).toMatchObject({
 			task: "Refactor this module",
 			lane: "frontier",
@@ -342,6 +478,7 @@ describe("Klerm routing runtime", () => {
 				fauxAssistantMessage(
 					'```typescript\ndelegate_frontier({ instruction: "Ask Codex which model it is" })\n```',
 				),
+				fauxAssistantMessage("The frontier response was verified and returned."),
 			]);
 			let frontierSystemPrompt = "";
 			let frontierMessages = "";
@@ -357,20 +494,398 @@ describe("Klerm routing runtime", () => {
 				"Írd le, milyen modell vagy, majd használd a delegate_frontier toolt, és kérd meg a Codex workert, hogy írja le, ő milyen modell.",
 			);
 
-			expect(localFaux.state.callCount).toBe(1);
+			expect(localFaux.state.callCount).toBe(2);
 			expect(frontierFaux.state.callCount).toBe(1);
 			expect(frontierSystemPrompt).toContain("You are the Klerm frontier worker");
 			expect(frontierMessages).toContain("Klerm enforced frontier handoff");
 			expect(controller.routingState).toMatchObject({
 				lane: "direct",
-				otherModelCalled: "ollama/qwen3.5:9b-q4_K_M",
-				handoffReason: "user explicitly requested frontier delegation; Klerm enforced the handoff",
+				otherModelCalled: "openai-codex/gpt-5.5",
+				handoffReason: "frontier completed without a native return_to_local call; Klerm enforced the handback",
 			});
 			const decisions = (await readKlermRouteDecisionLog(tempDir))
 				.trim()
 				.split("\n")
 				.map((line) => JSON.parse(line) as { event: string });
 			expect(decisions.map((decision) => decision.event)).toContain("DELEGATE_FRONTIER");
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+			frontierFaux.unregister();
+		}
+	});
+
+	it("runs repeated local-frontier-local delegation cycles in one agent prompt", async () => {
+		const localFaux = registerFauxProvider({
+			provider: "ollama",
+			models: [{ id: "qwen3.5:9b-q4_K_M" }],
+		});
+		const frontierFaux = registerFauxProvider({
+			provider: "openai-codex",
+			models: [{ id: "gpt-5.5" }],
+		});
+		const localModel = { ...localFaux.getModel(), reasoning: true };
+		const frontierModel = frontierFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel, frontierModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen3.5:9b-q4_K_M",
+			frontierModel: "openai-codex/gpt-5.5",
+			handbackEnabled: true,
+			maxDelegationCycles: 3,
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "high" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("delegate_frontier", {
+							reason: "first specialist pass",
+							summary: "local inspection complete",
+							remainingWork: "implement the first specialist change",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					[
+						fauxToolCall("delegate_frontier", {
+							reason: "focused follow-up",
+							summary: "first pass verified locally",
+							remainingWork: "resolve the remaining specialist issue",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("Both frontier passes were verified locally."),
+			]);
+			frontierFaux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("return_to_local", {
+							reason: "first pass complete",
+							frontierSummary: "implemented first change",
+							frontierAnswer: "first result",
+							changedFiles: ["src/first.ts"],
+							verification: ["first check passed"],
+							openIssues: ["one follow-up remains"],
+							recommendedNextAction: "delegate-again",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					[
+						fauxToolCall("return_to_local", {
+							reason: "follow-up complete",
+							frontierSummary: "resolved final issue",
+							frontierAnswer: "final specialist result",
+							changedFiles: ["src/second.ts"],
+							verification: ["second check passed"],
+							openIssues: [],
+							recommendedNextAction: "finalize",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+			]);
+
+			await session.prompt("Coordinate two specialist passes and verify the result locally.");
+
+			expect(localFaux.state.callCount).toBe(3);
+			expect(frontierFaux.state.callCount).toBe(2);
+			expect(session.model).toBe(localModel);
+			expect(session.thinkingLevel).toBe("high");
+			expect(controller.routingState).toMatchObject({
+				lane: "direct",
+				completionOwner: "local",
+				delegationCycle: 2,
+				maxDelegationCycles: 3,
+			});
+			const decisions = (await readKlermRouteDecisionLog(tempDir))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { event: string; transitionId?: string; transcriptHash?: string });
+			expect(decisions.map((decision) => decision.event)).toEqual([
+				"INITIAL_ROUTE",
+				"LOCAL_STARTED",
+				"DELEGATE_FRONTIER",
+				"FRONTIER_STARTED",
+				"FRONTIER_COMPLETED",
+				"RETURN_TO_LOCAL",
+				"LOCAL_RESUMED",
+				"DELEGATE_FRONTIER",
+				"FRONTIER_STARTED",
+				"FRONTIER_COMPLETED",
+				"RETURN_TO_LOCAL",
+				"LOCAL_RESUMED",
+				"TASK_COMPLETED",
+			]);
+			expect(
+				decisions
+					.filter((decision) => decision.event === "DELEGATE_FRONTIER")
+					.every((entry) => entry.transitionId !== undefined && entry.transcriptHash !== undefined),
+			).toBe(true);
+			expect(await readKlermRouteDecisionLog(tempDir)).not.toContain("final specialist result");
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+			frontierFaux.unregister();
+		}
+	});
+
+	it("rejects delegation after the configured frontier cycle budget", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+			maxDelegationCycles: 1,
+		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Use at most one specialist pass"))?.commit();
+		controller.requestFrontierDelegation({ reason: "first", summary: "ready", remainingWork: "work" });
+		const localTurn = {
+			message: assistantMessage([], local),
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		} as PrepareNextTurnContext;
+		await (await controller.prepareNextTurn(localTurn))?.commit();
+		controller.requestReturnToLocal({
+			reason: "done",
+			frontierSummary: "done",
+			frontierAnswer: "done",
+			changedFiles: [],
+			verification: [],
+			openIssues: [],
+			recommendedNextAction: "finalize",
+		});
+		const frontierTurn = { ...localTurn, message: assistantMessage([], frontier) } as PrepareNextTurnContext;
+		await (await controller.prepareNextTurn(frontierTurn))?.commit();
+		controller.requestFrontierDelegation({ reason: "second", summary: "again", remainingWork: "more" });
+
+		expect(await controller.prepareNextTurn(localTurn)).toBeUndefined();
+		expect(controller.routingState).toMatchObject({ lane: "local", delegationCycle: 1 });
+		expect(await readKlermRouteDecisionLog(tempDir)).toContain('"event":"HANDOFF_REJECTED"');
+	});
+
+	it("blocks a routing tool when the model batches it with another tool", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:local" }] });
+		const frontierFaux = registerFauxProvider({ provider: "openai-codex", models: [{ id: "gpt:frontier" }] });
+		const localModel = localFaux.getModel();
+		const frontierModel = frontierFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel, frontierModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:local",
+			frontierModel: "openai-codex/gpt:frontier",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("delegate_frontier", {
+							reason: "specialist",
+							summary: "ready",
+							remainingWork: "finish",
+						}),
+						fauxToolCall("read", { path: "README.md" }),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("Retried without mixing routing and work tools."),
+			]);
+
+			await session.prompt("Use a specialist safely");
+
+			expect(localFaux.state.callCount).toBe(2);
+			expect(frontierFaux.state.callCount).toBe(0);
+			expect(JSON.stringify(agent.state.messages)).toContain("Klerm routing tools must be called alone");
+			expect(await readKlermRouteDecisionLog(tempDir)).not.toContain('"event":"DELEGATE_FRONTIER"');
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+			frontierFaux.unregister();
+		}
+	});
+
+	it("rejects wrong-lane and duplicate native routing tool calls", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Delegate once"))?.commit();
+		const [delegate, returnToLocal] = controller.createRoutingTools();
+		const delegation = { reason: "specialist", summary: "ready", remainingWork: "finish" };
+		const returned = {
+			reason: "done",
+			frontierSummary: "done",
+			frontierAnswer: "done",
+			changedFiles: [],
+			verification: [],
+			openIssues: [],
+			recommendedNextAction: "finalize" as const,
+		};
+
+		await expect(
+			returnToLocal.execute("return-wrong-lane", returned, undefined, undefined, undefined as never),
+		).rejects.toThrow("frontier worker");
+		await delegate.execute("delegate", delegation, undefined, undefined, undefined as never);
+		await expect(
+			delegate.execute("delegate-again", delegation, undefined, undefined, undefined as never),
+		).rejects.toThrow("already pending");
+		const turn = {
+			message: assistantMessage([], local),
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		} as PrepareNextTurnContext;
+		await (await controller.prepareNextTurn(turn))?.commit();
+		await expect(
+			delegate.execute("delegate-wrong-lane", delegation, undefined, undefined, undefined as never),
+		).rejects.toThrow("local worker");
+		await returnToLocal.execute("return", returned, undefined, undefined, undefined as never);
+	});
+
+	it("keeps the source model and lane when a routed model cannot authenticate", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:local" }] });
+		const frontierFaux = registerFauxProvider({ provider: "openai-codex", models: [{ id: "gpt:frontier" }] });
+		const localModel = localFaux.getModel();
+		const frontierModel = frontierFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel, frontierModel],
+			checkAuth: async (provider: string) => (provider === "openai-codex" ? undefined : { source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:local",
+			frontierModel: "openai-codex/gpt:frontier",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("delegate_frontier", {
+							reason: "specialist",
+							summary: "local work complete",
+							remainingWork: "finish remotely",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+			]);
+			await session.prompt("Start locally, then delegate");
+			expect(session.model).toBe(localModel);
+			expect(controller.routingState.lane).toBe("direct");
+			const log = await readKlermRouteDecisionLog(tempDir);
+			expect(log).toContain('"event":"HANDOFF_FAILED"');
+			expect(log).toContain('"event":"TASK_FAILED"');
+			expect(log).not.toContain('"event":"TASK_COMPLETED"');
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+			frontierFaux.unregister();
+		}
+	});
+
+	it("does not delegate when the user aborts a local response", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:local" }] });
+		const frontierFaux = registerFauxProvider({ provider: "openai-codex", models: [{ id: "gpt:frontier" }] });
+		const localModel = localFaux.getModel();
+		const frontierModel = frontierFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel, frontierModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:local",
+			frontierModel: "openai-codex/gpt:frontier",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([fauxAssistantMessage("", { stopReason: "aborted" })]);
+			await session.prompt("Stop when cancelled");
+
+			expect(localFaux.state.callCount).toBe(1);
+			expect(frontierFaux.state.callCount).toBe(0);
+			const log = await readKlermRouteDecisionLog(tempDir);
+			expect(log).not.toContain('"event":"DELEGATE_FRONTIER"');
+			expect(log).toContain('"event":"TASK_FAILED"');
 		} finally {
 			session.dispose();
 			localFaux.unregister();
@@ -385,10 +900,41 @@ describe("Klerm routing runtime", () => {
 			frontierModel: "google/gemini-3.5-flash-lite",
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
-		await controller.routePrompt("Fix the failing test");
+		await (await controller.routePrompt("Fix the failing test"))?.commit();
 		const transition = await controller.handleLocalFailure("connection reset");
 		expect(transition?.model).toBe(frontier);
 		expect(transition?.reason).toContain("connection reset");
+	});
+
+	it("returns a frontier provider failure to local with an explicit recovery packet", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Recover from a frontier outage"))?.commit();
+		controller.requestFrontierDelegation({ reason: "specialist", summary: "ready", remainingWork: "finish" });
+		const turn = {
+			message: assistantMessage([], local),
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		} as PrepareNextTurnContext;
+		await (await controller.prepareNextTurn(turn))?.commit();
+
+		const transition = await controller.handleFrontierFailure("provider unavailable");
+
+		expect(transition?.model).toBe(local);
+		expect(transition?.handoffPrompt).toContain("provider unavailable");
+		await transition?.commit();
+		expect(controller.routingState.lane).toBe("local");
+		const events = (await readKlermRouteDecisionLog(tempDir))
+			.trim()
+			.split("\n")
+			.map((line) => (JSON.parse(line) as { event: string }).event);
+		expect(events).toContain("RETURN_TO_LOCAL");
+		expect(events).not.toContain("FRONTIER_COMPLETED");
 	});
 
 	it("projects a local delegation for every frontier request without mutating raw history", async () => {
@@ -463,7 +1009,7 @@ describe("Klerm routing runtime", () => {
 		agent.state.messages = rawMessages;
 
 		try {
-			await controller.routePrompt("Refactor this module");
+			await (await controller.routePrompt("Refactor this module"))?.commit();
 			controller.requestFrontierDelegation(delegation);
 			const nextTurn = await agent.prepareNextTurnWithContext?.({
 				message: call,
@@ -561,5 +1107,35 @@ describe("Klerm routing runtime", () => {
 			frontierModel: "google/gemini-3.5-flash-lite",
 		});
 		expect(directProjection).toBe(messages);
+	});
+
+	it("matches foreign tool results by chronology when providers reuse a tool-call id", () => {
+		const localCall = assistantMessage(
+			[{ type: "toolCall", id: "reused-id", name: "read", arguments: { path: "local.txt" } }],
+			local,
+		);
+		const frontierCall = assistantMessage(
+			[{ type: "toolCall", id: "reused-id", name: "read", arguments: { path: "frontier.txt" } }],
+			frontier,
+		);
+		const frontierResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "reused-id",
+			toolName: "read",
+			content: [{ type: "text", text: "frontier result" }],
+			isError: false,
+			timestamp: 2,
+		};
+		const projected = projectKlermHandoffContext([localCall, frontierCall, frontierResult], local, {
+			mode: "local",
+			lane: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+
+		expect(projected[0]).toBe(localCall);
+		expect(projected[1]?.role).toBe("user");
+		expect(projected[2]?.role).toBe("user");
+		expect(JSON.stringify(projected[2])).toContain("frontier result");
 	});
 });
