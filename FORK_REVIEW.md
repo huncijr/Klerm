@@ -12,12 +12,14 @@ Implementation status and strategy:
 
 - Pi has been imported into the Klerm product repo;
 - the harness installs, passes its checks, and the source CLI works;
-- real local/frontier routing and bounded bidirectional handoffs are implemented;
+- real local/frontier routing and bounded owner-preserving handoffs work in both directions;
 - routing decisions are written to `.klerm/router-decisions.jsonl`;
 - automatic routing starts locally and enforces deterministic frontier
   recommendations for complex tasks;
 - local discovery supports Ollama and common OpenAI-compatible runtimes without
   automatic model downloads;
+- persistent active start-lane policy and trusted stdio MCP tools are integrated
+  into the CLI;
 - continue stabilizing and calibrating CLI A2A before building a desktop app;
 - build a Tauri app after the CLI A2A flow is stable;
 - target Linux desktop first, then Windows and macOS.
@@ -156,8 +158,10 @@ steps are documented.
 - [x] Real frontier provider routing through the normal Klerm CLI prompt path.
 - [x] Local model runtime with Ollama discovery, tool use, routing, and a real local edit smoke test.
 - [x] LM Studio, vLLM, standalone llama.cpp, and generic OpenAI-compatible local discovery.
-- [x] Bounded local-to-frontier-to-local handoffs with native tools and privacy-safe transition logs.
+- [x] Bounded local-frontier and frontier-local handoffs with native return tools and privacy-safe transition logs.
 - [x] Local-first deterministic recommendation and ignored-handoff enforcement in auto mode.
 - [x] Interactive startup/working animation and successful-completion indicator.
+- [x] Persistent active start-lane controls and mandatory frontier-local handback.
+- [x] Trusted stdio MCP tool bridge with global/project configuration.
 - [ ] Tauri Linux app.
 - [ ] Windows/macOS packaging.

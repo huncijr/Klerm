@@ -37,9 +37,17 @@
   completed local response. Factors, policy triggers, and decision source are
   visible in the CLI and JSONL decision log.
 - Local-owned tasks support repeated `local -> frontier -> local` transitions
-  through native `delegate_frontier` and `return_to_local` tools. Handback is
-  enabled by default, bounded by a persistent cycle budget, and logged with
-  transition IDs and transcript hashes without storing frontier response text.
+  through native `delegate_frontier` and `return_to_local` tools. Frontier-owned
+  tasks support the reverse `frontier -> local -> frontier` flow through
+  `delegate_local` and `return_to_frontier`. Handback is enabled by default,
+  bounded by a persistent per-task cycle budget, and logged with transition IDs
+  and transcript hashes without storing worker response text.
+- The persistent active-start policy can begin tasks in auto, local, frontier,
+  or frontier-local mode. With handback enabled, normal frontier starts return
+  to the local owner; explicit frontier task overrides remain frontier-owned.
+- Trusted stdio MCP servers can contribute namespaced tools to CLI sessions;
+  server lifecycle, status, and global/project configuration are available
+  through `/mcp` and `/mcpset`.
 
 ## 2. Goal
 
@@ -364,10 +372,12 @@ Status: **not started**.
 - [x] Decision made: Linux desktop first, Windows/macOS later.
 - [x] Pi harness imported, built, and smoke-tested as Klerm.
 - [x] Real local and frontier routing with deterministic JSONL lifecycle logs.
-- [x] Bidirectional local-frontier-local delegation with bounded cycle limits.
+- [x] Owner-preserving local-frontier and frontier-local delegation with bounded cycle limits.
 - [x] Local-first auto routing with deterministic recommendation enforcement.
 - [x] Multi-runtime local model discovery without automatic downloads.
 - [x] Interactive startup, working, and successful-completion status feedback.
+- [x] Persistent active start-lane controls with mandatory frontier-local handback.
+- [x] Trusted stdio MCP tool bridge and interactive server configuration.
 
 ## 7. Open Questions
 

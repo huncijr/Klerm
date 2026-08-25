@@ -39,6 +39,11 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
 | `/model` | Switch models |
+| `/active <auto|local|frontier|frontier-local>` | Set the Klerm initial worker lane (`/activ` is an alias) |
+| `/routing handback on|off` | Return delegated work to the task's completion owner |
+| `/routing cycles <1-20>` | Set the per-task A2A cycle safety limit (default `3`) |
+| `/mcp` | List configured stdio MCP servers and exposed tools |
+| `/mcpset [--project] <name> ...` | Add, remove, enable, or disable a stdio MCP server |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
@@ -58,6 +63,13 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
 | `/quit` | Quit pi |
+
+With handback enabled, `/routing frontier` and `/active frontier` start with the
+frontier model and return to the configured local completion owner. An explicit
+`/frontier task <prompt>` is frontier-owned: it can call `delegate_local`, and
+the local worker returns with `return_to_frontier`. Local-owned delegation uses
+`delegate_frontier` and `return_to_local`. One cycle is one delegation away from
+the owner plus its return; the return itself does not consume a second cycle.
 
 ## Message Queue
 
@@ -301,6 +313,6 @@ pi --exclude-tools ask_question
 
 Pi keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
 
-It intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. You can build or install those workflows as extensions or packages, or use external tools such as containers and tmux.
+Upstream Pi intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. Klerm adds a built-in stdio MCP tool bridge for its CLI; the other workflows remain available through extensions or packages, or external tools such as containers and tmux.
 
 For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/).

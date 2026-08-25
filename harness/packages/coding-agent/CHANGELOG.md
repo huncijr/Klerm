@@ -5,8 +5,10 @@
 ### Added
 
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
-- Added bounded bidirectional Klerm routing with native frontier returns, local verification, deterministic transition logs, and interactive handback controls.
+- Added bounded bidirectional Klerm routing with native local/frontier delegation and returns, owner verification, deterministic transition logs, and interactive handback controls.
 - Added automatic local model discovery for LM Studio, vLLM, standalone llama.cpp servers, and configurable OpenAI-compatible endpoints.
+- Added configurable initial Klerm worker lanes with persistent `/active` and `/activ` controls, including mandatory frontier-to-local completion.
+- Added trusted global/project stdio MCP server configuration, `/mcp` and `/mcpset` controls, and namespaced MCP tools.
 
 ### Changed
 

@@ -2,9 +2,11 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export type KlermRoutingMode = "off" | "local" | "frontier" | "auto";
+export type KlermActiveStartLane = "auto" | "local" | "frontier" | "frontier-local";
 
 export interface KlermConfig {
 	routing: KlermRoutingMode;
+	activeStartLane: KlermActiveStartLane;
 	localModel?: string;
 	frontierModel?: string;
 	allowFrontierFallback: boolean;
@@ -16,6 +18,7 @@ export interface KlermConfig {
 
 export const DEFAULT_KLERM_CONFIG: KlermConfig = {
 	routing: "off",
+	activeStartLane: "auto",
 	allowFrontierFallback: false,
 	handbackEnabled: true,
 	maxDelegationCycles: 3,
@@ -29,6 +32,10 @@ export function getKlermConfigPath(agentDir: string): string {
 
 function isRoutingMode(value: unknown): value is KlermRoutingMode {
 	return value === "off" || value === "local" || value === "frontier" || value === "auto";
+}
+
+function isActiveStartLane(value: unknown): value is KlermActiveStartLane {
+	return value === "auto" || value === "local" || value === "frontier" || value === "frontier-local";
 }
 
 function positiveInteger(value: unknown, fallback: number, maximum = Number.POSITIVE_INFINITY): number {
@@ -54,6 +61,9 @@ export class KlermConfigStore {
 		}
 		const config: KlermConfig = {
 			routing: isRoutingMode(overrides.routing ?? stored.routing) ? (overrides.routing ?? stored.routing)! : "off",
+			activeStartLane: isActiveStartLane(overrides.activeStartLane ?? stored.activeStartLane)
+				? (overrides.activeStartLane ?? stored.activeStartLane)!
+				: DEFAULT_KLERM_CONFIG.activeStartLane,
 			localModel: overrides.localModel ?? stored.localModel,
 			frontierModel: overrides.frontierModel ?? stored.frontierModel,
 			allowFrontierFallback:

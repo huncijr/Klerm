@@ -48,11 +48,12 @@ import {
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
 import {
+	type KlermEnforcedDelegation,
 	type KlermModelTransition,
 	type KlermRoutingController,
 	projectKlermHandoffContext,
 } from "../klerm/router/runtime.ts";
-import type { KlermPromptRoutingOverride, KlermRoutingState } from "../klerm/router/types.ts";
+import type { KlermPromptRoutingOverride, KlermRoutingState, KlermWorkerLane } from "../klerm/router/types.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -377,7 +378,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private readonly _klermRoutingController?: KlermRoutingController;
-	private _klermLocalThinkingLevel?: ThinkingLevel;
+	private readonly _klermThinkingLevels: Partial<Record<KlermWorkerLane, ThinkingLevel>> = {};
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -506,7 +507,13 @@ export class AgentSession {
 			const toolCalls = assistantMessage.content.filter((part) => part.type === "toolCall");
 			const hasRoutingTool =
 				this._klermRoutingController !== undefined &&
-				toolCalls.some((call) => call.name === "delegate_frontier" || call.name === "return_to_local");
+				toolCalls.some(
+					(call) =>
+						call.name === "delegate_frontier" ||
+						call.name === "delegate_local" ||
+						call.name === "return_to_local" ||
+						call.name === "return_to_frontier",
+				);
 			if (hasRoutingTool && toolCalls.length !== 1) {
 				return {
 					block: true,
@@ -607,24 +614,19 @@ export class AgentSession {
 	private async _applyKlermTransition(transition: KlermModelTransition, throwOnFailure = false): Promise<boolean> {
 		const previousModel = this.model;
 		const previousThinkingLevel = this.agent.state.thinkingLevel;
-		if (
-			transition.state.fromLane === "local" ||
-			(transition.state.kind === "initial" &&
-				transition.state.toLane === "frontier" &&
-				this._klermRoutingController?.routingState.completionOwner === "local")
+		if (transition.state.fromLane === "local" || transition.state.fromLane === "frontier") {
+			this._klermThinkingLevels[transition.state.fromLane] = previousThinkingLevel;
+		} else if (
+			transition.state.kind === "initial" &&
+			transition.state.toLane === "frontier" &&
+			this._klermRoutingController?.routingState.completionOwner === "local"
 		) {
-			this._klermLocalThinkingLevel = previousThinkingLevel;
+			this._klermThinkingLevels.local = previousThinkingLevel;
 		}
 		try {
-			await this._applyRoutedModel(
-				transition.model,
-				false,
-				transition.state.toLane === "local" ? this._klermLocalThinkingLevel : undefined,
-			);
+			await this._applyRoutedModel(transition.model, false, this._klermThinkingLevels[transition.state.toLane]);
 			await transition.commit();
-			if (transition.state.toLane === "local") {
-				this._klermLocalThinkingLevel = this.agent.state.thinkingLevel;
-			}
+			this._klermThinkingLevels[transition.state.toLane] = this.agent.state.thinkingLevel;
 			this.agent.state.systemPrompt = this._withKlermSystemPrompt(
 				this._systemPromptOverride ?? this._baseSystemPrompt,
 			);
@@ -1247,10 +1249,13 @@ export class AgentSession {
 					.map((part) => part.text)
 					.join("\n")
 					.trim();
-				const enforcedDelegation =
-					this._klermRoutingController?.routingState.lane === "frontier"
-						? await this._klermRoutingController.enforceRequiredLocalReturn(response)
-						: await this._klermRoutingController?.enforceRequiredFrontierDelegation(response);
+				let enforcedDelegation: KlermEnforcedDelegation | undefined;
+				if (this._klermRoutingController?.routingState.lane === "frontier") {
+					enforcedDelegation = await this._klermRoutingController.enforceRequiredLocalReturn(response);
+				} else if (this._klermRoutingController?.routingState.lane === "local") {
+					enforcedDelegation = await this._klermRoutingController.enforceRequiredFrontierReturn(response);
+					enforcedDelegation ??= await this._klermRoutingController.enforceRequiredFrontierDelegation(response);
+				}
 				if (!enforcedDelegation) {
 					succeeded = true;
 					break;

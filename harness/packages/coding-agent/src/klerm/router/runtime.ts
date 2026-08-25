@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
-import type { KlermConfig, KlermConfigStore, KlermRoutingMode } from "../config.ts";
+import type { KlermActiveStartLane, KlermConfig, KlermConfigStore, KlermRoutingMode } from "../config.ts";
 import { isLocalProviderId } from "../local-providers.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
@@ -24,10 +24,30 @@ const delegateSchema = Type.Object({
 	remainingWork: Type.String({ maxLength: 12000, description: "What the frontier worker should do next" }),
 });
 
+const delegateLocalSchema = Type.Object({
+	reason: Type.String({ maxLength: 2000, description: "Why the frontier worker needs the local worker" }),
+	summary: Type.String({ maxLength: 12000, description: "Frontier work already completed and relevant findings" }),
+	remainingWork: Type.String({ maxLength: 12000, description: "The focused work the local worker should do next" }),
+});
+
 const returnToLocalSchema = Type.Object({
 	reason: Type.String({ maxLength: 2000, description: "Why the frontier assignment is ready for local review" }),
 	frontierSummary: Type.String({ maxLength: 12000, description: "Work completed and important findings" }),
 	frontierAnswer: Type.String({ maxLength: 16000, description: "Draft answer or result for the local orchestrator" }),
+	changedFiles: Type.Array(Type.String({ maxLength: 2000 }), { maxItems: 200 }),
+	verification: Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 100 }),
+	openIssues: Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 100 }),
+	recommendedNextAction: Type.Union([
+		Type.Literal("finalize"),
+		Type.Literal("verify"),
+		Type.Literal("delegate-again"),
+	]),
+});
+
+const returnToFrontierSchema = Type.Object({
+	reason: Type.String({ maxLength: 2000, description: "Why the local assignment is ready for frontier review" }),
+	localSummary: Type.String({ maxLength: 12000, description: "Local work completed and important findings" }),
+	localAnswer: Type.String({ maxLength: 16000, description: "Draft result for the frontier orchestrator" }),
 	changedFiles: Type.Array(Type.String({ maxLength: 2000 }), { maxItems: 200 }),
 	verification: Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 100 }),
 	openIssues: Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 100 }),
@@ -45,10 +65,23 @@ interface PendingDelegation {
 	trigger: KlermHandoffTrigger;
 }
 
+type PendingLocalDelegation = PendingDelegation;
+
 interface PendingReturnToLocal {
 	reason: string;
 	frontierSummary: string;
 	frontierAnswer: string;
+	changedFiles: string[];
+	verification: string[];
+	openIssues: string[];
+	recommendedNextAction: "finalize" | "verify" | "delegate-again";
+	trigger: KlermHandoffTrigger;
+}
+
+interface PendingReturnToFrontier {
+	reason: string;
+	localSummary: string;
+	localAnswer: string;
 	changedFiles: string[];
 	verification: string[];
 	openIssues: string[];
@@ -96,7 +129,7 @@ function stableJson(value: unknown): string {
 
 function formatForeignToolCall(name: string, args: Record<string, unknown>): string {
 	const field = (key: string): string => (typeof args[key] === "string" ? args[key] : "(not provided)");
-	if (name === "delegate_frontier") {
+	if (name === "delegate_frontier" || name === "delegate_local") {
 		return [
 			"[Cross-model handoff]",
 			`Reason: ${field("reason")}`,
@@ -104,14 +137,15 @@ function formatForeignToolCall(name: string, args: Record<string, unknown>): str
 			`Remaining work: ${field("remainingWork")}`,
 		].join("\n");
 	}
-	if (name === "return_to_local") {
+	if (name === "return_to_local" || name === "return_to_frontier") {
 		const list = (key: string): string =>
 			Array.isArray(args[key]) ? (args[key] as unknown[]).filter((item) => typeof item === "string").join(", ") : "";
+		const returningToLocal = name === "return_to_local";
 		return [
-			"[Frontier return]",
+			returningToLocal ? "[Frontier return]" : "[Local return]",
 			`Reason: ${field("reason")}`,
-			`Summary: ${field("frontierSummary")}`,
-			`Draft answer: ${field("frontierAnswer")}`,
+			`Summary: ${field(returningToLocal ? "frontierSummary" : "localSummary")}`,
+			`Draft answer: ${field(returningToLocal ? "frontierAnswer" : "localAnswer")}`,
 			`Changed files: ${list("changedFiles") || "none reported"}`,
 			`Verification: ${list("verification") || "none reported"}`,
 			`Open issues: ${list("openIssues") || "none reported"}`,
@@ -187,7 +221,7 @@ export function projectKlermHandoffContext(
 					{
 						type: "text",
 						text:
-							toolName === "delegate_frontier"
+							toolName === "delegate_frontier" || toolName === "delegate_local"
 								? "[Cross-model handoff result]"
 								: `[Cross-model tool result]\nTool: ${toolName}`,
 					},
@@ -291,7 +325,9 @@ export class KlermRoutingController {
 	private readonly configStore: KlermConfigStore;
 	private state: KlermRoutingState;
 	private pendingDelegation?: PendingDelegation;
+	private pendingLocalDelegation?: PendingLocalDelegation;
 	private pendingReturnToLocal?: PendingReturnToLocal;
+	private pendingReturnToFrontier?: PendingReturnToFrontier;
 	private preparedTransitionId?: string;
 	private localTurns = 0;
 	private localToolErrors = 0;
@@ -307,6 +343,7 @@ export class KlermRoutingController {
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
+			activeStartLane: config.activeStartLane,
 			lane: "direct",
 			localModel: config.localModel,
 			frontierModel: config.frontierModel,
@@ -327,13 +364,17 @@ export class KlermRoutingController {
 		return this.state;
 	}
 
-	private handbackRequired(): boolean {
+	private handbackRequired(toLane: KlermWorkerLane): boolean {
 		return (
-			this.state.lane === "frontier" &&
-			this.state.completionOwner === "local" &&
-			this.config.handbackEnabled &&
-			this.config.localModel !== undefined
+			this.state.lane !== toLane &&
+			this.state.completionOwner === toLane &&
+			this.handbackEnabledForCurrentTask() &&
+			(toLane === "local" ? this.config.localModel !== undefined : this.config.frontierModel !== undefined)
 		);
+	}
+
+	private handbackEnabledForCurrentTask(): boolean {
+		return this.state.handbackEnabled ?? this.config.handbackEnabled;
 	}
 
 	private hasAvailableFrontierModel(): boolean {
@@ -347,6 +388,7 @@ export class KlermRoutingController {
 		const localModel = this.config.localModel ?? "not configured";
 		const frontierModel = this.config.frontierModel ?? "not configured";
 		if (this.state.lane === "local") {
+			const mustReturn = this.handbackRequired("frontier");
 			const returnedFromFrontier = this.state.lastTransition?.kind === "return";
 			const recommendedDelegation =
 				this.state.mode === "auto" &&
@@ -356,13 +398,15 @@ export class KlermRoutingController {
 				this.hasAvailableFrontierModel();
 			return [
 				"<klerm_a2a>",
-				returnedFromFrontier
-					? "You are the Klerm local orchestrator resumed after frontier work. Verify the returned result, complete focused local work, and answer the user when the task is ready."
-					: "You are the Klerm local worker and may hand work to the configured frontier worker.",
+				mustReturn
+					? "You are the Klerm local worker handling a focused assignment from the frontier orchestrator."
+					: returnedFromFrontier
+						? "You are the Klerm local orchestrator resumed after frontier work. Verify the returned result, complete focused local work, and answer the user when the task is ready."
+						: "You are the Klerm local worker and may hand work to the configured frontier worker.",
 				`Current local model: ${localModel}`,
 				`Configured frontier model: ${frontierModel}`,
 				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles}`,
-				...(this.state.mode === "auto" && !returnedFromFrontier
+				...(this.state.mode === "auto" && !returnedFromFrontier && !mustReturn
 					? [
 							"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
 							"Complete focused, low-risk work locally. For broad, risky, specialist, architecture, or multi-file work beyond your capability, inspect only enough context to create a precise handoff, then call delegate_frontier.",
@@ -378,21 +422,38 @@ export class KlermRoutingController {
 				...(returnedFromFrontier && this.state.lastTransition?.transcriptHash
 					? [`Frontier transcript hash: ${this.state.lastTransition.transcriptHash}`]
 					: []),
-				"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to the frontier model, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
-				"Also call delegate_frontier when the task exceeds your capability, is unusually risky, or repeated tool attempts fail.",
-				'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}.',
-				"Never print delegate_frontier as TypeScript, JSON, XML, Markdown, or a code block. Text that resembles a tool call does not execute the tool.",
-				"Before delegating, complete any specifically requested local-only observation. Put completed work and findings in summary, and give the frontier worker a precise remainingWork instruction. Call delegate_frontier alone, without other tool calls in the same turn.",
-				"After a frontier return, finalize locally when possible. Delegate again only for a concrete unresolved issue that still exceeds local capability.",
-				"Do not merely say that delegation is unnecessary or describe how to delegate. Invoke delegate_frontier and let Klerm perform the handoff.",
-				"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested frontier handoff.",
-				"Do not claim that the frontier worker answered unless the handoff occurred and the frontier worker actually responded.",
+				...(mustReturn
+					? [
+							"Treat [Cross-model handoff] sections as instructions and context supplied by the frontier worker.",
+							"This task is owned by the frontier orchestrator. Complete only the focused assignment, then call return_to_frontier alone with a structured summary, draft result, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer.",
+						]
+					: [
+							"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to the frontier model, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
+							"Also call delegate_frontier when the task exceeds your capability, is unusually risky, or repeated tool attempts fail.",
+						]),
+				...(mustReturn
+					? [
+							"Never print return_to_frontier as JSON, XML, Markdown, or a code block. Invoke it through the native tool interface.",
+						]
+					: [
+							'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}.',
+							"Never print delegate_frontier as TypeScript, JSON, XML, Markdown, or a code block. Text that resembles a tool call does not execute the tool.",
+							"Before delegating, complete any specifically requested local-only observation. Put completed work and findings in summary, and give the frontier worker a precise remainingWork instruction. Call delegate_frontier alone, without other tool calls in the same turn.",
+							"After a frontier return, finalize locally when possible. Delegate again only for a concrete unresolved issue that still exceeds local capability.",
+							"Do not merely say that delegation is unnecessary or describe how to delegate. Invoke delegate_frontier and let Klerm perform the handoff.",
+							"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested frontier handoff.",
+							"Do not claim that the frontier worker answered unless the handoff occurred and the frontier worker actually responded.",
+						]),
 				"</klerm_a2a>",
 			].join("\n");
 		}
 
 		if (this.state.lane === "frontier") {
-			const mustReturn = this.handbackRequired();
+			const mustReturn = this.handbackRequired("local");
+			const canDelegateLocal =
+				this.state.completionOwner === "frontier" &&
+				this.handbackEnabledForCurrentTask() &&
+				this.config.localModel !== undefined;
 			return [
 				"<klerm_a2a>",
 				"You are the Klerm frontier worker. Continue the current task using the existing session and provider-neutral handoff context.",
@@ -400,11 +461,15 @@ export class KlermRoutingController {
 				`Current frontier model: ${frontierModel}`,
 				"Treat [Cross-model handoff] sections as instructions and context supplied by the local worker.",
 				`When the user asks which model you are, identify the current frontier model exactly as ${frontierModel}.`,
-				"Do not call delegate_frontier because you are already the frontier worker.",
+				canDelegateLocal
+					? "You own the final answer. Call delegate_local alone when a focused task is better suited to the configured local worker, then review its return and finish the task."
+					: "Do not call delegate_frontier because you are already the frontier worker.",
 				"Do not restart completed local work unless verification is required; continue from the stated summary and remaining work.",
 				mustReturn
 					? "This task is owned by the local orchestrator. When your assignment is complete, call return_to_local alone with a structured summary, draft answer, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer."
-					: "This is a direct frontier task. Answer the user directly and do not call return_to_local.",
+					: canDelegateLocal
+						? "Answer the user directly unless you delegate focused work to local. A delegated local worker must return to you before completion."
+						: "This is a direct frontier task. Answer the user directly and do not call return_to_local.",
 				"</klerm_a2a>",
 			].join("\n");
 		}
@@ -441,13 +506,19 @@ export class KlermRoutingController {
 		};
 	}
 
+	async setActiveStartLane(activeStartLane: KlermActiveStartLane): Promise<void> {
+		await this.configStore.update({ activeStartLane });
+		if (!this.state.taskId) this.state = { ...this.state, activeStartLane };
+	}
+
 	async setAllowFrontierFallback(enabled: boolean): Promise<void> {
 		await this.configStore.update({ allowFrontierFallback: enabled });
 	}
 
 	async setHandbackEnabled(enabled: boolean): Promise<void> {
 		await this.configStore.update({ handbackEnabled: enabled });
-		this.state = { ...this.state, handbackEnabled: enabled };
+		const forced = this.state.activeStartLane === "frontier-local" && this.state.completionOwner === "local";
+		this.state = { ...this.state, handbackEnabled: forced || enabled };
 	}
 
 	async setMaxDelegationCycles(maxDelegationCycles: number): Promise<void> {
@@ -537,6 +608,7 @@ export class KlermRoutingController {
 			JSON.stringify({
 				localModel: this.config.localModel,
 				frontierModel: this.config.frontierModel,
+				activeStartLane: this.config.activeStartLane,
 				localMaxTurns: this.config.localMaxTurns,
 				localMaxToolErrors: this.config.localMaxToolErrors,
 				handbackEnabled: this.config.handbackEnabled,
@@ -556,9 +628,16 @@ export class KlermRoutingController {
 		reason: string,
 		transition?: KlermTransitionState,
 		counts?: { changedFileCount?: number; verificationCount?: number; openIssueCount?: number },
+		completionOwner?: KlermCompletionOwner,
 	): Promise<void> {
 		const timestamp = new Date().toISOString();
 		const taskId = this.state.taskId ?? `task-${hash(`${timestamp}\n${this.task}`).slice(0, 16)}`;
+		const effectiveCompletionOwner =
+			completionOwner ??
+			(transition?.toLane === "frontier" &&
+			(!this.handbackEnabledForCurrentTask() || transition.trigger === "provider-failure")
+				? "frontier"
+				: this.state.completionOwner);
 		await this.log({
 			timestamp,
 			taskId,
@@ -577,12 +656,8 @@ export class KlermRoutingController {
 			decisionSource: this.state.decisionSource,
 			delegationRecommended: this.state.delegationRecommended,
 			fallbackReason: this.state.fallbackReason,
-			completionOwner:
-				transition?.toLane === "frontier" &&
-				(!this.config.handbackEnabled || transition.trigger === "provider-failure")
-					? "frontier"
-					: this.state.completionOwner,
-			handbackEnabled: this.config.handbackEnabled,
+			completionOwner: effectiveCompletionOwner,
+			handbackEnabled: this.handbackEnabledForCurrentTask(),
 			transitionId: transition?.id,
 			transitionSequence: transition?.sequence,
 			transitionKind: transition?.kind,
@@ -598,6 +673,7 @@ export class KlermRoutingController {
 			openIssueCount: counts?.openIssueCount,
 			registryProfileHash: this.profileHash(),
 			mode: this.config.routing,
+			activeStartLane: this.state.activeStartLane,
 			cwd: this.cwd,
 		});
 	}
@@ -634,9 +710,17 @@ export class KlermRoutingController {
 		this.preparedTransitionId = transition.id;
 
 		if (options.kind === "delegate") {
-			await this.logLifecycle("DELEGATE_FRONTIER", "FRONTIER", toTarget, options.reason, transition);
+			await this.logLifecycle(
+				options.toLane === "frontier" ? "DELEGATE_FRONTIER" : "DELEGATE_LOCAL",
+				options.toLane === "frontier" ? "FRONTIER" : "LOCAL",
+				toTarget,
+				options.reason,
+				transition,
+				undefined,
+				options.completionOwner,
+			);
 		} else if (options.kind === "return") {
-			if (options.trigger !== "provider-failure") {
+			if (options.trigger !== "provider-failure" && transition.fromLane === "frontier") {
 				await this.logLifecycle(
 					"FRONTIER_COMPLETED",
 					"FRONTIER",
@@ -644,15 +728,17 @@ export class KlermRoutingController {
 					options.reason,
 					transition,
 					options.returnCounts,
+					options.completionOwner,
 				);
 			}
 			await this.logLifecycle(
-				"RETURN_TO_LOCAL",
-				"LOCAL",
+				options.toLane === "local" ? "RETURN_TO_LOCAL" : "RETURN_TO_FRONTIER",
+				options.toLane === "local" ? "LOCAL" : "FRONTIER",
 				toTarget,
 				options.reason,
 				transition,
 				options.returnCounts,
+				options.completionOwner,
 			);
 		}
 
@@ -665,7 +751,9 @@ export class KlermRoutingController {
 				if (this.preparedTransitionId !== transition.id) return;
 				await this.logLifecycle(
 					options.kind === "return"
-						? "LOCAL_RESUMED"
+						? options.toLane === "local"
+							? "LOCAL_RESUMED"
+							: "FRONTIER_RESUMED"
 						: options.toLane === "local"
 							? "LOCAL_STARTED"
 							: "FRONTIER_STARTED",
@@ -674,6 +762,7 @@ export class KlermRoutingController {
 					options.reason,
 					transition,
 					options.returnCounts,
+					options.completionOwner,
 				);
 				this.state = {
 					...this.state,
@@ -700,19 +789,23 @@ export class KlermRoutingController {
 					this.repeatedToolCalls = 0;
 				}
 				this.pendingDelegation = undefined;
+				this.pendingLocalDelegation = undefined;
 				this.pendingReturnToLocal = undefined;
+				this.pendingReturnToFrontier = undefined;
 				this.preparedTransitionId = undefined;
 			},
 			reject: async (error) => {
 				if (this.preparedTransitionId !== transition.id) return;
 				this.preparedTransitionId = undefined;
 				this.pendingDelegation = undefined;
+				this.pendingLocalDelegation = undefined;
 				this.pendingReturnToLocal = undefined;
+				this.pendingReturnToFrontier = undefined;
 				const message = error instanceof Error ? error.message : String(error);
 				this.state = {
 					...this.state,
 					reason: `handoff failed: ${message}`,
-					completionOwner: this.state.lane === "frontier" ? "frontier" : this.state.completionOwner,
+					completionOwner: this.state.completionOwner,
 				};
 				await this.logLifecycle(
 					"HANDOFF_FAILED",
@@ -731,7 +824,9 @@ export class KlermRoutingController {
 	): Promise<KlermModelTransition | undefined> {
 		this.task = task;
 		this.pendingDelegation = undefined;
+		this.pendingLocalDelegation = undefined;
 		this.pendingReturnToLocal = undefined;
+		this.pendingReturnToFrontier = undefined;
 		this.preparedTransitionId = undefined;
 		this.localTurns = 0;
 		this.localToolErrors = 0;
@@ -739,11 +834,12 @@ export class KlermRoutingController {
 		this.repeatedToolCalls = 0;
 		this.explicitFrontierRequest = explicitlyRequestsFrontier(task);
 		const config = this.config;
-		if (config.routing === "off" && !routingOverride) {
+		if (config.routing === "off" && config.activeStartLane === "auto" && !routingOverride) {
 			this.state = {
 				...this.state,
 				task,
 				mode: "off",
+				activeStartLane: config.activeStartLane,
 				lane: "direct",
 				selectedTarget: undefined,
 				otherModelCalled: undefined,
@@ -785,14 +881,36 @@ export class KlermRoutingController {
 			route = "FRONTIER";
 			reason = "interactive task forced frontier";
 			completionOwner = "frontier";
+		} else if (config.activeStartLane === "local") {
+			route = "LOCAL";
+			reason = "active start lane forced local";
+			completionOwner = "local";
+		} else if (config.activeStartLane === "frontier") {
+			route = "FRONTIER";
+			completionOwner = config.handbackEnabled && config.localModel ? "local" : "frontier";
+			if (completionOwner === "local") this.resolveModel(config.localModel!, "local");
+			reason =
+				completionOwner === "local"
+					? "active start lane begins with frontier and handback requires local completion"
+					: "active start lane forced frontier";
+		} else if (config.activeStartLane === "frontier-local") {
+			if (!config.localModel) throw new Error("Frontier-local start requires a configured local model.");
+			this.resolveModel(config.localModel, "local");
+			route = "FRONTIER";
+			reason = "active start lane begins with frontier and requires local completion";
+			completionOwner = "local";
 		} else if (config.routing === "local") {
 			route = "LOCAL";
 			reason = "routing mode forced local";
 			completionOwner = "local";
 		} else if (config.routing === "frontier") {
 			route = "FRONTIER";
-			reason = "routing mode forced frontier";
-			completionOwner = "frontier";
+			completionOwner = config.handbackEnabled && config.localModel ? "local" : "frontier";
+			if (completionOwner === "local") this.resolveModel(config.localModel!, "local");
+			reason =
+				completionOwner === "local"
+					? "routing mode starts frontier and handback requires local completion"
+					: "routing mode forced frontier";
 		} else {
 			if (!config.localModel) {
 				if (config.allowFrontierFallback && config.frontierModel) {
@@ -818,10 +936,12 @@ export class KlermRoutingController {
 		const model = this.resolveModel(reference, route === "LOCAL" ? "local" : "frontier");
 		const selectedTarget = modelReference(model);
 		const initialCycle = 0;
+		const initialHandbackEnabled = config.handbackEnabled || (route === "FRONTIER" && completionOwner === "local");
 		this.state = {
 			taskId,
 			task,
 			mode: config.routing,
+			activeStartLane: config.activeStartLane,
 			lane: "direct",
 			localModel: config.localModel,
 			frontierModel: config.frontierModel,
@@ -838,7 +958,7 @@ export class KlermRoutingController {
 			delegationRecommended: delegationAssessment?.delegationRecommended,
 			fallbackReason: undefined,
 			completionOwner,
-			handbackEnabled: config.handbackEnabled,
+			handbackEnabled: initialHandbackEnabled,
 			delegationCycle: initialCycle,
 			maxDelegationCycles: config.maxDelegationCycles,
 			transitionSequence: 0,
@@ -861,11 +981,12 @@ export class KlermRoutingController {
 			decisionSource: delegationAssessment ? "deterministic-policy" : undefined,
 			delegationRecommended: delegationAssessment?.delegationRecommended,
 			completionOwner,
-			handbackEnabled: config.handbackEnabled,
+			handbackEnabled: initialHandbackEnabled,
 			delegationCycle: initialCycle,
 			maxDelegationCycles: config.maxDelegationCycles,
 			registryProfileHash: this.profileHash(),
 			mode: config.routing,
+			activeStartLane: config.activeStartLane,
 			cwd: this.cwd,
 		});
 		return this.prepareTransition({
@@ -886,11 +1007,25 @@ export class KlermRoutingController {
 		this.pendingDelegation = { ...delegation, trigger };
 	}
 
+	requestLocalDelegation(
+		delegation: Omit<PendingLocalDelegation, "trigger">,
+		trigger: KlermHandoffTrigger = "native-tool",
+	): void {
+		this.pendingLocalDelegation = { ...delegation, trigger };
+	}
+
 	requestReturnToLocal(
 		result: Omit<PendingReturnToLocal, "trigger">,
 		trigger: KlermHandoffTrigger = "native-tool",
 	): void {
 		this.pendingReturnToLocal = { ...result, trigger };
+	}
+
+	requestReturnToFrontier(
+		result: Omit<PendingReturnToFrontier, "trigger">,
+		trigger: KlermHandoffTrigger = "native-tool",
+	): void {
+		this.pendingReturnToFrontier = { ...result, trigger };
 	}
 
 	createDelegationTool(): ToolDefinition {
@@ -910,10 +1045,18 @@ export class KlermRoutingController {
 			parameters: delegateSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
-				if (this.state.lane !== "local") {
-					throw new Error("delegate_frontier is only available while the local worker is active.");
+				if (this.state.lane !== "local" || this.state.completionOwner !== "local") {
+					throw new Error(
+						"delegate_frontier is only available while the local worker is active and owns the task.",
+					);
 				}
-				if (this.pendingDelegation || this.pendingReturnToLocal || this.preparedTransitionId) {
+				if (
+					this.pendingDelegation ||
+					this.pendingLocalDelegation ||
+					this.pendingReturnToLocal ||
+					this.pendingReturnToFrontier ||
+					this.preparedTransitionId
+				) {
 					throw new Error("A Klerm handoff is already pending for this turn.");
 				}
 				if ((this.state.delegationCycle ?? 0) >= this.config.maxDelegationCycles) {
@@ -941,6 +1084,61 @@ export class KlermRoutingController {
 		});
 	}
 
+	createLocalDelegationTool(): ToolDefinition {
+		return defineTool({
+			name: "delegate_local",
+			label: "Delegate to local",
+			description:
+				"Hand focused work to the configured local model while the frontier worker retains ownership of the final answer.",
+			promptSnippet:
+				"Hand a focused task to the local worker with completed work and precise remaining instructions.",
+			promptGuidelines: [
+				"Use delegate_local only as the frontier owner when focused work is better suited to the configured local worker.",
+				"Call delegate_local alone with reason, summary, and remainingWork string arguments.",
+			],
+			parameters: delegateLocalSchema,
+			executionMode: "sequential",
+			execute: async (_toolCallId, params) => {
+				if (this.state.lane !== "frontier" || this.state.completionOwner !== "frontier") {
+					throw new Error("delegate_local is only available while the frontier owner is active.");
+				}
+				if (!this.handbackEnabledForCurrentTask()) {
+					throw new Error("Enable Klerm handback before delegating local work that must return to frontier.");
+				}
+				if (
+					this.pendingDelegation ||
+					this.pendingLocalDelegation ||
+					this.pendingReturnToLocal ||
+					this.pendingReturnToFrontier ||
+					this.preparedTransitionId
+				) {
+					throw new Error("A Klerm handoff is already pending for this turn.");
+				}
+				if ((this.state.delegationCycle ?? 0) >= this.config.maxDelegationCycles) {
+					await this.logLifecycle(
+						"HANDOFF_REJECTED",
+						"FRONTIER",
+						this.state.selectedTarget ?? this.config.frontierModel ?? "frontier",
+						`local delegation cycle limit ${this.config.maxDelegationCycles} reached`,
+					);
+					throw new Error(
+						`Local delegation cycle limit ${this.config.maxDelegationCycles} reached. Finish with the available results.`,
+					);
+				}
+				this.requestLocalDelegation(params);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Local delegation recorded. Klerm will attempt to start the local worker.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
+						},
+					],
+					details: params,
+				};
+			},
+		});
+	}
+
 	createReturnToLocalTool(): ToolDefinition {
 		return defineTool({
 			name: "return_to_local",
@@ -959,12 +1157,18 @@ export class KlermRoutingController {
 				if (this.state.lane !== "frontier") {
 					throw new Error("return_to_local is only available while the frontier worker is active.");
 				}
-				if (!this.handbackRequired()) {
+				if (!this.handbackRequired("local")) {
 					throw new Error(
 						"This is a direct frontier task. Answer the user directly instead of returning to local.",
 					);
 				}
-				if (this.pendingDelegation || this.pendingReturnToLocal || this.preparedTransitionId) {
+				if (
+					this.pendingDelegation ||
+					this.pendingLocalDelegation ||
+					this.pendingReturnToLocal ||
+					this.pendingReturnToFrontier ||
+					this.preparedTransitionId
+				) {
 					throw new Error("A Klerm handoff is already pending for this turn.");
 				}
 				this.requestReturnToLocal(params);
@@ -981,8 +1185,57 @@ export class KlermRoutingController {
 		});
 	}
 
+	createReturnToFrontierTool(): ToolDefinition {
+		return defineTool({
+			name: "return_to_frontier",
+			label: "Return to frontier",
+			description: "Return completed local work to the frontier orchestrator for review and final completion.",
+			promptSnippet: "Return local results to the frontier orchestrator as a structured handback packet.",
+			promptGuidelines: [
+				"Use return_to_frontier only when acting as the local worker on a task owned by the frontier orchestrator.",
+				"Call return_to_frontier alone after completing the focused local assignment.",
+			],
+			parameters: returnToFrontierSchema,
+			executionMode: "sequential",
+			execute: async (_toolCallId, params) => {
+				if (this.state.lane !== "local") {
+					throw new Error("return_to_frontier is only available while the local worker is active.");
+				}
+				if (!this.handbackRequired("frontier")) {
+					throw new Error(
+						"This task is owned by the local worker. Answer the user directly instead of returning.",
+					);
+				}
+				if (
+					this.pendingDelegation ||
+					this.pendingLocalDelegation ||
+					this.pendingReturnToLocal ||
+					this.pendingReturnToFrontier ||
+					this.preparedTransitionId
+				) {
+					throw new Error("A Klerm handoff is already pending for this turn.");
+				}
+				this.requestReturnToFrontier(params);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Local return recorded. Klerm will attempt to resume the frontier orchestrator.\nSummary: ${params.localSummary}\nRecommended next action: ${params.recommendedNextAction}`,
+						},
+					],
+					details: params,
+				};
+			},
+		});
+	}
+
 	createRoutingTools(): ToolDefinition[] {
-		return [this.createDelegationTool(), this.createReturnToLocalTool()];
+		return [
+			this.createDelegationTool(),
+			this.createReturnToLocalTool(),
+			this.createLocalDelegationTool(),
+			this.createReturnToFrontierTool(),
+		];
 	}
 
 	async enforceRequiredFrontierDelegation(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
@@ -992,6 +1245,7 @@ export class KlermRoutingController {
 			(this.state.delegationCycle ?? 0) === 0;
 		if (
 			this.state.lane !== "local" ||
+			this.state.completionOwner !== "local" ||
 			(!this.explicitFrontierRequest && !recommendedEnforcement) ||
 			this.state.explicitFrontierRequestSatisfied ||
 			this.pendingDelegation
@@ -1061,7 +1315,8 @@ export class KlermRoutingController {
 	}
 
 	async enforceRequiredLocalReturn(frontierResponse: string): Promise<KlermEnforcedDelegation | undefined> {
-		if (this.state.lane !== "frontier" || !this.handbackRequired() || this.pendingReturnToLocal) return undefined;
+		if (this.state.lane !== "frontier" || !this.handbackRequired("local") || this.pendingReturnToLocal)
+			return undefined;
 		const reason = "frontier completed without a native return_to_local call; Klerm enforced the handback";
 		const summary = frontierResponse.trim() || "The frontier worker completed without a textual response.";
 		this.requestReturnToLocal(
@@ -1114,6 +1369,61 @@ export class KlermRoutingController {
 		};
 	}
 
+	async enforceRequiredFrontierReturn(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
+		if (this.state.lane !== "local" || !this.handbackRequired("frontier") || this.pendingReturnToFrontier)
+			return undefined;
+		const reason = "local completed without a native return_to_frontier call; Klerm enforced the handback";
+		const summary = localResponse.trim() || "The local worker completed without a textual response.";
+		this.requestReturnToFrontier(
+			{
+				reason,
+				localSummary: summary,
+				localAnswer: summary,
+				changedFiles: [],
+				verification: [],
+				openIssues: ["Local worker did not provide a structured return packet."],
+				recommendedNextAction: "verify",
+			},
+			"required-handback",
+		);
+		const localReference = this.config.localModel;
+		if (!localReference) return undefined;
+		const localModel = this.resolveModel(localReference, "local");
+		const transition = await this.prepareNextTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: localResponse }],
+				api: localModel.api,
+				provider: localModel.provider,
+				model: localModel.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		});
+		if (!transition) return undefined;
+		return {
+			...transition,
+			handoffPrompt: [
+				"[Klerm enforced local return]",
+				`Reason: ${reason}`,
+				`Local summary: ${summary}`,
+				`Original task: ${this.task}`,
+				"Review the local result, complete any remaining work, and answer the user. Delegate again only for a concrete focused issue.",
+			].join("\n"),
+		};
+	}
+
 	private async prepareFrontierTransition(
 		turn: PrepareNextTurnContext,
 		reason: string,
@@ -1145,9 +1455,45 @@ export class KlermRoutingController {
 			cycle: currentCycle + 1,
 			transcriptHash: hash(stableJson(turn.context.messages)),
 			completionOwner:
-				trigger === "provider-failure" || !this.config.handbackEnabled
+				trigger === "provider-failure" || !this.handbackEnabledForCurrentTask()
 					? "frontier"
 					: (this.state.completionOwner ?? "local"),
+		});
+	}
+
+	private async prepareLocalTransition(
+		turn: PrepareNextTurnContext,
+		reason: string,
+		trigger: KlermHandoffTrigger,
+	): Promise<KlermModelTransition | undefined> {
+		const currentCycle = this.state.delegationCycle ?? 0;
+		if (currentCycle >= this.config.maxDelegationCycles) {
+			this.pendingLocalDelegation = undefined;
+			await this.logLifecycle(
+				"HANDOFF_REJECTED",
+				"FRONTIER",
+				this.state.selectedTarget ?? this.config.frontierModel ?? "frontier",
+				`local delegation cycle limit ${this.config.maxDelegationCycles} reached`,
+			);
+			return undefined;
+		}
+		const reference = this.config.localModel;
+		if (!reference) {
+			throw new Error(`Frontier worker requested local delegation (${reason}), but no local model is configured.`);
+		}
+		const model = this.resolveModel(reference, "local");
+		return this.prepareTransition({
+			kind: "delegate",
+			toLane: "local",
+			model,
+			reason,
+			trigger,
+			cycle: currentCycle + 1,
+			transcriptHash: hash(stableJson(turn.context.messages)),
+			completionOwner:
+				trigger === "provider-failure" || !this.handbackEnabledForCurrentTask()
+					? "local"
+					: (this.state.completionOwner ?? "frontier"),
 		});
 	}
 
@@ -1157,28 +1503,34 @@ export class KlermRoutingController {
 		const reference = this.config.localModel;
 		if (!reference) {
 			this.pendingReturnToLocal = undefined;
-			this.state = { ...this.state, completionOwner: "frontier", reason: "local handback target is unavailable" };
+			this.state = { ...this.state, reason: "local handback target is unavailable" };
 			await this.logLifecycle(
 				"HANDOFF_FAILED",
 				"FRONTIER",
 				this.state.selectedTarget ?? this.config.frontierModel ?? "frontier",
 				"cannot return to local because no local model is configured",
 			);
-			return undefined;
+			throw new Error(
+				this.state.activeStartLane === "frontier-local"
+					? "Frontier-local task cannot complete because no local handback model is configured."
+					: "Task cannot complete because no local handback model is configured.",
+			);
 		}
 		let model: Model<any>;
 		try {
 			model = this.resolveModel(reference, "local");
 		} catch (error) {
 			this.pendingReturnToLocal = undefined;
-			this.state = { ...this.state, completionOwner: "frontier", reason: "local handback target is unavailable" };
+			this.state = { ...this.state, reason: "local handback target is unavailable" };
 			await this.logLifecycle(
 				"HANDOFF_FAILED",
 				"FRONTIER",
 				this.state.selectedTarget ?? this.config.frontierModel ?? "frontier",
 				error instanceof Error ? error.message : String(error),
 			);
-			return undefined;
+			throw new Error(
+				`${this.state.activeStartLane === "frontier-local" ? "Frontier-local task" : "Task"} cannot complete because the local handback model is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 		return this.prepareTransition({
 			kind: "return",
@@ -1197,9 +1549,69 @@ export class KlermRoutingController {
 		});
 	}
 
+	private async prepareFrontierReturn(turn: PrepareNextTurnContext): Promise<KlermModelTransition | undefined> {
+		const result = this.pendingReturnToFrontier;
+		if (!result) return undefined;
+		const reference = this.config.frontierModel;
+		if (!reference) {
+			this.pendingReturnToFrontier = undefined;
+			this.state = { ...this.state, reason: "frontier handback target is unavailable" };
+			await this.logLifecycle(
+				"HANDOFF_FAILED",
+				"LOCAL",
+				this.state.selectedTarget ?? this.config.localModel ?? "local",
+				"cannot return to frontier because no frontier model is configured",
+			);
+			throw new Error("Task cannot complete because no frontier handback model is configured.");
+		}
+		let model: Model<any>;
+		try {
+			model = this.resolveModel(reference, "frontier");
+		} catch (error) {
+			this.pendingReturnToFrontier = undefined;
+			this.state = { ...this.state, reason: "frontier handback target is unavailable" };
+			await this.logLifecycle(
+				"HANDOFF_FAILED",
+				"LOCAL",
+				this.state.selectedTarget ?? this.config.localModel ?? "local",
+				error instanceof Error ? error.message : String(error),
+			);
+			throw new Error(
+				`Task cannot complete because the frontier handback model is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		return this.prepareTransition({
+			kind: "return",
+			toLane: "frontier",
+			model,
+			reason: result.reason,
+			trigger: result.trigger,
+			cycle: this.state.delegationCycle ?? 0,
+			transcriptHash: hash(stableJson(turn.context.messages)),
+			completionOwner: "frontier",
+			returnCounts: {
+				changedFileCount: result.changedFiles.length,
+				verificationCount: result.verification.length,
+				openIssueCount: result.openIssues.length,
+			},
+		});
+	}
+
 	async prepareNextTurn(turn: PrepareNextTurnContext): Promise<KlermModelTransition | undefined> {
-		if (this.state.lane === "frontier") return this.prepareLocalReturn(turn);
+		if (this.state.lane === "frontier") {
+			if (this.pendingReturnToLocal) return this.prepareLocalReturn(turn);
+			if (this.pendingLocalDelegation) {
+				return this.prepareLocalTransition(
+					turn,
+					this.pendingLocalDelegation.reason,
+					this.pendingLocalDelegation.trigger,
+				);
+			}
+			return undefined;
+		}
 		if (this.state.lane !== "local") return undefined;
+		if (this.pendingReturnToFrontier) return this.prepareFrontierReturn(turn);
+		if (this.state.completionOwner === "frontier") return undefined;
 		this.localTurns++;
 		this.localToolErrors += turn.toolResults.filter((result) => result.isError).length;
 		const toolCalls = turn.message.content.filter((part) => part.type === "toolCall");
@@ -1229,6 +1641,56 @@ export class KlermRoutingController {
 
 	async handleLocalFailure(errorMessage: string | undefined): Promise<KlermModelTransition | undefined> {
 		if (this.state.lane !== "local") return undefined;
+		if (this.handbackRequired("frontier")) {
+			this.requestReturnToFrontier(
+				{
+					reason: `local provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
+					localSummary: "The local provider failed before completing its assignment.",
+					localAnswer: "",
+					changedFiles: [],
+					verification: [],
+					openIssues: [errorMessage ?? "Local provider failure"],
+					recommendedNextAction: "delegate-again",
+				},
+				"provider-failure",
+			);
+			const reference = this.config.localModel;
+			if (!reference) return undefined;
+			const model = this.resolveModel(reference, "local");
+			const transition = await this.prepareNextTurn({
+				message: {
+					role: "assistant",
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "error",
+					errorMessage,
+					timestamp: Date.now(),
+				},
+				toolResults: [],
+				context: { systemPrompt: "", messages: [], tools: [] },
+				newMessages: [],
+			});
+			if (!transition) return undefined;
+			return {
+				...transition,
+				handoffPrompt: [
+					"[Klerm local failure return]",
+					`Reason: local provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
+					"Open issue: The local provider did not complete its assignment.",
+					"Review the current repository state and finish as the frontier owner.",
+				].join("\n"),
+			};
+		}
 		this.requestFrontierDelegation(
 			{
 				reason: `local provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
@@ -1274,7 +1736,58 @@ export class KlermRoutingController {
 	}
 
 	async handleFrontierFailure(errorMessage: string | undefined): Promise<KlermModelTransition | undefined> {
-		if (this.state.lane !== "frontier" || !this.handbackRequired()) return undefined;
+		if (this.state.lane !== "frontier") return undefined;
+		if (!this.handbackRequired("local")) {
+			if (
+				this.state.completionOwner !== "frontier" ||
+				!this.handbackEnabledForCurrentTask() ||
+				!this.config.localModel
+			)
+				return undefined;
+			this.requestLocalDelegation(
+				{
+					reason: `frontier provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
+					summary: "The frontier provider failed before completing its turn.",
+					remainingWork: "Continue the original task using the existing session context.",
+				},
+				"provider-failure",
+			);
+			const reference = this.config.frontierModel;
+			if (!reference) return undefined;
+			const model = this.resolveModel(reference, "frontier");
+			const transition = await this.prepareNextTurn({
+				message: {
+					role: "assistant",
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "error",
+					errorMessage,
+					timestamp: Date.now(),
+				},
+				toolResults: [],
+				context: { systemPrompt: "", messages: [], tools: [] },
+				newMessages: [],
+			});
+			if (!transition) return undefined;
+			return {
+				...transition,
+				handoffPrompt: [
+					"[Klerm frontier failure delegation]",
+					`Reason: frontier provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
+					"Continue the original task as the local worker using the existing repository context.",
+				].join("\n"),
+			};
+		}
 		this.requestReturnToLocal(
 			{
 				reason: `frontier provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
@@ -1347,12 +1860,13 @@ export class KlermRoutingController {
 				delegationRecommended: this.state.delegationRecommended,
 				fallbackReason: this.state.fallbackReason,
 				completionOwner: this.state.completionOwner,
-				handbackEnabled: this.config.handbackEnabled,
+				handbackEnabled: this.handbackEnabledForCurrentTask(),
 				delegationCycle: this.state.delegationCycle,
 				maxDelegationCycles: this.state.maxDelegationCycles,
 				transcriptHash: this.state.lastTransition?.transcriptHash,
 				registryProfileHash: this.profileHash(),
 				mode: this.config.routing,
+				activeStartLane: this.state.activeStartLane,
 				cwd: this.cwd,
 			});
 		} finally {
@@ -1382,6 +1896,7 @@ export class KlermRoutingController {
 			this.state = {
 				task,
 				mode: this.config.routing,
+				activeStartLane: this.config.activeStartLane,
 				lane: "direct",
 				localModel: this.config.localModel,
 				frontierModel: this.config.frontierModel,
@@ -1407,20 +1922,25 @@ export class KlermRoutingController {
 				explicitFrontierRequestSatisfied,
 			};
 			this.pendingDelegation = undefined;
+			this.pendingLocalDelegation = undefined;
 			this.pendingReturnToLocal = undefined;
+			this.pendingReturnToFrontier = undefined;
 			this.preparedTransitionId = undefined;
 		}
 	}
 
 	describe(): string {
+		const effectiveHandback = this.handbackEnabledForCurrentTask();
 		return [
 			`Routing: ${this.state.mode}`,
+			`Start lane: ${this.config.activeStartLane}`,
 			`Active lane: ${this.state.lane}`,
 			`Local model: ${this.config.localModel ?? "not configured"}`,
 			`Frontier model: ${this.config.frontierModel ?? "not configured"}`,
 			`Frontier fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
-			`Return to local: ${this.config.handbackEnabled ? "on" : "off"}`,
-			`Delegation cycles: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles}`,
+			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== this.config.handbackEnabled ? ` (configured ${this.config.handbackEnabled ? "on" : "off"})` : ""}`,
+			`Completion owner: ${this.state.completionOwner ?? "not assigned"}`,
+			`A2A cycles started: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles} (per-task safety limit)`,
 			`Other model called: ${this.state.otherModelCalled ?? "none"}`,
 			`Task: ${this.state.task ?? "none"}`,
 			`Last decision: ${this.state.reason ?? "none"}`,

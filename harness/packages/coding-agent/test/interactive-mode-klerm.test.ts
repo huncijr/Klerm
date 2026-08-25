@@ -8,7 +8,7 @@ type LaneContext = {
 		isStreaming: boolean;
 		isCompacting: boolean;
 		klermRouting: {
-			config: { localModel?: string; frontierModel?: string };
+			config: { localModel?: string; frontierModel?: string; activeStartLane: string };
 			setLocalModel: (reference: string | undefined) => Promise<void>;
 			setFrontierModel: (reference: string | undefined) => Promise<void>;
 		};
@@ -29,6 +29,8 @@ type RoutingContext = {
 			setAllowFrontierFallback: (enabled: boolean) => Promise<void>;
 			setHandbackEnabled: (enabled: boolean) => Promise<void>;
 			setMaxDelegationCycles: (count: number) => Promise<void>;
+			setActiveStartLane: (lane: "auto" | "local" | "frontier" | "frontier-local") => Promise<void>;
+			config: { activeStartLane: "auto" | "local" | "frontier" | "frontier-local" };
 		};
 	};
 	showError: (message: string) => void;
@@ -41,11 +43,13 @@ type SubmitContext = {
 	defaultEditor: { onSubmit?: (text: string) => Promise<void> };
 	editor: { setText: (text: string) => void };
 	handleKlermModelCommand: (lane: "local" | "frontier", argument: string) => Promise<void>;
+	handleKlermActiveCommand: (argument: string) => Promise<void>;
 };
 
 type InteractiveModePrivate = {
 	handleKlermModelCommand(this: LaneContext, lane: "local" | "frontier", argument: string): Promise<void>;
 	handleKlermRoutingCommand(this: RoutingContext, argument: string): Promise<void>;
+	handleKlermActiveCommand(this: RoutingContext, argument: string): Promise<void>;
 	setupEditorSubmitHandler(this: SubmitContext): void;
 };
 
@@ -60,6 +64,7 @@ function createLaneContext(): LaneContext {
 				config: {
 					localModel: "ollama/qwen2.5-coder:7b",
 					frontierModel: "google/gemini-3.5-flash-lite",
+					activeStartLane: "auto",
 				},
 				setLocalModel: vi.fn(async () => {}),
 				setFrontierModel: vi.fn(async () => {}),
@@ -215,6 +220,8 @@ describe("interactive Klerm commands", () => {
 			setAllowFrontierFallback: vi.fn(async () => {}),
 			setHandbackEnabled: vi.fn(async () => {}),
 			setMaxDelegationCycles: vi.fn(async () => {}),
+			setActiveStartLane: vi.fn(async () => {}),
+			config: { activeStartLane: "auto" as const },
 		};
 		const context: RoutingContext = {
 			session: { klermRouting: routing },
@@ -239,16 +246,59 @@ describe("interactive Klerm commands", () => {
 		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: auto\nFrontier fallback: on");
 	});
 
+	it("shows and updates the active start lane", async () => {
+		const routing = {
+			describe: vi.fn(() => "Routing: auto"),
+			setRoutingMode: vi.fn(async () => {}),
+			setAllowFrontierFallback: vi.fn(async () => {}),
+			setHandbackEnabled: vi.fn(async () => {}),
+			setMaxDelegationCycles: vi.fn(async () => {}),
+			setActiveStartLane: vi.fn(async () => {}),
+			config: { activeStartLane: "auto" as const },
+		};
+		const context: RoutingContext = {
+			session: { klermRouting: routing },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			showSelector: vi.fn(),
+			updateKlermRoutingStatus: vi.fn(),
+		};
+
+		await prototype.handleKlermActiveCommand.call(context, "status");
+		await prototype.handleKlermActiveCommand.call(context, "frontier-local");
+		await prototype.handleKlermActiveCommand.call(context, "invalid");
+
+		expect(context.showStatus).toHaveBeenNthCalledWith(1, "Start lane: auto");
+		expect(routing.setActiveStartLane).toHaveBeenCalledWith("frontier-local");
+		expect(context.showStatus).toHaveBeenNthCalledWith(2, "Start lane: frontier-local");
+		expect(context.showError).toHaveBeenCalledWith("Start lane must be auto, local, frontier, or frontier-local.");
+	});
+
 	it("passes the untrimmed task command remainder through editor dispatch", async () => {
 		const context: SubmitContext = {
 			defaultEditor: {},
 			editor: { setText: vi.fn() },
 			handleKlermModelCommand: vi.fn(async () => {}),
+			handleKlermActiveCommand: vi.fn(async () => {}),
 		};
 		prototype.setupEditorSubmitHandler.call(context);
 
 		await context.defaultEditor.onSubmit?.("  /local task   keep  spaces  ");
 
 		expect(context.handleKlermModelCommand).toHaveBeenCalledWith("local", " task   keep  spaces  ");
+	});
+
+	it("dispatches the /activ alias to the active start-lane handler", async () => {
+		const context: SubmitContext = {
+			defaultEditor: {},
+			editor: { setText: vi.fn() },
+			handleKlermModelCommand: vi.fn(async () => {}),
+			handleKlermActiveCommand: vi.fn(async () => {}),
+		};
+		prototype.setupEditorSubmitHandler.call(context);
+
+		await context.defaultEditor.onSubmit?.("/activ frontier-local");
+
+		expect(context.handleKlermActiveCommand).toHaveBeenCalledWith("frontier-local");
 	});
 });

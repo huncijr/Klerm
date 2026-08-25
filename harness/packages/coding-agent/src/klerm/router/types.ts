@@ -1,3 +1,5 @@
+import type { KlermActiveStartLane } from "../config.ts";
+
 export type KlermRouteMode = "mock";
 export type KlermRoute = "SELF" | "LOCAL" | "FRONTIER";
 export type KlermPromptRoutingOverride = "local" | "frontier";
@@ -20,9 +22,12 @@ export type KlermDecisionEventType =
 	| "LOCAL_STARTED"
 	| "FRONTIER_STARTED"
 	| "DELEGATE_FRONTIER"
+	| "DELEGATE_LOCAL"
 	| "FRONTIER_COMPLETED"
 	| "RETURN_TO_LOCAL"
+	| "RETURN_TO_FRONTIER"
 	| "LOCAL_RESUMED"
+	| "FRONTIER_RESUMED"
 	| "HANDOFF_REJECTED"
 	| "HANDOFF_FAILED"
 	| "TASK_COMPLETED"
@@ -82,6 +87,7 @@ export interface KlermRouteDecision {
 	openIssueCount?: number;
 	registryProfileHash: string;
 	mode: KlermRouteMode | "local" | "frontier" | "auto" | "off";
+	activeStartLane?: KlermActiveStartLane;
 	cwd?: string;
 }
 
@@ -89,6 +95,7 @@ export interface KlermRoutingState {
 	taskId?: string;
 	task?: string;
 	mode: "off" | "local" | "frontier" | "auto";
+	activeStartLane: KlermActiveStartLane;
 	lane: "direct" | "local" | "frontier";
 	localModel?: string;
 	frontierModel?: string;

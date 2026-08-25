@@ -304,6 +304,32 @@ Object form filters which resources to load:
 
 See [packages.md](packages.md) for package management details.
 
+### Klerm MCP Servers
+
+Klerm reads stdio MCP servers from `mcpServers` in
+`~/.klerm/agent/settings.json` and trusted project `.klerm/settings.json` files:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/project"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Each server supports `command`, optional string `args`, optional string-valued
+`env`, and optional `enabled` (default `true`). Klerm exposes discovered tools
+as `mcp_<server>_<tool>`. Use `/mcp` to inspect status and `/mcpset` to update
+servers. Project server entries replace global entries with the same name as a
+whole object; their nested fields are never merged with global environment
+values. Environment values are stored as plaintext; do not put secrets in a
+project settings file or commit them. Prefer a trusted wrapper command or
+process environment for credentials.
+
 ## Example
 
 ```json
@@ -331,7 +357,7 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.pi/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.pi/settings.json`) override global settings. Nested objects are merged, except Klerm `mcpServers` entries, which replace matching global server entries as whole objects:
 
 ```json
 // ~/.pi/agent/settings.json (global)

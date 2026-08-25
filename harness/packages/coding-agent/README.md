@@ -49,6 +49,10 @@ Useful commands:
 /routing handback on
 /routing cycles 3
 /routing status
+/active auto
+/active local
+/active frontier
+/active frontier-local
 /klerm
 ```
 
@@ -73,10 +77,28 @@ recommendation, Klerm enforces the frontier handoff and logs trigger
 `recommended-enforcement` before returning completed frontier work to local.
 
 For local-owned tasks, the frontier worker receives `return_to_local` and sends
-a structured result back for local verification. This can repeat until the task
-is complete or the configured delegation cycle budget is exhausted. Automatic
-frontier routes return to local by default; explicit `/frontier task` and
-`/routing frontier` tasks remain frontier-owned.
+a structured result back for local verification. A frontier-owned task can use
+`delegate_local` for focused local work; the local worker then uses
+`return_to_frontier` so the frontier owner can review and finalize. Klerm
+enforces the required return if either delegated worker finishes without the
+native return tool.
+
+Each delegation away from the completion owner starts one A2A cycle. The
+default `3` cycle budget is a per-task loop-safety limit, not a model limit; set
+it from `1` to `20` with `/routing cycles <count>`. The matching return does not
+consume another cycle.
+
+With handback enabled and a configured local model, normal `/routing frontier`
+and `/active frontier` starts run frontier first but keep local completion
+ownership. Explicit `/frontier task` remains frontier-owned and can delegate
+focused work to local. For local-owned delegation, disabling handback transfers
+ownership to frontier instead of requiring a return.
+
+`/active` controls the initial worker independently from the routing mode.
+`frontier-local` always starts at the frontier worker and keeps local ownership,
+even when the persisted handback setting is off, so the frontier worker must
+call `return_to_local` before Klerm completes the task.
+`/activ` is an alias for `/active`.
 
 Example:
 
@@ -113,6 +135,26 @@ and `8080` (llama.cpp server). Override them with
 `KLERM_OPENAI_LOCAL_URL`. Unsloth exports are detected through whichever
 runtime serves them.
 
+## MCP
+
+Klerm exposes tools from configured stdio MCP servers as
+`mcp_<server>_<tool>`. Configure and inspect servers interactively:
+
+```text
+/mcpset filesystem stdio npx -y @modelcontextprotocol/server-filesystem /home/user/project
+/mcp
+/mcpset filesystem disable
+/mcpset filesystem enable
+/mcpset filesystem remove
+```
+
+Commands write global settings by default. Add `--project` immediately after
+`/mcpset` to write `.klerm/settings.json`; project MCP servers start only after
+the project is trusted. Configuration changes reload the session so old server
+processes close before the tool registry is rebuilt. The first MCP milestone
+supports stdio tools only, not HTTP/SSE, prompts, resources, or MCP tasks.
+Server-side tool-list changes require `/reload` in this milestone.
+
 ## Configuration And Logs
 
 ```text
@@ -146,7 +188,8 @@ klerm debug registry
 
 Klerm coding tools run with the permissions of the user and process that
 started the CLI. Review project instructions and third-party extensions, and
-use a container or sandbox for untrusted work.
+use a container or sandbox for untrusted work. MCP servers are executable child
+processes with the same host permissions, so only configure commands you trust.
 
 ## License
 

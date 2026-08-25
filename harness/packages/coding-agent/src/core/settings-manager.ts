@@ -70,6 +70,13 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 
 export type TransportSetting = Transport;
 
+export interface McpServerSettings {
+	command: string;
+	args?: string[];
+	env?: Record<string, string>;
+	enabled?: boolean;
+}
+
 /**
  * Package source for npm/git packages.
  * - String form: load all resources from the package
@@ -137,6 +144,7 @@ export interface Settings {
 	tuiMode?: TuiMode; // default: "regular"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
+	mcpServers?: Record<string, McpServerSettings>; // stdio MCP servers; project entries replace global entries by name
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -706,6 +714,65 @@ export class SettingsManager {
 		this.markModified("defaultProvider");
 		this.markModified("defaultModel");
 		this.save();
+	}
+
+	getMcpServers(): Record<string, McpServerSettings> {
+		return structuredClone({
+			...(this.globalSettings.mcpServers ?? {}),
+			...(this.projectTrusted ? (this.projectSettings.mcpServers ?? {}) : {}),
+		});
+	}
+
+	getMcpServersForScope(scope: SettingsScope): Record<string, McpServerSettings> {
+		if (scope === "project" && !this.projectTrusted) return {};
+		return structuredClone(
+			scope === "global" ? (this.globalSettings.mcpServers ?? {}) : (this.projectSettings.mcpServers ?? {}),
+		);
+	}
+
+	setMcpServer(name: string, server: McpServerSettings, scope: SettingsScope = "global"): void {
+		if (scope === "project") {
+			this.assertProjectTrustedForWrite();
+			const projectSettings = structuredClone(this.projectSettings);
+			projectSettings.mcpServers = {
+				...(projectSettings.mcpServers ?? {}),
+				[name]: structuredClone(server),
+			};
+			this.markProjectModified("mcpServers", name);
+			this.saveProjectSettings(projectSettings);
+			return;
+		}
+		this.globalSettings.mcpServers = {
+			...(this.globalSettings.mcpServers ?? {}),
+			[name]: structuredClone(server),
+		};
+		this.markModified("mcpServers", name);
+		this.save();
+	}
+
+	removeMcpServer(name: string, scope: SettingsScope = "global"): boolean {
+		const servers = this.getMcpServersForScope(scope);
+		if (!(name in servers)) return false;
+		delete servers[name];
+		if (scope === "project") {
+			this.assertProjectTrustedForWrite();
+			const projectSettings = structuredClone(this.projectSettings);
+			projectSettings.mcpServers = servers;
+			this.markProjectModified("mcpServers", name);
+			this.saveProjectSettings(projectSettings);
+		} else {
+			this.globalSettings.mcpServers = servers;
+			this.markModified("mcpServers", name);
+			this.save();
+		}
+		return true;
+	}
+
+	setMcpServerEnabled(name: string, enabled: boolean, scope: SettingsScope = "global"): boolean {
+		const server = this.getMcpServersForScope(scope)[name];
+		if (!server) return false;
+		this.setMcpServer(name, { ...server, enabled }, scope);
+		return true;
 	}
 
 	getSteeringMode(): "all" | "one-at-a-time" {

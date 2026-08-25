@@ -97,7 +97,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-import type { KlermRoutingMode } from "../../klerm/config.ts";
+import type { KlermActiveStartLane, KlermRoutingMode } from "../../klerm/config.ts";
 import { isLocalProviderId } from "../../klerm/local-providers.ts";
 import {
 	discoverLocalRuntimes,
@@ -785,6 +785,20 @@ export class InteractiveMode {
 			};
 		}
 
+		for (const name of ["active", "activ"]) {
+			const command = slashCommands.find((candidate) => candidate.name === name);
+			if (!command) continue;
+			command.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const options = ["auto", "local", "frontier", "frontier-local", "status"];
+				return createFuzzyAutocompleteItems(
+					options,
+					prefix,
+					(option) => option,
+					(option) => ({ value: option, label: option }),
+				);
+			};
+		}
+
 		const loginCommand = slashCommands.find((command) => command.name === "login");
 		if (loginCommand) {
 			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
@@ -1088,9 +1102,10 @@ export class InteractiveMode {
 					"  /routing auto            local decides: small tasks local, hard tasks frontier",
 					"  /routing local           force normal prompts to local",
 					"  /routing frontier        force normal prompts to frontier",
-					"  /routing handback on     return frontier work to local for verification",
-					"  /routing cycles <count>  limit frontier visits per task",
-					"  /routing off             disable A2A and use /model directly",
+					"  /routing handback on     return delegated work to the task owner",
+					"  /routing cycles <count>  limit A2A work cycles per task (default 3)",
+					"  /active <lane>            override the initial worker; auto follows /routing",
+					"  /routing off             use /model directly when /active is auto",
 					"  /model <model>            set the direct model used when routing is off",
 				].join("\n"),
 			);
@@ -3074,6 +3089,12 @@ export class InteractiveMode {
 				await this.handleKlermRoutingCommand(text.slice(8).trim());
 				return;
 			}
+			if (text === "/active" || text.startsWith("/active ") || text === "/activ" || text.startsWith("/activ ")) {
+				this.editor.setText("");
+				const argument = text.includes(" ") ? text.slice(text.indexOf(" ") + 1).trim() : "";
+				await this.handleKlermActiveCommand(argument);
+				return;
+			}
 			if (text === "/klerm") {
 				this.editor.setText("");
 				this.showKlermStatus();
@@ -5012,7 +5033,7 @@ export class InteractiveMode {
 			const enabled = argument === "handback on";
 			await routing.setHandbackEnabled(enabled);
 			this.updateKlermRoutingStatus();
-			this.showStatus(`Return to local: ${enabled ? "on" : "off"}`);
+			this.showStatus(`Return to task owner: ${enabled ? "on" : "off"}`);
 			return;
 		}
 		if (argument === "handback" || argument.startsWith("handback ")) {
@@ -5027,7 +5048,7 @@ export class InteractiveMode {
 			}
 			await routing.setMaxDelegationCycles(count);
 			this.updateKlermRoutingStatus();
-			this.showStatus(`Delegation cycles: ${count}`);
+			this.showStatus(`A2A cycle safety limit: ${count}`);
 			return;
 		}
 		if (argument === "cycles") {
@@ -5041,6 +5062,25 @@ export class InteractiveMode {
 		await routing.setRoutingMode(argument);
 		this.updateKlermRoutingStatus();
 		this.showStatus(`Routing: ${argument}`);
+	}
+
+	private async handleKlermActiveCommand(argument: string): Promise<void> {
+		const routing = this.session.klermRouting;
+		if (!routing) {
+			this.showError("Klerm routing is unavailable in this session.");
+			return;
+		}
+		if (!argument || argument === "status") {
+			this.showStatus(`Start lane: ${routing.config.activeStartLane}`);
+			return;
+		}
+		if (argument !== "auto" && argument !== "local" && argument !== "frontier" && argument !== "frontier-local") {
+			this.showError("Start lane must be auto, local, frontier, or frontier-local.");
+			return;
+		}
+		await routing.setActiveStartLane(argument as KlermActiveStartLane);
+		this.updateKlermRoutingStatus();
+		this.showStatus(`Start lane: ${argument}`);
 	}
 
 	private updateKlermRoutingStatus(): void {
@@ -5067,9 +5107,14 @@ export class InteractiveMode {
 			`Frontier model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
 		lines.push(`Routing: ${state.mode}`);
-		lines.push(`Return to local: ${routing.config.handbackEnabled ? "on" : "off"}`);
+		lines.push(`Start lane: ${routing.config.activeStartLane}`);
+		const effectiveHandback = state.handbackEnabled ?? routing.config.handbackEnabled;
 		lines.push(
-			`Delegation cycles: ${state.delegationCycle ?? 0}/${state.maxDelegationCycles ?? routing.config.maxDelegationCycles}`,
+			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== routing.config.handbackEnabled ? ` (configured ${routing.config.handbackEnabled ? "on" : "off"})` : ""}`,
+		);
+		lines.push(`Completion owner: ${state.completionOwner ?? "not assigned"}`);
+		lines.push(
+			`A2A cycles started: ${state.delegationCycle ?? 0}/${state.maxDelegationCycles ?? routing.config.maxDelegationCycles} (per-task safety limit)`,
 		);
 		if (state.lane === "direct" && state.selectedTarget && (state.handoffReason || state.decisionSource)) {
 			const lastRoute = state.selectedTarget === frontierModel ? "frontier" : "local";
@@ -5120,7 +5165,10 @@ export class InteractiveMode {
 		const isReturn = transition.kind === "return";
 		const call = [
 			theme.bold(
-				theme.fg(isReturn ? "success" : "warning", isReturn ? "+ returned to local" : "+ called other model"),
+				theme.fg(
+					isReturn ? "success" : "warning",
+					isReturn ? `+ returned to ${transition.toLane}` : "+ called other model",
+				),
 			),
 			`  ${theme.fg("warning", "model:")} ${state.selectedTarget}`,
 			`  ${theme.fg("warning", "reason:")} ${state.handoffReason}`,
