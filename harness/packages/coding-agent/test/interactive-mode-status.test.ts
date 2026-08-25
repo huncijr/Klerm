@@ -9,6 +9,7 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { CompletedStatusIndicator } from "../src/modes/interactive/components/status-indicator.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -117,6 +118,27 @@ describe("InteractiveMode.showStatus", () => {
 		// adds spacer + text
 		expect(fakeThis.chatContainer.children).toHaveLength(5);
 		expect(renderLastLine(fakeThis.chatContainer)).toContain("STATUS_TWO");
+	});
+});
+
+describe("InteractiveMode.showNewVersionNotification", () => {
+	beforeAll(() => initTheme("dark"));
+
+	test("keeps update instructions without printing the changelog URL", () => {
+		const fakeThis: any = {
+			chatContainer: new Container(),
+			ui: { requestRender: vi.fn() },
+			getMarkdownThemeWithSettings: vi.fn(),
+		};
+
+		(InteractiveMode as any).prototype.showNewVersionNotification.call(fakeThis, { version: "0.84.3" });
+
+		const output = stripAnsi(renderAll(fakeThis.chatContainer));
+		expect(output).toContain("Update Available");
+		expect(output).toContain("New version 0.84.3 is available. Run klerm update");
+		expect(output).not.toContain("Changelog:");
+		expect(output).not.toContain("pi.dev/changelog");
+		expect(fakeThis.ui.requestRender).toHaveBeenCalledOnce();
 	});
 });
 
@@ -1338,6 +1360,9 @@ describe("InteractiveMode Klerm handoff status", () => {
 			score: 0.58,
 			confidence: 0.62,
 			risk: 0.71,
+			delegationRecommended: true,
+			delegationCycle: 1,
+			explicitFrontierRequestSatisfied: true,
 		};
 		const fakeThis: any = {
 			klermRoutingStatus: new Text("", 0, 0),
@@ -1356,5 +1381,27 @@ describe("InteractiveMode Klerm handoff status", () => {
 		expect(output).toContain("Auto score: frontier · capability 58% · confidence 62% · risk 71%");
 		expect(output).not.toContain("called other model");
 		expect(output).not.toContain("reason:");
+		expect(output).not.toContain("Delegation recommended: frontier");
+	});
+
+	test("shows the completion icon only after a successful settled run", async () => {
+		const showStatusIndicator = vi.fn();
+		const fakeThis: any = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			agentRunCompletedSuccessfully: true,
+			showStatusIndicator,
+			ui: { requestRender: vi.fn() },
+			checkShutdownRequested: vi.fn(async () => {}),
+		};
+		const handleEvent = (InteractiveMode as any).prototype.handleEvent;
+
+		await handleEvent.call(fakeThis, { type: "agent_settled" });
+		expect(showStatusIndicator.mock.calls[0]?.[0]).toBeInstanceOf(CompletedStatusIndicator);
+
+		showStatusIndicator.mockClear();
+		fakeThis.agentRunCompletedSuccessfully = false;
+		await handleEvent.call(fakeThis, { type: "agent_settled" });
+		expect(showStatusIndicator).not.toHaveBeenCalled();
 	});
 });

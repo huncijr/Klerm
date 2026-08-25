@@ -1,9 +1,11 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+Klerm automatically discovers common local runtimes. Add other custom providers
+and model overrides via `~/.klerm/agent/models.json`.
 
 ## Table of Contents
 
+- [Automatic Local Discovery](#automatic-local-discovery)
 - [Minimal Example](#minimal-example)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
@@ -13,6 +15,29 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
+
+## Automatic Local Discovery
+
+Klerm queries local runtime catalogs without downloading models:
+
+| Provider ID | Runtime | Default endpoint | Override |
+|---|---|---|---|
+| `ollama` | Ollama | `http://127.0.0.1:11434` | `KLERM_OLLAMA_URL` |
+| `lm-studio` | LM Studio | `http://127.0.0.1:1234` | `KLERM_LM_STUDIO_URL` |
+| `vllm` | vLLM | `http://127.0.0.1:8000` | `KLERM_VLLM_URL` |
+| `llama.cpp-server` | standalone llama.cpp server | `http://127.0.0.1:8080` | `KLERM_LLAMA_CPP_SERVER_URL` |
+| `openai-local` | another OpenAI-compatible runtime | disabled | `KLERM_OPENAI_LOCAL_URL` |
+
+The non-Ollama runtimes must expose `GET /v1/models`. Their URL variables have
+matching `_API_KEY` variables for servers that require bearer auth. The managed
+llama.cpp router remains available separately as provider `llama.cpp` through
+`/login llama.cpp` and `/llama`.
+
+Unsloth is a training and export toolkit rather than an inference server. Serve
+an Unsloth export through LM Studio, vLLM, llama.cpp, or another compatible
+runtime; Klerm assigns the model to that serving provider.
+
+Use `klerm local status` and `klerm local models` to inspect discovery results.
 
 ## Minimal Example
 

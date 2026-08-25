@@ -6,10 +6,10 @@ import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts"
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { KlermConfig, KlermConfigStore, KlermRoutingMode } from "../config.ts";
+import { isLocalProviderId } from "../local-providers.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
 	KlermCompletionOwner,
-	KlermDecisionSource,
 	KlermHandoffTrigger,
 	KlermPromptRoutingOverride,
 	KlermRouteDecision,
@@ -17,8 +17,6 @@ import type {
 	KlermTransitionState,
 	KlermWorkerLane,
 } from "./types.ts";
-
-const LOCAL_PROVIDER_IDS = new Set(["ollama", "llama.cpp"]);
 
 const delegateSchema = Type.Object({
 	reason: Type.String({ maxLength: 2000, description: "Why the local worker needs the frontier worker" }),
@@ -58,19 +56,6 @@ interface PendingReturnToLocal {
 	trigger: KlermHandoffTrigger;
 }
 
-interface AutoRouteDecision {
-	route: "LOCAL" | "FRONTIER";
-	reason: string;
-	complexity: number;
-	score: number;
-	confidence: number;
-	risk: number;
-	capabilityFactors: string[];
-	policyTriggers: string[];
-	decisionSource: KlermDecisionSource;
-	fallbackReason?: string;
-}
-
 export interface KlermModelTransition {
 	model: Model<any>;
 	reason: string;
@@ -91,14 +76,6 @@ function hash(value: string): string {
 
 function modelReference(model: Model<any>): string {
 	return `${model.provider}/${model.id}`;
-}
-
-function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
-	return message.content
-		.filter((part) => part.type === "text" && typeof part.text === "string")
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
 }
 
 function stableJson(value: unknown): string {
@@ -235,21 +212,30 @@ export function projectKlermHandoffContext(
 	return changed ? projected : messages;
 }
 
-function deterministicAssessment(task: string): {
-	complexityFloor: number;
-	riskFloor: number;
+function explicitlyRequestsFrontier(task: string): boolean {
+	if (/\bdelegate_frontier\b/iu.test(task)) return true;
+	const target = /\b(frontier|codex|claude|gemini)\b/iu;
+	const action = /\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|hand\s*off)\b/iu;
+	return target.test(task) && action.test(task);
+}
+
+function assessDelegationRecommendation(task: string): {
+	delegationRecommended: boolean;
+	complexity: number;
+	risk: number;
 	factors: string[];
+	policyTriggers: string[];
 } {
-	let complexityFloor = 1;
-	let riskFloor = 0;
+	let complexity = 3;
+	let risk = 0.2;
 	const factors: string[] = [];
 	if (
 		/\b(security audit|authentication system|authorization|credentials?|secrets?|cryptography|encryption|payment|production deploy|database migration|schema migration|destructive data)\b|biztonsági audit|hitelesítés|jogosultság|titkosítás|éles telepítés|adatbázis[- ]migráció/iu.test(
 			task,
 		)
 	) {
-		complexityFloor = Math.max(complexityFloor, 7);
-		riskFloor = Math.max(riskFloor, 0.75);
+		complexity = Math.max(complexity, 7);
+		risk = Math.max(risk, 0.75);
 		factors.push("security, production, or data-integrity sensitive work");
 	}
 	if (
@@ -257,87 +243,46 @@ function deterministicAssessment(task: string): {
 			task,
 		)
 	) {
-		complexityFloor = Math.max(complexityFloor, 8);
-		riskFloor = Math.max(riskFloor, 0.55);
+		complexity = Math.max(complexity, 8);
+		risk = Math.max(risk, 0.55);
 		factors.push("repository-scale or architectural scope");
 	}
-	if (task.length > 1200) {
-		complexityFloor = Math.max(complexityFloor, 7);
+	if (
+		/\b(create|build|scaffold|set up|implement)\b[^\n]{0,80}\b(react|tailwind|next\.js|vite)\b|\b(react|tailwind|next\.js|vite)\b[^\n]{0,80}\b(project|application|app)\b|(?:készíts|hozz létre|építs)[^\n]{0,80}(?:react|tailwind|next\.js|vite)/iu.test(
+			task,
+		)
+	) {
+		complexity = Math.max(complexity, 8);
+		factors.push("frontend project creation or scaffolding");
+	}
+	if (
+		/\b(multiple|several|many)\s+(components?|files?|pages?|packages?|modules?)\b|\btöbb\s+(komponens|fájl|oldal|csomag|modul)/iu.test(
+			task,
+		)
+	) {
+		complexity = Math.max(complexity, 7);
+		factors.push("multi-file or multi-component scope");
+	}
+	if (
+		/\b(build|dev|development)\s+(setup|environment|server|configuration)\b|\b(set up|configure)\b[^\n]{0,60}\b(build|dev|development)\b|(?:build|dev|fejlesztői)[- ]?(?:setup|környezet|beállítás)|(?:állítsd be|konfiguráld)[^\n]{0,60}(?:build|dev|fejlesztői)/iu.test(
+			task,
+		)
+	) {
+		complexity = Math.max(complexity, 7);
+		factors.push("build or development environment setup");
+	}
+	if (task.length > 600) {
+		complexity = Math.max(complexity, 7);
 		factors.push("long multi-part task description");
 	}
-	return { complexityFloor, riskFloor, factors };
-}
-
-function heuristicRoute(task: string, fallbackReason = "router-error"): AutoRouteDecision {
-	const assessment = deterministicAssessment(task);
-	const complex = task.length > 600 || assessment.complexityFloor >= 7;
-	return complex
-		? {
-				route: "FRONTIER",
-				reason: "deterministic fallback selected frontier for complex or sensitive work",
-				complexity: Math.max(8, assessment.complexityFloor),
-				score: 0.4,
-				confidence: 0.6,
-				risk: Math.max(0.65, assessment.riskFloor),
-				capabilityFactors:
-					assessment.factors.length > 0 ? assessment.factors : ["task exceeds the focused local-work threshold"],
-				policyTriggers: ["deterministic fallback selected frontier"],
-				decisionSource: "deterministic-fallback",
-				fallbackReason,
-			}
-		: {
-				route: "LOCAL",
-				reason: "deterministic fallback selected local for focused low-risk work",
-				complexity: 3,
-				score: 0.8,
-				confidence: 0.8,
-				risk: 0.2,
-				capabilityFactors: ["focused low-risk task"],
-				policyTriggers: [],
-				decisionSource: "deterministic-fallback",
-				fallbackReason,
-			};
-}
-
-function applyHybridPolicy(
-	task: string,
-	assessment: Omit<AutoRouteDecision, "route" | "reason" | "policyTriggers" | "decisionSource"> & {
-		proposedRoute: "LOCAL" | "FRONTIER";
-		modelReason: string;
-	},
-): AutoRouteDecision {
-	const deterministic = deterministicAssessment(task);
-	const complexity = Math.max(assessment.complexity, deterministic.complexityFloor);
-	const risk = Math.max(assessment.risk, deterministic.riskFloor);
-	const capabilityFactors = [...new Set([...assessment.capabilityFactors, ...deterministic.factors])];
-	const policyTriggers: string[] = [];
-	if (assessment.proposedRoute === "FRONTIER") policyTriggers.push("local model requested frontier");
-	if (assessment.score < 0.65) policyTriggers.push(`local capability score ${assessment.score.toFixed(2)} < 0.65`);
-	if (assessment.confidence < 0.7) policyTriggers.push(`local confidence ${assessment.confidence.toFixed(2)} < 0.70`);
-	if (risk >= 0.65) policyTriggers.push(`task risk ${risk.toFixed(2)} >= 0.65`);
-	if (complexity >= 7) policyTriggers.push(`task complexity ${complexity} >= 7`);
-	const route = policyTriggers.length > 0 ? "FRONTIER" : "LOCAL";
+	const delegationRecommended = complexity >= 7 || risk >= 0.65;
 	return {
-		route,
-		reason:
-			route === "FRONTIER"
-				? `hybrid auto policy selected frontier (${policyTriggers.join("; ")}); local assessment: ${assessment.modelReason}`
-				: `hybrid auto policy selected local; local assessment: ${assessment.modelReason}`,
+		delegationRecommended,
 		complexity,
-		score: assessment.score,
-		confidence: assessment.confidence,
 		risk,
-		capabilityFactors,
-		policyTriggers,
-		decisionSource: "local-model",
+		factors,
+		policyTriggers: delegationRecommended ? ["deterministic complexity policy recommends frontier"] : [],
 	};
-}
-
-function explicitlyRequestsFrontier(task: string): boolean {
-	if (/\bdelegate_frontier\b/iu.test(task)) return true;
-	const target = /\b(frontier|codex|claude|gemini)\b/iu;
-	const action = /\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|hand\s*off)\b/iu;
-	return target.test(task) && action.test(task);
 }
 
 export class KlermRoutingController {
@@ -370,6 +315,7 @@ export class KlermRoutingController {
 			maxDelegationCycles: config.maxDelegationCycles,
 			transitionSequence: 0,
 			explicitFrontierRequestSatisfied: false,
+			delegationRecommended: undefined,
 		};
 	}
 
@@ -390,11 +336,24 @@ export class KlermRoutingController {
 		);
 	}
 
+	private hasAvailableFrontierModel(): boolean {
+		const reference = this.config.frontierModel;
+		if (!reference) return false;
+		const model = findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]);
+		return model !== undefined && !isLocalProviderId(model.provider);
+	}
+
 	getSystemPromptContribution(): string | undefined {
 		const localModel = this.config.localModel ?? "not configured";
 		const frontierModel = this.config.frontierModel ?? "not configured";
 		if (this.state.lane === "local") {
 			const returnedFromFrontier = this.state.lastTransition?.kind === "return";
+			const recommendedDelegation =
+				this.state.mode === "auto" &&
+				this.state.delegationRecommended === true &&
+				!returnedFromFrontier &&
+				(this.state.delegationCycle ?? 0) === 0 &&
+				this.hasAvailableFrontierModel();
 			return [
 				"<klerm_a2a>",
 				returnedFromFrontier
@@ -403,6 +362,19 @@ export class KlermRoutingController {
 				`Current local model: ${localModel}`,
 				`Configured frontier model: ${frontierModel}`,
 				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles}`,
+				...(this.state.mode === "auto" && !returnedFromFrontier
+					? [
+							"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
+							"Complete focused, low-risk work locally. For broad, risky, specialist, architecture, or multi-file work beyond your capability, inspect only enough context to create a precise handoff, then call delegate_frontier.",
+						]
+					: []),
+				...(recommendedDelegation
+					? [
+							"Klerm recommends frontier delegation for this task.",
+							"Inspect only enough context to summarize the handoff.",
+							"Call delegate_frontier before creating or modifying many files.",
+						]
+					: []),
 				...(returnedFromFrontier && this.state.lastTransition?.transcriptHash
 					? [`Frontier transcript hash: ${this.state.lastTransition.transcriptHash}`]
 					: []),
@@ -458,6 +430,7 @@ export class KlermRoutingController {
 			capabilityFactors: undefined,
 			policyTriggers: undefined,
 			decisionSource: undefined,
+			delegationRecommended: undefined,
 			fallbackReason: undefined,
 			completionOwner: undefined,
 			delegationCycle: 0,
@@ -502,6 +475,7 @@ export class KlermRoutingController {
 			capabilityFactors: undefined,
 			policyTriggers: undefined,
 			decisionSource: undefined,
+			delegationRecommended: undefined,
 			fallbackReason: undefined,
 			completionOwner: undefined,
 			delegationCycle: 0,
@@ -528,6 +502,7 @@ export class KlermRoutingController {
 			capabilityFactors: undefined,
 			policyTriggers: undefined,
 			decisionSource: undefined,
+			delegationRecommended: undefined,
 			fallbackReason: undefined,
 			completionOwner: undefined,
 			delegationCycle: 0,
@@ -538,20 +513,20 @@ export class KlermRoutingController {
 	}
 
 	getLocalModels(): Model<any>[] {
-		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => LOCAL_PROVIDER_IDS.has(model.provider));
+		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => isLocalProviderId(model.provider));
 	}
 
 	getFrontierModels(): Model<any>[] {
-		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => !LOCAL_PROVIDER_IDS.has(model.provider));
+		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => !isLocalProviderId(model.provider));
 	}
 
 	private resolveModel(reference: string, lane: "local" | "frontier"): Model<any> {
 		const model = findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]);
 		if (!model) throw new Error(`Model "${reference}" is unavailable. Use /${lane} to select an available model.`);
-		if (lane === "local" && !LOCAL_PROVIDER_IDS.has(model.provider)) {
+		if (lane === "local" && !isLocalProviderId(model.provider)) {
 			throw new Error(`Model "${reference}" is not a local model.`);
 		}
-		if (lane === "frontier" && LOCAL_PROVIDER_IDS.has(model.provider)) {
+		if (lane === "frontier" && isLocalProviderId(model.provider)) {
 			throw new Error(`Model "${reference}" is local; select it with /local.`);
 		}
 		return model;
@@ -600,6 +575,7 @@ export class KlermRoutingController {
 			capabilityFactors: this.state.capabilityFactors,
 			policyTriggers: this.state.policyTriggers,
 			decisionSource: this.state.decisionSource,
+			delegationRecommended: this.state.delegationRecommended,
 			fallbackReason: this.state.fallbackReason,
 			completionOwner:
 				transition?.toLane === "frontier" &&
@@ -749,101 +725,6 @@ export class KlermRoutingController {
 		};
 	}
 
-	private async selectAutoRoute(task: string, localModel: Model<any>): Promise<AutoRouteDecision> {
-		try {
-			const routerPrompt = [
-				"You are the Klerm local capability router. Assess whether this exact local model can complete the task correctly without frontier help.",
-				`Local model profile: ${JSON.stringify({
-					reference: modelReference(localModel),
-					contextWindow: localModel.contextWindow,
-					maxTokens: localModel.maxTokens,
-					reasoning: localModel.reasoning,
-					input: localModel.input,
-				})}`,
-				"Return only one JSON object with this exact shape:",
-				'{"route":"LOCAL"|"FRONTIER","score":0.0-1.0,"confidence":0.0-1.0,"risk":0.0-1.0,"complexity":1-10,"factors":["short factor"],"reason":"short reason"}',
-				"score means this local model's ability to finish correctly without frontier help. confidence means certainty in that ability and assessment. risk means the consequence of an incorrect local result.",
-				"Choose LOCAL only for focused, low-risk work when score >= 0.65, confidence >= 0.70, risk < 0.65, and complexity < 7.",
-				"Choose FRONTIER when unsure, when broad repository context or specialist reasoning is needed, or for security, authentication, migrations, destructive changes, production incidents, architecture, and large refactors.",
-				"Do not overstate confidence. The policy may override LOCAL for safety.",
-			].join("\n");
-			const response = await this.modelRuntime.completeSimple(
-				localModel,
-				{
-					systemPrompt: routerPrompt,
-					messages: [{ role: "user", content: task, timestamp: Date.now() }],
-				},
-				{ signal: AbortSignal.timeout(30_000) },
-			);
-			if (response.stopReason === "error" || response.stopReason === "aborted")
-				throw new Error(response.errorMessage);
-			const text = assistantText(response);
-			const start = text.indexOf("{");
-			const end = text.lastIndexOf("}");
-			if (start < 0 || end <= start) throw new Error("router did not return JSON");
-			const parsed = JSON.parse(text.slice(start, end + 1)) as {
-				route?: unknown;
-				reason?: unknown;
-				complexity?: unknown;
-				score?: unknown;
-				confidence?: unknown;
-				risk?: unknown;
-				factors?: unknown;
-			};
-			if (parsed.route !== "LOCAL" && parsed.route !== "FRONTIER")
-				throw new Error("router returned an invalid route");
-			if (
-				typeof parsed.score !== "number" ||
-				!Number.isFinite(parsed.score) ||
-				typeof parsed.confidence !== "number" ||
-				!Number.isFinite(parsed.confidence) ||
-				typeof parsed.risk !== "number" ||
-				!Number.isFinite(parsed.risk) ||
-				typeof parsed.complexity !== "number" ||
-				!Number.isFinite(parsed.complexity) ||
-				parsed.score < 0 ||
-				parsed.score > 1 ||
-				parsed.confidence < 0 ||
-				parsed.confidence > 1 ||
-				parsed.risk < 0 ||
-				parsed.risk > 1 ||
-				parsed.complexity < 1 ||
-				parsed.complexity > 10
-			) {
-				throw new Error("router omitted required numeric scores");
-			}
-			const factors = Array.isArray(parsed.factors)
-				? parsed.factors
-						.filter((factor): factor is string => typeof factor === "string" && factor.trim().length > 0)
-						.map((factor) => factor.trim())
-						.slice(0, 8)
-				: [];
-			return applyHybridPolicy(task, {
-				proposedRoute: parsed.route,
-				modelReason:
-					typeof parsed.reason === "string" && parsed.reason.trim()
-						? parsed.reason.trim()
-						: "local model supplied no reason",
-				complexity: Math.max(1, Math.min(10, Math.round(parsed.complexity))),
-				score: parsed.score,
-				confidence: parsed.confidence,
-				risk: parsed.risk,
-				capabilityFactors: factors.length > 0 ? factors : ["local model supplied no capability factors"],
-			});
-		} catch (error) {
-			const message = error instanceof Error ? error.message : "";
-			const fallbackReason =
-				error instanceof SyntaxError || message.includes("JSON") || message.includes("invalid route")
-					? "invalid-json"
-					: message.includes("numeric scores")
-						? "missing-scores"
-						: error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
-							? "timeout"
-							: "provider-error";
-			return heuristicRoute(task, fallbackReason);
-		}
-	}
-
 	async routePrompt(
 		task: string,
 		routingOverride?: KlermPromptRoutingOverride,
@@ -875,6 +756,7 @@ export class KlermRoutingController {
 				capabilityFactors: undefined,
 				policyTriggers: undefined,
 				decisionSource: undefined,
+				delegationRecommended: undefined,
 				fallbackReason: undefined,
 				completionOwner: "direct",
 				handbackEnabled: config.handbackEnabled,
@@ -891,16 +773,9 @@ export class KlermRoutingController {
 		const taskId = `task-${hash(`${timestamp}\n${task}`).slice(0, 16)}`;
 		let route: "LOCAL" | "FRONTIER";
 		let reason: string;
-		let complexity: number | undefined;
-		let score: number | undefined;
-		let confidence: number | undefined;
-		let risk: number | undefined;
-		let capabilityFactors: string[] | undefined;
-		let policyTriggers: string[] | undefined;
-		let decisionSource: KlermDecisionSource | undefined;
-		let fallbackReason: string | undefined;
 		let routerModel: string | undefined;
 		let completionOwner: KlermCompletionOwner;
+		let delegationAssessment: ReturnType<typeof assessDelegationRecommendation> | undefined;
 
 		if (routingOverride === "local") {
 			route = "LOCAL";
@@ -930,18 +805,10 @@ export class KlermRoutingController {
 			} else {
 				const localModel = this.resolveModel(config.localModel, "local");
 				routerModel = modelReference(localModel);
-				const decision = await this.selectAutoRoute(task, localModel);
-				route = decision.route;
-				reason = decision.reason;
-				complexity = decision.complexity;
-				score = decision.score;
-				confidence = decision.confidence;
-				risk = decision.risk;
-				capabilityFactors = decision.capabilityFactors;
-				policyTriggers = decision.policyTriggers;
-				decisionSource = decision.decisionSource;
-				fallbackReason = decision.fallbackReason;
-				completionOwner = decision.route === "FRONTIER" && !config.handbackEnabled ? "frontier" : "local";
+				delegationAssessment = assessDelegationRecommendation(task);
+				route = "LOCAL";
+				reason = "auto mode starts local orchestrator to assess the task and delegate when needed";
+				completionOwner = "local";
 			}
 		}
 
@@ -950,7 +817,7 @@ export class KlermRoutingController {
 			throw new Error(`${route === "LOCAL" ? "Local" : "Frontier"} routing requires a configured model.`);
 		const model = this.resolveModel(reference, route === "LOCAL" ? "local" : "frontier");
 		const selectedTarget = modelReference(model);
-		const initialCycle = route === "FRONTIER" && completionOwner === "local" ? 1 : 0;
+		const initialCycle = 0;
 		this.state = {
 			taskId,
 			task,
@@ -961,14 +828,15 @@ export class KlermRoutingController {
 			selectedTarget: undefined,
 			otherModelCalled: routerModel && routerModel !== selectedTarget ? routerModel : undefined,
 			reason,
-			complexity,
-			score,
-			confidence,
-			risk,
-			capabilityFactors,
-			policyTriggers,
-			decisionSource,
-			fallbackReason,
+			complexity: delegationAssessment?.complexity,
+			score: undefined,
+			confidence: undefined,
+			risk: delegationAssessment?.risk,
+			capabilityFactors: delegationAssessment?.factors,
+			policyTriggers: delegationAssessment?.policyTriggers,
+			decisionSource: delegationAssessment ? "deterministic-policy" : undefined,
+			delegationRecommended: delegationAssessment?.delegationRecommended,
+			fallbackReason: undefined,
 			completionOwner,
 			handbackEnabled: config.handbackEnabled,
 			delegationCycle: initialCycle,
@@ -986,14 +854,12 @@ export class KlermRoutingController {
 			routerModel,
 			selectedTarget,
 			reason,
-			complexity,
-			score,
-			confidence,
-			risk,
-			capabilityFactors,
-			policyTriggers,
-			decisionSource,
-			fallbackReason,
+			complexity: delegationAssessment?.complexity,
+			risk: delegationAssessment?.risk,
+			capabilityFactors: delegationAssessment?.factors,
+			policyTriggers: delegationAssessment?.policyTriggers,
+			decisionSource: delegationAssessment ? "deterministic-policy" : undefined,
+			delegationRecommended: delegationAssessment?.delegationRecommended,
 			completionOwner,
 			handbackEnabled: config.handbackEnabled,
 			delegationCycle: initialCycle,
@@ -1119,16 +985,34 @@ export class KlermRoutingController {
 		return [this.createDelegationTool(), this.createReturnToLocalTool()];
 	}
 
-	async enforceExplicitFrontierDelegation(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
+	async enforceRequiredFrontierDelegation(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
+		const recommendedEnforcement =
+			this.state.mode === "auto" &&
+			this.state.delegationRecommended === true &&
+			(this.state.delegationCycle ?? 0) === 0;
 		if (
 			this.state.lane !== "local" ||
-			!this.explicitFrontierRequest ||
+			(!this.explicitFrontierRequest && !recommendedEnforcement) ||
 			this.state.explicitFrontierRequestSatisfied ||
 			this.pendingDelegation
 		)
 			return undefined;
+		if (recommendedEnforcement && !this.hasAvailableFrontierModel()) {
+			await this.logLifecycle(
+				"HANDOFF_REJECTED",
+				"LOCAL",
+				this.state.selectedTarget ?? this.config.localModel ?? "local",
+				"recommended frontier handoff skipped because no available frontier model is configured",
+			);
+			return undefined;
+		}
 
-		const reason = "user explicitly requested frontier delegation; Klerm enforced the handoff";
+		const reason = this.explicitFrontierRequest
+			? "user explicitly requested frontier delegation; Klerm enforced the handoff"
+			: "local orchestrator ignored recommended frontier handoff for complex auto task";
+		const trigger: KlermHandoffTrigger = this.explicitFrontierRequest
+			? "explicit-enforcement"
+			: "recommended-enforcement";
 		const summary = localResponse.trim() || "The local worker returned without a native delegation tool call.";
 		this.requestFrontierDelegation(
 			{
@@ -1136,7 +1020,7 @@ export class KlermRoutingController {
 				summary,
 				remainingWork: this.task,
 			},
-			"explicit-enforcement",
+			trigger,
 		);
 		const localReference = this.config.localModel;
 		if (!localReference) throw new Error("Cannot enforce frontier delegation without a configured local model.");
@@ -1460,6 +1344,7 @@ export class KlermRoutingController {
 				capabilityFactors: this.state.capabilityFactors,
 				policyTriggers: this.state.policyTriggers,
 				decisionSource: this.state.decisionSource,
+				delegationRecommended: this.state.delegationRecommended,
 				fallbackReason: this.state.fallbackReason,
 				completionOwner: this.state.completionOwner,
 				handbackEnabled: this.config.handbackEnabled,
@@ -1484,6 +1369,7 @@ export class KlermRoutingController {
 				capabilityFactors,
 				policyTriggers,
 				decisionSource,
+				delegationRecommended,
 				fallbackReason,
 				completionOwner,
 				handbackEnabled,
@@ -1510,6 +1396,7 @@ export class KlermRoutingController {
 				capabilityFactors,
 				policyTriggers,
 				decisionSource,
+				delegationRecommended,
 				fallbackReason,
 				completionOwner,
 				handbackEnabled,

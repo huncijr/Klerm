@@ -1,7 +1,7 @@
 export type KlermRouteMode = "mock";
 export type KlermRoute = "SELF" | "LOCAL" | "FRONTIER";
 export type KlermPromptRoutingOverride = "local" | "frontier";
-export type KlermDecisionSource = "local-model" | "deterministic-fallback";
+export type KlermDecisionSource = "local-model" | "deterministic-fallback" | "deterministic-policy";
 export type KlermWorkerLane = "local" | "frontier";
 export type KlermCompletionOwner = KlermWorkerLane | "direct";
 export type KlermTransitionKind = "initial" | "delegate" | "return";
@@ -9,6 +9,7 @@ export type KlermHandoffTrigger =
 	| "initial-route"
 	| "native-tool"
 	| "explicit-enforcement"
+	| "recommended-enforcement"
 	| "required-handback"
 	| "turn-limit"
 	| "tool-error-limit"
@@ -62,6 +63,7 @@ export interface KlermRouteDecision {
 	capabilityFactors?: string[];
 	policyTriggers?: string[];
 	decisionSource?: KlermDecisionSource;
+	delegationRecommended?: boolean;
 	fallbackReason?: string;
 	completionOwner?: KlermCompletionOwner;
 	handbackEnabled?: boolean;
@@ -101,6 +103,7 @@ export interface KlermRoutingState {
 	capabilityFactors?: string[];
 	policyTriggers?: string[];
 	decisionSource?: KlermDecisionSource;
+	delegationRecommended?: boolean;
 	fallbackReason?: string;
 	completionOwner?: KlermCompletionOwner;
 	handbackEnabled?: boolean;

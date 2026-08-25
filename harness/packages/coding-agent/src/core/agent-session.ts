@@ -1250,7 +1250,7 @@ export class AgentSession {
 				const enforcedDelegation =
 					this._klermRoutingController?.routingState.lane === "frontier"
 						? await this._klermRoutingController.enforceRequiredLocalReturn(response)
-						: await this._klermRoutingController?.enforceExplicitFrontierDelegation(response);
+						: await this._klermRoutingController?.enforceRequiredFrontierDelegation(response);
 				if (!enforcedDelegation) {
 					succeeded = true;
 					break;

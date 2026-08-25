@@ -92,3 +92,20 @@ These variables are read by Pi itself:
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 
 Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Providers](providers.md#environment-variables-or-auth-file).
+
+## Klerm Local Runtimes
+
+Klerm probes local catalogs without downloading models:
+
+| Variable | Description |
+|----------|-------------|
+| `KLERM_OFFLINE` | Disable Klerm startup network operations |
+| `KLERM_OLLAMA_URL` | Override the Ollama endpoint; defaults to `http://127.0.0.1:11434` |
+| `KLERM_LM_STUDIO_URL` | Override the LM Studio endpoint; defaults to `http://127.0.0.1:1234` |
+| `KLERM_LM_STUDIO_API_KEY` | Optional LM Studio bearer token |
+| `KLERM_VLLM_URL` | Override the vLLM endpoint; defaults to `http://127.0.0.1:8000` |
+| `KLERM_VLLM_API_KEY` | Optional vLLM bearer token |
+| `KLERM_LLAMA_CPP_SERVER_URL` | Override the standalone llama.cpp endpoint; defaults to `http://127.0.0.1:8080` |
+| `KLERM_LLAMA_CPP_SERVER_API_KEY` | Optional standalone llama.cpp bearer token |
+| `KLERM_OPENAI_LOCAL_URL` | Add another OpenAI-compatible local endpoint |
+| `KLERM_OPENAI_LOCAL_API_KEY` | Optional bearer token for that additional endpoint |

@@ -66,6 +66,12 @@ when the user explicitly asks it to consult Codex, the frontier worker, or the
 other configured model. It may also delegate work that is too complex, risky,
 or blocked locally.
 
+In auto mode Klerm always starts the local orchestrator. Deterministic checks
+mark broad, risky, multi-file, project-scaffolding, and build-setup tasks with
+`delegationRecommended`. If the first completed local response ignores that
+recommendation, Klerm enforces the frontier handoff and logs trigger
+`recommended-enforcement` before returning completed frontier work to local.
+
 For local-owned tasks, the frontier worker receives `return_to_local` and sends
 a structured result back for local verification. This can repeat until the task
 is complete or the configured delegation cycle budget is exhausted. Automatic
@@ -86,15 +92,26 @@ For explicit frontier requests, the runtime also detects when a local model
 prints a pseudo tool call instead of using the native tool interface. Klerm
 enforces the requested handoff and records why it was enforced.
 
+Interactive startup and agent work use small animated status spinners. A
+`➤ Done` status replaces the spinner after the complete agent run settles.
+
 ## Local Runtime
 
-Klerm discovers installed Ollama models without downloading them:
+Klerm discovers models from Ollama, LM Studio, vLLM, and standalone llama.cpp
+servers without downloading them:
 
 ```bash
 klerm local status
 klerm local models
 klerm providers
 ```
+
+Default OpenAI-compatible probes use ports `1234` (LM Studio), `8000` (vLLM),
+and `8080` (llama.cpp server). Override them with
+`KLERM_LM_STUDIO_URL`, `KLERM_VLLM_URL`, or
+`KLERM_LLAMA_CPP_SERVER_URL`. Configure another compatible endpoint with
+`KLERM_OPENAI_LOCAL_URL`. Unsloth exports are detected through whichever
+runtime serves them.
 
 ## Configuration And Logs
 

@@ -37,7 +37,5 @@ npm-debug.log*
 .cache/
 .klerm/
 
-# Local-only docs — do not push
-AGENTS.md
-FORK_REVIEW.md
-PLAN.md
+# Local inherited harness instructions
+/harness/AGENTS.md

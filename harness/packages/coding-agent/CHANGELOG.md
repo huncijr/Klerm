@@ -6,6 +6,13 @@
 
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
 - Added bounded bidirectional Klerm routing with native frontier returns, local verification, deterministic transition logs, and interactive handback controls.
+- Added automatic local model discovery for LM Studio, vLLM, standalone llama.cpp servers, and configurable OpenAI-compatible endpoints.
+
+### Changed
+
+- Removed the changelog URL line from the interactive update-available notice.
+- Changed automatic routing to always start locally, deterministically recommend frontier for complex tasks, and enforce ignored recommendations after the first completed local response.
+- Changed interactive mode to show animated startup/working feedback and a compact completion indicator.
 
 ### Fixed
 

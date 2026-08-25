@@ -4,7 +4,7 @@ import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
-export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
+export type StatusIndicatorKind = "startup" | "working" | "completed" | "retry" | "compaction" | "branchSummary";
 
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;
@@ -35,6 +35,31 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			(text) => theme.fg("muted", text),
 			message,
 			indicator,
+		);
+	}
+}
+
+export class StartupStatusIndicator extends StatusIndicator {
+	constructor(ui: TUI) {
+		super(
+			"startup",
+			ui,
+			(spinner) => theme.fg("accent", spinner),
+			(text) => theme.fg("muted", text),
+			"Starting Klerm...",
+		);
+	}
+}
+
+export class CompletedStatusIndicator extends StatusIndicator {
+	constructor(ui: TUI) {
+		super(
+			"completed",
+			ui,
+			(text) => text,
+			(text) => theme.fg("accent", text),
+			"➤ Done",
+			{ frames: [] },
 		);
 	}
 }

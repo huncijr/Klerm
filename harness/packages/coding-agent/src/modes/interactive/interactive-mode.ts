@@ -29,8 +29,6 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
-	getCapabilities,
-	hyperlink,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -99,8 +97,13 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-import { getOllamaServerUrl, OllamaClient, ollamaModelId } from "../../extensions/ollama/client.ts";
 import type { KlermRoutingMode } from "../../klerm/config.ts";
+import { isLocalProviderId } from "../../klerm/local-providers.ts";
+import {
+	discoverLocalRuntimes,
+	formatLocalRuntimeModels,
+	formatLocalRuntimeStatus,
+} from "../../klerm/local-runtime-discovery.ts";
 import type { KlermRoutingState } from "../../klerm/router/types.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -144,8 +147,10 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
+	CompletedStatusIndicator,
 	IdleStatus,
 	RetryStatusIndicator,
+	StartupStatusIndicator,
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
@@ -495,6 +500,7 @@ export class InteractiveMode {
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	private agentRunCompletedSuccessfully = false;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -753,9 +759,7 @@ export class InteractiveMode {
 				const models = this.session.modelRuntime
 					.getAvailableSnapshot()
 					.filter((model) =>
-						lane === "local"
-							? model.provider === "ollama" || model.provider === "llama.cpp"
-							: model.provider !== "ollama" && model.provider !== "llama.cpp",
+						lane === "local" ? isLocalProviderId(model.provider) : !isLocalProviderId(model.provider),
 					);
 				return createFuzzyAutocompleteItems(models, modelPrefix, getModelSearchText, (model) => ({
 					value: `model ${model.provider}/${model.id}`,
@@ -1014,6 +1018,7 @@ export class InteractiveMode {
 		this.isInitialized = true;
 
 		await this.themeController.applyFromSettings();
+		this.showStatusIndicator(new StartupStatusIndicator(this.ui));
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
@@ -1078,7 +1083,7 @@ export class InteractiveMode {
 					"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
 					"",
 					"Klerm routing quick guide:",
-					"  /local model <model>     set the local Ollama router/worker",
+					"  /local model <model>     set a detected local router/worker",
 					"  /frontier model <model>  set the frontier worker, for example Codex",
 					"  /routing auto            local decides: small tasks local, hard tasks frontier",
 					"  /routing local           force normal prompts to local",
@@ -1143,6 +1148,8 @@ export class InteractiveMode {
 
 		// Initialize available provider count for footer display
 		await this.updateAvailableProviderCount();
+		this.clearStatusIndicator("startup");
+		this.ui.requestRender();
 	}
 
 	/**
@@ -3254,6 +3261,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.agentRunCompletedSuccessfully = false;
 				this.pendingTools.clear();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3371,6 +3379,7 @@ export class InteractiveMode {
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
+					this.agentRunCompletedSuccessfully = this.streamingMessage.stopReason === "stop";
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
 						const retryAttempt = this.session.retryAttempt;
@@ -3470,6 +3479,10 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				if (this.agentRunCompletedSuccessfully) {
+					this.showStatusIndicator(new CompletedStatusIndicator(this.ui));
+					this.ui.requestRender();
+				}
 				await this.checkShutdownRequested();
 				break;
 
@@ -4348,11 +4361,6 @@ export class InteractiveMode {
 	showNewVersionNotification(release: LatestPiRelease): void {
 		const action = theme.fg("accent", `${APP_NAME} update`);
 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
-		const changelogUrl = "https://pi.dev/changelog";
-		const changelogLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", changelogUrl), changelogUrl)
-			: theme.fg("accent", changelogUrl);
-		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
 		const note = release.note?.trim();
 
 		this.chatContainer.addChild(new Spacer(1));
@@ -4369,7 +4377,6 @@ export class InteractiveMode {
 			);
 			this.chatContainer.addChild(new Spacer(1));
 		}
-		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
 		this.ui.requestRender();
 	}
@@ -4885,32 +4892,22 @@ export class InteractiveMode {
 		}
 
 		if (lane === "local" && (command.action === "status" || command.action === "models")) {
-			try {
-				const client = new OllamaClient(getOllamaServerUrl());
-				const models = await client.list(AbortSignal.timeout(5000));
-				if (command.action === "status") {
-					this.showStatus(
-						`Ollama: running at ${client.serverUrl} (${models.length} model(s))\nConfigured local model: ${routing.config.localModel ?? "not configured"}`,
-					);
-				} else {
-					this.showStatus(
-						models.length > 0
-							? `Ollama models: ${models.map((model) => ollamaModelId(model)).join(", ")}`
-							: "No local Ollama models installed. Suggested: ollama pull qwen2.5-coder:7b",
-					);
-				}
-				await this.session.modelRuntime.refresh({
-					providers: ["ollama"],
-					allowNetwork: true,
-					signal: AbortSignal.timeout(5000),
-				});
-			} catch (error) {
-				if (command.action === "status") {
-					this.showStatus(
-						`Ollama: unavailable (${error instanceof Error ? error.message : String(error)})\nConfigured local model: ${routing.config.localModel ?? "not configured"}`,
-					);
-				} else {
-					this.showError(`Ollama unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			const results = await discoverLocalRuntimes(undefined, AbortSignal.timeout(5000));
+			const output =
+				command.action === "status"
+					? `${formatLocalRuntimeStatus(results)}\n\nConfigured local model: ${routing.config.localModel ?? "not configured"}`
+					: formatLocalRuntimeModels(results);
+			this.showStatus(output);
+			const providers = results.filter((result) => !result.error).map((result) => result.providerId);
+			if (providers.length > 0) {
+				try {
+					await this.session.modelRuntime.refresh({
+						providers,
+						allowNetwork: true,
+						signal: AbortSignal.timeout(5000),
+					});
+				} catch {
+					// The discovery result remains useful if a catalog refresh races with server shutdown.
 				}
 			}
 			return;
@@ -4953,7 +4950,7 @@ export class InteractiveMode {
 					...this.session.modelRuntime.getAvailableSnapshot(),
 				]);
 				const provider = command.reference.slice(0, command.reference.indexOf("/"));
-				if (!cached && (provider === "ollama" || provider === "llama.cpp")) {
+				if (!cached && isLocalProviderId(provider)) {
 					await this.session.modelRuntime.refresh({
 						providers: [provider],
 						allowNetwork: true,
@@ -5086,6 +5083,14 @@ export class InteractiveMode {
 			lines.push(
 				`Auto score: ${assessedRoute} · capability ${Math.round(state.score * 100)}% · confidence ${Math.round(state.confidence * 100)}% · risk ${Math.round(state.risk * 100)}%`,
 			);
+		}
+		if (
+			state.mode === "auto" &&
+			state.delegationRecommended &&
+			(state.delegationCycle ?? 0) === 0 &&
+			!state.explicitFrontierRequestSatisfied
+		) {
+			lines.push("Delegation recommended: frontier");
 		}
 
 		this.klermRoutingStatus.setText(lines.join("\n"));
@@ -5315,10 +5320,8 @@ export class InteractiveMode {
 				initialSearchInput,
 				{
 					filter: (model) =>
-						lane === "local"
-							? model.provider === "ollama" || model.provider === "llama.cpp"
-							: model.provider !== "ollama" && model.provider !== "llama.cpp",
-					hint: lane === "local" ? "Local Ollama and llama.cpp models" : "Configured frontier models",
+						lane === "local" ? isLocalProviderId(model.provider) : !isLocalProviderId(model.provider),
+					hint: lane === "local" ? "Detected local runtime models" : "Configured frontier models",
 					persistDefault: false,
 				},
 			);

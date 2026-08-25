@@ -197,13 +197,11 @@ describe("interactive Klerm commands", () => {
 		try {
 			await prototype.handleKlermModelCommand.call(context, "local", "status");
 			expect(context.showStatus).toHaveBeenCalledWith(
-				expect.stringContaining(
-					"Ollama: running at http://127.0.0.1:11434 (1 model(s))\nConfigured local model: ollama/qwen2.5-coder:7b",
-				),
+				expect.stringContaining("Ollama: running\nEndpoint: http://127.0.0.1:11434\nModels: 1"),
 			);
 
 			await prototype.handleKlermModelCommand.call(context, "local", "models");
-			expect(context.showStatus).toHaveBeenLastCalledWith("Ollama models: qwen2.5-coder:7b");
+			expect(context.showStatus).toHaveBeenLastCalledWith("ollama/qwen2.5-coder:7b");
 			expect(list).toHaveBeenCalledTimes(2);
 		} finally {
 			list.mockRestore();

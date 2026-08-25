@@ -12,10 +12,10 @@ and deterministic JSONL decision logs.
 ## Current Capabilities
 
 - Interactive `klerm` terminal UI with read, edit, write, and shell tools.
-- Local model discovery through Ollama and llama.cpp.
+- Local model discovery through Ollama, LM Studio, vLLM, and llama.cpp.
 - Frontier workers through configured providers such as OpenAI Codex or Google.
 - `off`, `local`, `frontier`, and `auto` routing modes.
-- Hybrid local capability scoring with deterministic safety overrides.
+- Local-first automatic routing with deterministic frontier recommendations.
 - Repeated local-to-frontier-to-local handoffs in the same session through
   `delegate_frontier` and `return_to_local`.
 - Provider-neutral handoff context between different model APIs.
@@ -70,7 +70,10 @@ provider.
 
 ## Local Worker
 
-Klerm discovers installed Ollama models without downloading them automatically.
+Klerm discovers models exposed by Ollama and common local OpenAI-compatible
+runtimes without downloading them automatically. Default probes cover LM Studio
+on port `1234`, vLLM on port `8000`, and a standalone llama.cpp server on port
+`8080`.
 
 ```bash
 ollama pull qwen3.5:9b-q4_K_M
@@ -78,6 +81,15 @@ klerm local status
 klerm local models
 klerm providers
 ```
+
+Use `KLERM_LM_STUDIO_URL`, `KLERM_VLLM_URL`, or
+`KLERM_LLAMA_CPP_SERVER_URL` to override those endpoints. Any other compatible
+server can be added with `KLERM_OPENAI_LOCAL_URL`; set the matching
+`*_API_KEY` variable when its endpoint requires bearer authentication.
+
+Unsloth prepares and exports models but does not run a distinct inference API.
+Klerm detects an Unsloth model through the server that hosts it, such as vLLM,
+LM Studio, or llama.cpp.
 
 Configure the local and frontier workers in the interactive CLI:
 
@@ -98,7 +110,7 @@ Configure the local and frontier workers in the interactive CLI:
 | `/frontier` or `/frontier model` | Open the frontier model selector. |
 | `/frontier model <provider/model>` | Persist the frontier worker model. |
 | `/model <provider/model>` | Set the direct model used when routing is `off`. |
-| `/routing auto` | Score local capability, confidence, task risk, and complexity before selecting local or frontier execution. |
+| `/routing auto` | Start locally, then delegate complex or risky work to frontier. |
 | `/routing local` | Send normal prompts to the local worker. |
 | `/routing frontier` | Send normal prompts directly to the frontier worker. |
 | `/routing off` | Disable A2A routing and use the direct model. |
@@ -119,29 +131,26 @@ Routing: auto
 Return to local: on
 Delegation cycles: 0/3
 Active route: local · ollama/qwen3.5:9b-q4_K_M
-Auto score: local · capability 86% · confidence 84% · risk 12%
+Delegation recommended: frontier
 ```
 
-## Automatic Capability Scoring
+## Automatic Delegation Recommendation
 
-In `auto` mode the configured local model first receives its model profile and
-the task. It returns a structured self-assessment:
+In `auto` mode every task starts with the configured local orchestrator. Klerm
+logs `INITIAL_ROUTE` and `LOCAL_STARTED` before any frontier handoff.
 
-- `score`: estimated ability to finish correctly without frontier help.
-- `confidence`: certainty in that capability assessment and execution.
-- `risk`: consequence of an incorrect local result.
-- `complexity`: task complexity from 1 to 10.
-- `capabilityFactors`: short reasons supporting the assessment.
+Klerm applies deterministic checks to recommend delegation for long multi-part
+tasks, frontend project scaffolding, multi-file or multi-component work,
+build/development setup, security-sensitive changes, architecture, and
+repository-scale work. This sets `delegationRecommended` but never changes the
+initial route away from local.
 
-Klerm selects frontier when the local model requests it, or when `score < 0.65`,
-`confidence < 0.70`, `risk >= 0.65`, or `complexity >= 7`. Deterministic checks
-raise risk and complexity for security, authentication, production,
-data-migration, architectural, and repository-scale work. This prevents an
-overconfident local assessment from bypassing safety policy.
-
-If the local router times out or returns invalid JSON, Klerm uses a
-deterministic fallback assessment. The decision log records `decisionSource` as
-either `local-model` or `deterministic-fallback`.
+For a recommended task, the local system prompt instructs the model to inspect
+only enough context to prepare a handoff and call `delegate_frontier` before
+creating or modifying many files. If its first completed local response omits
+the native tool call, Klerm enforces the handoff with trigger
+`recommended-enforcement`. A successful frontier result returns to local for
+verification when handback is enabled.
 
 During a local-to-frontier handoff, Klerm inserts a yellow function-call style
 notice directly before the frontier response:
@@ -171,10 +180,10 @@ delegates another focused issue while the configured cycle budget remains.
 Klerm switches workers between agent turns while preserving the session,
 transcript, working directory, and tool results.
 
-Explicit handoff requests are enforced by the runtime. If a small local model
-prints a code example that imitates `delegate_frontier` instead of issuing a
-native tool call, Klerm still starts the configured frontier worker and records
-the enforced reason in the routing log.
+Explicit and deterministic recommended handoffs are enforced by the runtime. If
+a small local model prints a code example that imitates `delegate_frontier`
+instead of issuing a native tool call, Klerm still starts the configured
+frontier worker and records the enforced reason in the routing log.
 
 Example explicit delegation:
 
@@ -245,9 +254,9 @@ A successful local-to-frontier-to-local task includes `INITIAL_ROUTE`,
 events. Each handoff records a transition ID, cycle counter, trigger, and
 transcript hash. Structured result counts are logged, but frontier response
 content is not written to the decision log.
-Automatic route events also include `score`, `confidence`, `risk`, `complexity`,
-`capabilityFactors`, `policyTriggers`, and `decisionSource` so the handoff can be
-audited after completion.
+Automatic route events include `delegationRecommended`, `complexity`, `risk`,
+`capabilityFactors`, `policyTriggers`, and `decisionSource` so the handoff can
+be audited after completion.
 
 Inspect the latest automatic decisions:
 
@@ -265,10 +274,10 @@ Explain the unfamiliar provider API in this repository, and delegate if you cann
 ```
 
 The typo task should normally remain local. The authentication/migration and
-repository-architecture tasks must route to frontier because deterministic
-policy applies. The unfamiliar-provider task is intentionally model-dependent:
-use its score, confidence, factors, and policy triggers to evaluate whether the
-local router recognized uncertainty.
+repository-architecture tasks start locally with `delegationRecommended: true`,
+then use a native or enforced frontier handoff. The unfamiliar-provider task is
+intentionally model-dependent and may remain local unless a deterministic rule
+matches or the local orchestrator delegates it.
 
 Router diagnostics:
 

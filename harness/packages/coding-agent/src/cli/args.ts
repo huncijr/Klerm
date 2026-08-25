@@ -278,7 +278,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
-  ${APP_NAME} local <status|models>     Inspect the local Ollama runtime
+  ${APP_NAME} local <status|models>     Inspect detected local model runtimes
   ${APP_NAME} providers                 List all model providers and status
   ${APP_NAME} debug route <task>        Preview a mock routing decision
   ${APP_NAME} debug decisions           Print Klerm routing decisions
@@ -444,6 +444,15 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   KLERM_OFFLINE                    - Disable startup network operations when set to 1/true/yes
+  KLERM_OLLAMA_URL                 - Ollama endpoint (default: http://127.0.0.1:11434)
+  KLERM_LM_STUDIO_URL              - LM Studio endpoint (default: http://127.0.0.1:1234)
+  KLERM_LM_STUDIO_API_KEY          - Optional LM Studio bearer token
+  KLERM_VLLM_URL                   - vLLM endpoint (default: http://127.0.0.1:8000)
+  KLERM_VLLM_API_KEY               - Optional vLLM bearer token
+  KLERM_LLAMA_CPP_SERVER_URL       - Standalone llama.cpp endpoint (default: http://127.0.0.1:8080)
+  KLERM_LLAMA_CPP_SERVER_API_KEY   - Optional standalone llama.cpp bearer token
+  KLERM_OPENAI_LOCAL_URL           - Additional OpenAI-compatible local endpoint
+  KLERM_OPENAI_LOCAL_API_KEY       - Optional bearer token for the additional endpoint
   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
