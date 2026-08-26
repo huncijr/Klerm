@@ -70,10 +70,15 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 
 export type TransportSetting = Transport;
 
+export type McpServerTransport = "stdio" | "http" | "sse";
+
 export interface McpServerSettings {
-	command: string;
+	transport?: McpServerTransport;
+	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
 	enabled?: boolean;
 }
 
@@ -144,7 +149,7 @@ export interface Settings {
 	tuiMode?: TuiMode; // default: "regular"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
-	mcpServers?: Record<string, McpServerSettings>; // stdio MCP servers; project entries replace global entries by name
+	mcpServers?: Record<string, McpServerSettings>; // MCP servers; project entries replace global entries by name
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {

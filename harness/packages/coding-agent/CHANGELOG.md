@@ -9,6 +9,8 @@
 - Added automatic local model discovery for LM Studio, vLLM, standalone llama.cpp servers, and configurable OpenAI-compatible endpoints.
 - Added configurable initial Klerm worker lanes with persistent `/active` and `/activ` controls, including mandatory frontier-to-local completion.
 - Added trusted global/project stdio MCP server configuration, `/mcp` and `/mcpset` controls, and namespaced MCP tools.
+- Added a guided `/mcpset` setup wizard with Enter-to-skip optional MCP fields and masked environment-variable review.
+- Added Streamable HTTP and SSE MCP transport support with optional request headers.
 
 ### Changed
 

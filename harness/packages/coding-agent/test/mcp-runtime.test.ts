@@ -63,4 +63,29 @@ describe("MCP stdio runtime", () => {
 		expect(runtime.getStatus("typo")[0]).toMatchObject({ state: "failed", error: "unknown server setting: enable" });
 		await runtime.close();
 	});
+
+	it("validates HTTP and SSE server configuration by transport", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "klerm-mcp-"));
+		const runtime = new McpRuntime(tempDir, {
+			badHttpUrl: { transport: "http", url: "file:///tmp/server" },
+			badSseCommand: { transport: "sse", url: "https://example.com/sse", command: "node" },
+			badHttpHeader: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: 1 } } as never,
+		});
+
+		await runtime.start(() => {});
+
+		expect(runtime.getStatus("badHttpUrl")[0]).toMatchObject({
+			state: "failed",
+			error: "http URL must be a valid http or https URL",
+		});
+		expect(runtime.getStatus("badSseCommand")[0]).toMatchObject({
+			state: "failed",
+			error: "sse servers cannot set command or args",
+		});
+		expect(runtime.getStatus("badHttpHeader")[0]).toMatchObject({
+			state: "failed",
+			error: "HTTP header values must be strings",
+		});
+		await runtime.close();
+	});
 });

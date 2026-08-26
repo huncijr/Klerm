@@ -137,23 +137,33 @@ runtime serves them.
 
 ## MCP
 
-Klerm exposes tools from configured stdio MCP servers as
+Klerm exposes tools from configured MCP servers as
 `mcp_<server>_<tool>`. Configure and inspect servers interactively:
 
 ```text
+/mcpset
+/mcpset add
 /mcpset filesystem stdio npx -y @modelcontextprotocol/server-filesystem /home/user/project
+/mcpset remote http https://example.com/mcp Authorization="Bearer token"
+/mcpset legacy-sse sse https://example.com/sse X-API-Key=token
 /mcp
 /mcpset filesystem disable
 /mcpset filesystem enable
 /mcpset filesystem remove
 ```
 
-Commands write global settings by default. Add `--project` immediately after
-`/mcpset` to write `.klerm/settings.json`; project MCP servers start only after
-the project is trusted. Configuration changes reload the session so old server
-processes close before the tool registry is rebuilt. The first MCP milestone
-supports stdio tools only, not HTTP/SSE, prompts, resources, or MCP tasks.
-Server-side tool-list changes require `/reload` in this milestone.
+Run `/mcpset` without arguments for a guided setup. It asks for scope, server
+name, transport, transport-specific connection fields, optional credentials or
+headers, and enabled state. Optional fields can be skipped with Enter; type
+`back`, `cancel`, or `?` during the flow for navigation.
+
+Scripted commands write global settings by default. Add `--project` immediately
+after `/mcpset` to write `.klerm/settings.json`; project MCP servers start only
+after the project is trusted. Configuration changes reload the session so old
+connections close before the tool registry is rebuilt. Klerm supports stdio,
+Streamable HTTP, and SSE tool transports. Prompts, resources, MCP tasks, and
+automatic server-side tool-list refresh are not implemented in this milestone;
+server-side tool-list changes require `/reload`.
 
 ## Configuration And Logs
 
@@ -188,8 +198,10 @@ klerm debug registry
 
 Klerm coding tools run with the permissions of the user and process that
 started the CLI. Review project instructions and third-party extensions, and
-use a container or sandbox for untrusted work. MCP servers are executable child
-processes with the same host permissions, so only configure commands you trust.
+use a container or sandbox for untrusted work. Stdio MCP servers are executable
+child processes with the same host permissions, and HTTP/SSE MCP servers can
+receive tool arguments and configured headers, so only configure servers you
+trust.
 
 ## License
 

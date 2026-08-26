@@ -306,29 +306,51 @@ See [packages.md](packages.md) for package management details.
 
 ### Klerm MCP Servers
 
-Klerm reads stdio MCP servers from `mcpServers` in
+Klerm reads MCP servers from `mcpServers` in
 `~/.klerm/agent/settings.json` and trusted project `.klerm/settings.json` files:
 
 ```json
 {
   "mcpServers": {
     "filesystem": {
+      "transport": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/project"],
+      "enabled": true
+    },
+    "remote": {
+      "transport": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer token" },
+      "enabled": true
+    },
+    "legacy-sse": {
+      "transport": "sse",
+      "url": "https://example.com/sse",
+      "headers": { "X-API-Key": "token" },
       "enabled": true
     }
   }
 }
 ```
 
-Each server supports `command`, optional string `args`, optional string-valued
-`env`, and optional `enabled` (default `true`). Klerm exposes discovered tools
-as `mcp_<server>_<tool>`. Use `/mcp` to inspect status and `/mcpset` to update
+Each server supports optional `transport` (`stdio`, `http`, or `sse`) and
+optional `enabled` (default `true`). Stdio servers use `command`, optional
+string `args`, and optional string-valued `env`; omitted `transport` is treated
+as `stdio` for existing configs. Streamable HTTP and SSE servers use `url` and
+optional string-valued `headers`. Klerm exposes discovered tools as
+`mcp_<server>_<tool>`. Use `/mcp` to inspect status and `/mcpset` to update
 servers. Project server entries replace global entries with the same name as a
-whole object; their nested fields are never merged with global environment
-values. Environment values are stored as plaintext; do not put secrets in a
-project settings file or commit them. Prefer a trusted wrapper command or
-process environment for credentials.
+whole object; their nested fields are never merged with global environment or
+header values. Environment values and headers are stored as plaintext; do not
+put secrets in a project settings file or commit them. Prefer a trusted wrapper
+command, process environment, or external secret store for credentials.
+
+Run `/mcpset` without arguments to open the guided setup wizard. It walks
+through scope, server name, transport, connection fields, optional stdio
+environment values or HTTP/SSE headers, enabled state, and a masked review
+screen. Optional fields accept plain Enter to skip where allowed; type `back`,
+`cancel`, or `?` at text prompts for navigation.
 
 ## Example
 

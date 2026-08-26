@@ -45,9 +45,11 @@
 - The persistent active-start policy can begin tasks in auto, local, frontier,
   or frontier-local mode. With handback enabled, normal frontier starts return
   to the local owner; explicit frontier task overrides remain frontier-owned.
-- Trusted stdio MCP servers can contribute namespaced tools to CLI sessions;
-  server lifecycle, status, and global/project configuration are available
-  through `/mcp` and `/mcpset`.
+- Trusted stdio, Streamable HTTP, and SSE MCP servers can contribute namespaced
+  tools to CLI sessions; server lifecycle, status, and global/project
+  configuration are available through `/mcp` and `/mcpset`. Empty `/mcpset` and
+  `/mcpset add` open a guided setup wizard with Enter-to-skip optional fields
+  and masked environment/header values.
 
 ## 2. Goal
 
@@ -377,7 +379,8 @@ Status: **not started**.
 - [x] Multi-runtime local model discovery without automatic downloads.
 - [x] Interactive startup, working, and successful-completion status feedback.
 - [x] Persistent active start-lane controls with mandatory frontier-local handback.
-- [x] Trusted stdio MCP tool bridge and interactive server configuration.
+- [x] Trusted stdio, Streamable HTTP, and SSE MCP tool bridge and interactive server configuration.
+- [x] Guided MCP setup wizard for stdio, Streamable HTTP, and SSE server configuration.
 
 ## 7. Open Questions
 

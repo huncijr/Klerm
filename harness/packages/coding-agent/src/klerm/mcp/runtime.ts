@@ -1,6 +1,12 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport, type SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+	StreamableHTTPClientTransport,
+	type StreamableHTTPClientTransportOptions,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import { APP_NAME, VERSION } from "../../config.ts";
@@ -24,6 +30,34 @@ interface McpConnection {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
+function getTransport(settings: McpServerSettings): "stdio" | "http" | "sse" {
+	return settings.transport ?? "stdio";
+}
+
+function validateStringRecord(value: unknown, label: string): void {
+	if (
+		value !== undefined &&
+		(typeof value !== "object" ||
+			value === null ||
+			Array.isArray(value) ||
+			Object.values(value).some((item) => typeof item !== "string"))
+	) {
+		throw new Error(`${label} values must be strings`);
+	}
+}
+
+function validateUrl(value: unknown, label: string): asserts value is string {
+	if (typeof value !== "string" || !value.trim()) {
+		throw new Error(`${label} URL must be a non-empty string`);
+	}
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported protocol");
+	} catch {
+		throw new Error(`${label} URL must be a valid http or https URL`);
+	}
+}
+
 function validateServer(name: string, settings: McpServerSettings): void {
 	if (!/^[A-Za-z0-9_-]+$/.test(name)) {
 		throw new Error("server names may contain only letters, numbers, underscores, and hyphens");
@@ -32,12 +66,16 @@ function validateServer(name: string, settings: McpServerSettings): void {
 		throw new Error("server configuration must be an object");
 	}
 	const unknownKeys = Object.keys(settings).filter(
-		(key) => key !== "command" && key !== "args" && key !== "env" && key !== "enabled",
+		(key) => !["transport", "command", "args", "env", "url", "headers", "enabled"].includes(key),
 	);
 	if (unknownKeys.length > 0) {
 		throw new Error(`unknown server setting${unknownKeys.length === 1 ? "" : "s"}: ${unknownKeys.join(", ")}`);
 	}
-	if (typeof settings.command !== "string" || !settings.command.trim()) {
+	const transport = getTransport(settings);
+	if (transport !== "stdio" && transport !== "http" && transport !== "sse") {
+		throw new Error("transport must be one of: stdio, http, sse");
+	}
+	if (transport === "stdio" && (typeof settings.command !== "string" || !settings.command.trim())) {
 		throw new Error("stdio command must be a non-empty string");
 	}
 	if (
@@ -46,18 +84,58 @@ function validateServer(name: string, settings: McpServerSettings): void {
 	) {
 		throw new Error("stdio args must be strings");
 	}
+	validateStringRecord(settings.env, "stdio environment");
+	validateStringRecord(settings.headers, "HTTP header");
+	if (transport === "stdio" && settings.url !== undefined) {
+		throw new Error("stdio servers cannot set url");
+	}
+	if (transport === "stdio" && settings.headers !== undefined) {
+		throw new Error("stdio servers cannot set headers");
+	}
 	if (
-		settings.env !== undefined &&
-		(typeof settings.env !== "object" ||
-			settings.env === null ||
-			Array.isArray(settings.env) ||
-			Object.values(settings.env).some((value) => typeof value !== "string"))
+		(transport === "http" || transport === "sse") &&
+		(settings.command !== undefined || settings.args !== undefined)
 	) {
-		throw new Error("stdio environment values must be strings");
+		throw new Error(`${transport} servers cannot set command or args`);
+	}
+	if ((transport === "http" || transport === "sse") && settings.env !== undefined) {
+		throw new Error(`${transport} servers cannot set env`);
+	}
+	if (transport === "http" || transport === "sse") {
+		validateUrl(settings.url, transport);
 	}
 	if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
 		throw new Error("enabled must be a boolean");
 	}
+}
+
+function createTransport(settings: McpServerSettings, cwd: string): Transport {
+	const transport = getTransport(settings);
+	if (transport === "http") {
+		const options: StreamableHTTPClientTransportOptions = settings.headers
+			? { requestInit: { headers: settings.headers } }
+			: {};
+		return new StreamableHTTPClientTransport(new URL(settings.url ?? ""), options);
+	}
+	if (transport === "sse") {
+		const headers = settings.headers;
+		const options: SSEClientTransportOptions = headers
+			? {
+					requestInit: { headers },
+					eventSourceInit: {
+						fetch: (url, init) => globalThis.fetch(url, { ...init, headers: { ...init.headers, ...headers } }),
+					},
+				}
+			: {};
+		return new SSEClientTransport(new URL(settings.url ?? ""), options);
+	}
+	return new StdioClientTransport({
+		command: settings.command ?? "",
+		args: settings.args,
+		env: { ...getDefaultEnvironment(), ...(settings.env ?? {}) },
+		cwd,
+		stderr: "pipe",
+	});
 }
 
 function sanitizeToolName(value: string): string {
@@ -153,13 +231,7 @@ export class McpRuntime {
 	private async connect(name: string, settings: McpServerSettings): Promise<McpConnection> {
 		validateServer(name, settings);
 		const client = new Client({ name: APP_NAME, version: VERSION });
-		const transport = new StdioClientTransport({
-			command: settings.command,
-			args: settings.args,
-			env: { ...getDefaultEnvironment(), ...(settings.env ?? {}) },
-			cwd: this.cwd,
-			stderr: "pipe",
-		});
+		const transport = createTransport(settings, this.cwd);
 		transport.onclose = () => {
 			if (this.closed) return;
 			const status = this.statuses.get(name);
@@ -168,10 +240,10 @@ export class McpRuntime {
 				state: "failed",
 				tools: status?.tools ?? [],
 				skippedTools: status?.skippedTools ?? [],
-				error: "server process disconnected",
+				error: "server transport disconnected",
 			});
 		};
-		transport.stderr?.on("data", () => {});
+		if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
 		try {
 			await client.connect(transport, { timeout: REQUEST_TIMEOUT_MS });
 			const tools: Tool[] = [];

@@ -42,8 +42,9 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/active <auto|local|frontier|frontier-local>` | Set the Klerm initial worker lane (`/activ` is an alias) |
 | `/routing handback on|off` | Return delegated work to the task's completion owner |
 | `/routing cycles <1-20>` | Set the per-task A2A cycle safety limit (default `3`) |
-| `/mcp` | List configured stdio MCP servers and exposed tools |
-| `/mcpset [--project] <name> ...` | Add, remove, enable, or disable a stdio MCP server |
+| `/mcp` | List configured MCP servers and exposed tools |
+| `/mcpset`, `/mcpset add` | Add an MCP server with a guided setup wizard |
+| `/mcpset [--project] <name> ...` | Add, remove, enable, or disable an MCP server with a scripted command |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
@@ -313,6 +314,6 @@ pi --exclude-tools ask_question
 
 Pi keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
 
-Upstream Pi intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. Klerm adds a built-in stdio MCP tool bridge for its CLI; the other workflows remain available through extensions or packages, or external tools such as containers and tmux.
+Upstream Pi intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. Klerm adds a built-in MCP tool bridge for stdio, Streamable HTTP, and SSE CLI servers; the other workflows remain available through extensions or packages, or external tools such as containers and tmux.
 
 For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/).
