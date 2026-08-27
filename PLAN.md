@@ -34,14 +34,16 @@
 - Automatic routing always starts the local orchestrator. Deterministic task
   checks recommend frontier delegation for complex work without changing the
   initial route, and Klerm enforces an ignored recommendation after the first
-  completed local response. Factors, policy triggers, and decision source are
-  visible in the CLI and JSONL decision log.
+  completed local response. The same assessment and enforcement apply when the
+  persistent active-start policy forces a local start. Factors, policy triggers,
+  and decision source are visible in the CLI and JSONL decision log.
 - Local-owned tasks support repeated `local -> frontier -> local` transitions
   through native `delegate_frontier` and `return_to_local` tools. Frontier-owned
   tasks support the reverse `frontier -> local -> frontier` flow through
   `delegate_local` and `return_to_frontier`. Handback is enabled by default,
-  bounded by a persistent per-task cycle budget, and logged with transition IDs
-  and transcript hashes without storing worker response text.
+  controlled by a persistent per-task cycle budget that accepts any positive
+  integer or an explicit unlimited mode, and logged with transition IDs and
+  transcript hashes without storing worker response text.
 - The persistent active-start policy can begin tasks in auto, local, frontier,
   or frontier-local mode. With handback enabled, normal frontier starts return
   to the local owner; explicit frontier task overrides remain frontier-owned.
@@ -74,6 +76,25 @@ Build Klerm as an A2A (Agent-to-Agent) coding agent product where:
 - The A2A backend is proven in the CLI first.
 - A Tauri desktop app is built only after the CLI routing flow is stable.
 - Desktop rollout order is Linux first, then Windows, then macOS.
+
+### Desktop app source of truth
+
+- The detailed Tauri desktop roadmap, UX scope, model controls, routing and
+  delegation visualization, platform rollout, and app acceptance criteria live
+  in [`APP_PLAN.md`](APP_PLAN.md).
+- Before starting or changing any desktop-app work, read both `PLAN.md` and
+  `APP_PLAN.md`. Keep checking `APP_PLAN.md` throughout implementation and
+  verification so the active app milestone, scope, test requirements, and
+  deferred work remain aligned.
+- Update `APP_PLAN.md` when verified app work changes its status or materially
+  changes the desktop design. Keep the high-level milestone status in this file
+  consistent with it.
+- The initial desktop implementation priority is the local-only foundation: a
+  centered workspace, minimal navigation, Ollama discovery/model selection, and
+  a complete local task flow. Add the richer tabs, frontier setup, routing and
+  delegation cycle UI, and advanced animations incrementally afterward.
+- Klerm is supported as a Tauri desktop app on Linux, Windows, and macOS only;
+  no standalone website/browser product is planned.
 
 ## 3. Base Decision — CLOSED: Fork Pi
 
@@ -323,12 +344,18 @@ Goal:
 
 Implementation steps:
 
+- Follow the detailed, continuously maintained app roadmap in
+  [`APP_PLAN.md`](APP_PLAN.md); check it before and throughout desktop work.
 - Add Tauri shell.
 - Use Klerm backend/CLI/server as sidecar.
 - Connect UI to backend via RPC/HTTP/WebSocket depending on what the Pi fork
   already supports best.
 - Implement initial views: chat, model registry, decision log, status/cost.
 - Use `Logo/Klerm_logo_no_background.png` as the app/window icon.
+- Implement the local-only Ollama model selection and task flow before adding
+  the complete tab set, frontier providers, delegation visualization, or rich
+  animation.
+- Do not ship or support the frontend as a standalone website.
 
 Suggested human test:
 

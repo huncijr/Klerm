@@ -236,13 +236,17 @@ describe("interactive Klerm commands", () => {
 		await prototype.handleKlermRoutingCommand.call(context, "handback on");
 		await prototype.handleKlermRoutingCommand.call(context, "handback off");
 		await prototype.handleKlermRoutingCommand.call(context, "cycles 5");
+		await prototype.handleKlermRoutingCommand.call(context, "cycles 999");
+		await prototype.handleKlermRoutingCommand.call(context, "cycles unlimited");
 		await prototype.handleKlermRoutingCommand.call(context, "status");
 
 		expect(routing.setAllowFrontierFallback).toHaveBeenNthCalledWith(1, true);
 		expect(routing.setAllowFrontierFallback).toHaveBeenNthCalledWith(2, false);
 		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(1, true);
 		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(2, false);
-		expect(routing.setMaxDelegationCycles).toHaveBeenCalledWith(5);
+		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(1, 5);
+		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(2, 999);
+		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(3, 0);
 		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: auto\nFrontier fallback: on");
 	});
 

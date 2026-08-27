@@ -12,7 +12,7 @@ Implementation status and strategy:
 
 - Pi has been imported into the Klerm product repo;
 - the harness installs, passes its checks, and the source CLI works;
-- real local/frontier routing and bounded owner-preserving handoffs work in both directions;
+- real local/frontier routing and configurable owner-preserving handoffs work in both directions, including an explicit unlimited cycle mode;
 - routing decisions are written to `.klerm/router-decisions.jsonl`;
 - automatic routing starts locally and enforces deterministic frontier
   recommendations for complex tasks;
@@ -27,7 +27,12 @@ Implementation status and strategy:
   credential-safe server configuration;
 - continue stabilizing and calibrating CLI A2A before building a desktop app;
 - build a Tauri app after the CLI A2A flow is stable;
-- target Linux desktop first, then Windows and macOS.
+- follow [`APP_PLAN.md`](APP_PLAN.md) as the detailed desktop source of truth and
+  keep it aligned with `PLAN.md` throughout implementation and verification;
+- start the app with the local-only Ollama model-selection and task flow before
+  adding frontier setup, routing/delegation tabs, and advanced animations;
+- target Linux desktop first, then Windows and macOS, with no standalone website
+  product.
 
 ## 2. Candidate Review Summary
 

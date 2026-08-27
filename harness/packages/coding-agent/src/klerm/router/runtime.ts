@@ -248,9 +248,10 @@ export function projectKlermHandoffContext(
 }
 
 function explicitlyRequestsFrontier(task: string): boolean {
-	if (/\bdelegate_frontier\b/iu.test(task)) return true;
-	const target = /\b(frontier|codex|claude|gemini)\b/iu;
-	const action = /\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|hand\s*off)\b/iu;
+	if (/\bdelegate_frontier\b|\bdelegate\s+task\b/iu.test(task)) return true;
+	const target = /\b(frontier|codex|claude|gemini)\b|(?:másik|masik)\s+modell?/iu;
+	const action =
+		/\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|h[ií]v\w*|hand\s*off)\b|(?:^|\s)(?:add|adjad|adja)\s+(?:át|at)(?:\s|$)/iu;
 	return target.test(task) && action.test(task);
 }
 
@@ -378,6 +379,10 @@ export class KlermRoutingController {
 		return this.state.handbackEnabled ?? this.config.handbackEnabled;
 	}
 
+	private delegationCycleLimitReached(cycle: number): boolean {
+		return this.config.maxDelegationCycles > 0 && cycle >= this.config.maxDelegationCycles;
+	}
+
 	private hasAvailableFrontierModel(): boolean {
 		const reference = this.config.frontierModel;
 		if (!reference) return false;
@@ -406,7 +411,7 @@ export class KlermRoutingController {
 						: "You are the Klerm local worker and may hand work to the configured frontier worker.",
 				`Current local model: ${localModel}`,
 				`Configured frontier model: ${frontierModel}`,
-				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles}`,
+				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
 				...(this.state.mode === "auto" && !returnedFromFrontier && !mustReturn
 					? [
 							"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
@@ -523,8 +528,8 @@ export class KlermRoutingController {
 	}
 
 	async setMaxDelegationCycles(maxDelegationCycles: number): Promise<void> {
-		if (!Number.isInteger(maxDelegationCycles) || maxDelegationCycles < 1 || maxDelegationCycles > 20) {
-			throw new Error("Delegation cycles must be an integer between 1 and 20.");
+		if (!Number.isSafeInteger(maxDelegationCycles) || maxDelegationCycles < 0) {
+			throw new Error("Delegation cycles must be a non-negative safe integer; use 0 for unlimited.");
 		}
 		await this.configStore.update({ maxDelegationCycles });
 		this.state = { ...this.state, maxDelegationCycles };
@@ -886,6 +891,7 @@ export class KlermRoutingController {
 			route = "LOCAL";
 			reason = "active start lane forced local";
 			completionOwner = "local";
+			if (config.routing === "auto") delegationAssessment = assessDelegationRecommendation(task);
 		} else if (config.activeStartLane === "frontier") {
 			route = "FRONTIER";
 			completionOwner = config.handbackEnabled && config.localModel ? "local" : "frontier";
@@ -1060,7 +1066,7 @@ export class KlermRoutingController {
 				) {
 					throw new Error("A Klerm handoff is already pending for this turn.");
 				}
-				if ((this.state.delegationCycle ?? 0) >= this.config.maxDelegationCycles) {
+				if (this.delegationCycleLimitReached(this.state.delegationCycle ?? 0)) {
 					await this.logLifecycle(
 						"HANDOFF_REJECTED",
 						"LOCAL",
@@ -1115,7 +1121,7 @@ export class KlermRoutingController {
 				) {
 					throw new Error("A Klerm handoff is already pending for this turn.");
 				}
-				if ((this.state.delegationCycle ?? 0) >= this.config.maxDelegationCycles) {
+				if (this.delegationCycleLimitReached(this.state.delegationCycle ?? 0)) {
 					await this.logLifecycle(
 						"HANDOFF_REJECTED",
 						"FRONTIER",
@@ -1431,7 +1437,7 @@ export class KlermRoutingController {
 		trigger: KlermHandoffTrigger,
 	): Promise<KlermModelTransition | undefined> {
 		const currentCycle = this.state.delegationCycle ?? 0;
-		if (currentCycle >= this.config.maxDelegationCycles) {
+		if (this.delegationCycleLimitReached(currentCycle)) {
 			this.pendingDelegation = undefined;
 			await this.logLifecycle(
 				"HANDOFF_REJECTED",
@@ -1468,7 +1474,7 @@ export class KlermRoutingController {
 		trigger: KlermHandoffTrigger,
 	): Promise<KlermModelTransition | undefined> {
 		const currentCycle = this.state.delegationCycle ?? 0;
-		if (currentCycle >= this.config.maxDelegationCycles) {
+		if (this.delegationCycleLimitReached(currentCycle)) {
 			this.pendingLocalDelegation = undefined;
 			await this.logLifecycle(
 				"HANDOFF_REJECTED",
@@ -1987,7 +1993,9 @@ export class KlermRoutingController {
 			`Frontier fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
 			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== this.config.handbackEnabled ? ` (configured ${this.config.handbackEnabled ? "on" : "off"})` : ""}`,
 			`Completion owner: ${this.state.completionOwner ?? "not assigned"}`,
-			`A2A cycles started: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles} (per-task safety limit)`,
+			this.config.maxDelegationCycles === 0
+				? `A2A cycles started: ${this.state.delegationCycle ?? 0}/unlimited (no cycle limit)`
+				: `A2A cycles started: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles} (per-task safety limit)`,
 			`Other model called: ${this.state.otherModelCalled ?? "none"}`,
 			`Task: ${this.state.task ?? "none"}`,
 			`Last decision: ${this.state.reason ?? "none"}`,

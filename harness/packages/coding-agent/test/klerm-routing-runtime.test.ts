@@ -645,7 +645,7 @@ describe("Klerm routing runtime", () => {
 		]);
 	});
 
-	it("enforces the recommended frontier handoff after the first completed local response", async () => {
+	it("enforces the recommended frontier handoff after a forced-local auto start", async () => {
 		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:local" }] });
 		const frontierFaux = registerFauxProvider({ provider: "openai-codex", models: [{ id: "gpt:frontier" }] });
 		const localModel = localFaux.getModel();
@@ -658,6 +658,7 @@ describe("Klerm routing runtime", () => {
 		} as unknown as ModelRuntime;
 		const store = await KlermConfigStore.load(tempDir, {
 			routing: "auto",
+			activeStartLane: "local",
 			localModel: "ollama/qwen:local",
 			frontierModel: "openai-codex/gpt:frontier",
 			handbackEnabled: true,
@@ -812,20 +813,23 @@ describe("Klerm routing runtime", () => {
 
 		await controller.setHandbackEnabled(false);
 		await controller.setActiveStartLane("frontier-local");
-		await controller.setMaxDelegationCycles(5);
+		await controller.setMaxDelegationCycles(99);
 		expect(JSON.parse(readFileSync(store.path, "utf8"))).toMatchObject({
 			handbackEnabled: false,
 			activeStartLane: "frontier-local",
-			maxDelegationCycles: 5,
+			maxDelegationCycles: 99,
 		});
 		const policyReloaded = await KlermConfigStore.load(tempDir);
 		expect(policyReloaded.get()).toMatchObject({
 			handbackEnabled: false,
 			activeStartLane: "frontier-local",
-			maxDelegationCycles: 5,
+			maxDelegationCycles: 99,
 		});
-		await expect(controller.setMaxDelegationCycles(0)).rejects.toThrow("between 1 and 20");
-		await store.update({ maxDelegationCycles: 99 });
+		await controller.setMaxDelegationCycles(0);
+		expect((await KlermConfigStore.load(tempDir)).get().maxDelegationCycles).toBe(0);
+		expect(controller.describe()).toContain("A2A cycles started: 0/unlimited (no cycle limit)");
+		await expect(controller.setMaxDelegationCycles(-1)).rejects.toThrow("use 0 for unlimited");
+		await store.update({ maxDelegationCycles: -1 });
 		expect((await KlermConfigStore.load(tempDir)).get().maxDelegationCycles).toBe(3);
 	});
 
@@ -1006,7 +1010,7 @@ describe("Klerm routing runtime", () => {
 		});
 	});
 
-	it("enforces an explicit frontier request when the local worker only prints a pseudo tool call", async () => {
+	it("enforces a Hungarian request for the other model when local only prints a pseudo tool call", async () => {
 		const localFaux = registerFauxProvider({
 			provider: "ollama",
 			models: [{ id: "qwen3.5:9b-q4_K_M" }],
@@ -1060,9 +1064,7 @@ describe("Klerm routing runtime", () => {
 				},
 			]);
 
-			await session.prompt(
-				"Írd le, milyen modell vagy, majd használd a delegate_frontier toolt, és kérd meg a Codex workert, hogy írja le, ő milyen modell.",
-			);
+			await session.prompt("Hívd át a másik modellt, és kérdezd meg, milyen modell.");
 
 			expect(localFaux.state.callCount).toBe(2);
 			expect(frontierFaux.state.callCount).toBe(1);
@@ -1076,8 +1078,11 @@ describe("Klerm routing runtime", () => {
 			const decisions = (await readKlermRouteDecisionLog(tempDir))
 				.trim()
 				.split("\n")
-				.map((line) => JSON.parse(line) as { event: string });
+				.map((line) => JSON.parse(line) as { event: string; trigger?: string });
 			expect(decisions.map((decision) => decision.event)).toContain("DELEGATE_FRONTIER");
+			expect(decisions.find((decision) => decision.event === "DELEGATE_FRONTIER")?.trigger).toBe(
+				"explicit-enforcement",
+			);
 		} finally {
 			session.dispose();
 			localFaux.unregister();
@@ -1241,7 +1246,7 @@ describe("Klerm routing runtime", () => {
 		}
 	});
 
-	it("rejects delegation after the configured frontier cycle budget", async () => {
+	it("can remove a reached frontier cycle limit and continue delegating", async () => {
 		const store = await KlermConfigStore.load(tempDir, {
 			routing: "local",
 			localModel: "ollama/qwen2.5-coder:7b",
@@ -1274,6 +1279,17 @@ describe("Klerm routing runtime", () => {
 		expect(await controller.prepareNextTurn(localTurn)).toBeUndefined();
 		expect(controller.routingState).toMatchObject({ lane: "local", delegationCycle: 1 });
 		expect(await readKlermRouteDecisionLog(tempDir)).toContain('"event":"HANDOFF_REJECTED"');
+
+		await controller.setMaxDelegationCycles(0);
+		controller.requestFrontierDelegation({ reason: "unlimited", summary: "again", remainingWork: "more" });
+		const unlimitedTransition = await controller.prepareNextTurn(localTurn);
+		expect(unlimitedTransition?.model).toBe(frontier);
+		await unlimitedTransition?.commit();
+		expect(controller.routingState).toMatchObject({
+			lane: "frontier",
+			delegationCycle: 2,
+			maxDelegationCycles: 0,
+		});
 	});
 
 	it("blocks a routing tool when the model batches it with another tool", async () => {

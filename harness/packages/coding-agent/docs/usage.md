@@ -41,7 +41,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/model` | Switch models |
 | `/active <auto|local|frontier|frontier-local>` | Set the Klerm initial worker lane (`/activ` is an alias) |
 | `/routing handback on|off` | Return delegated work to the task's completion owner |
-| `/routing cycles <1-20>` | Set the per-task A2A cycle safety limit (default `3`) |
+| `/routing cycles <count|unlimited>` | Set any positive per-task A2A cycle limit, or remove it with `unlimited`/`0` (default `3`) |
 | `/mcp` | List configured MCP servers and exposed tools |
 | `/mcpset`, `/mcpset add` | Add an MCP server with a guided setup wizard |
 | `/mcpset [--project] <name> ...` | Add, remove, enable, or disable an MCP server with a scripted command |
@@ -79,6 +79,10 @@ frontier model and return to the configured local completion owner. An explicit
 the local worker returns with `return_to_frontier`. Local-owned delegation uses
 `delegate_frontier` and `return_to_local`. One cycle is one delegation away from
 the owner plus its return; the return itself does not consume a second cycle.
+The default per-task limit is three cycles. Use `/routing cycles <count>` to set
+any positive integer, or `/routing cycles unlimited` (equivalent to `0`) to
+remove the limit. Cycle counts and transitions remain visible in decision logs
+when unlimited mode is active.
 
 Routed provider responses are recorded once each as `MODEL_RESPONSE` entries in
 `.klerm/router-decisions.jsonl`. These entries include provider/model attribution,

@@ -20,10 +20,12 @@
 
 - Removed the changelog URL line from the interactive update-available notice.
 - Changed automatic routing to always start locally, deterministically recommend frontier for complex tasks, and enforce ignored recommendations after the first completed local response.
+- Changed the persistent A2A cycle budget to accept any positive safe integer or an explicit unlimited mode through `/routing cycles unlimited` or `0`.
 - Changed interactive mode to show animated startup/working feedback and a compact completion indicator.
 
 ### Fixed
 
+- Fixed complex automatic tasks bypassing deterministic frontier delegation enforcement when the persistent active start lane was local, and recognized explicit Hungarian requests for the other configured model.
 - Fixed the subagent example repeatedly prompting before running project-local agents in trusted repositories ([#8261](https://github.com/earendil-works/pi/issues/8261)).
 - Added `session_compact_failed` extension events so compaction failures and aborts expose their reason, retry state, source, and error message to handlers ([#8175](https://github.com/earendil-works/pi/issues/8175)).
 - Fixed npm package update checks treating older registry versions as available updates, preventing `pi update` from downgrading already-newer installed packages ([#8226](https://github.com/earendil-works/pi/issues/8226)).

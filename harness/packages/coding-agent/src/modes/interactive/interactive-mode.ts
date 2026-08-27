@@ -1103,7 +1103,7 @@ export class InteractiveMode {
 					"  /routing local           force normal prompts to local",
 					"  /routing frontier        force normal prompts to frontier",
 					"  /routing handback on     return delegated work to the task owner",
-					"  /routing cycles <count>  limit A2A work cycles per task (default 3)",
+					"  /routing cycles <count|unlimited>  set or remove the per-task A2A cycle limit",
 					"  /active <lane>            override the initial worker; auto follows /routing",
 					"  /routing off             use /model directly when /active is auto",
 					"  /model <model>            set the direct model used when routing is off",
@@ -5043,18 +5043,19 @@ export class InteractiveMode {
 			return;
 		}
 		if (argument.startsWith("cycles ")) {
-			const count = Number(argument.slice(7).trim());
-			if (!Number.isInteger(count) || count < 1 || count > 20) {
-				this.showError("Usage: /routing cycles <integer from 1 to 20>");
+			const value = argument.slice(7).trim().toLowerCase();
+			const count = value === "unlimited" || value === "off" || value === "none" ? 0 : Number(value);
+			if (!Number.isSafeInteger(count) || count < 0) {
+				this.showError("Usage: /routing cycles <positive integer|unlimited>");
 				return;
 			}
 			await routing.setMaxDelegationCycles(count);
 			this.updateKlermRoutingStatus();
-			this.showStatus(`A2A cycle safety limit: ${count}`);
+			this.showStatus(`A2A cycle limit: ${count === 0 ? "unlimited" : count}`);
 			return;
 		}
 		if (argument === "cycles") {
-			this.showError("Usage: /routing cycles <integer from 1 to 20>");
+			this.showError("Usage: /routing cycles <positive integer|unlimited>");
 			return;
 		}
 		if (argument !== "off" && argument !== "local" && argument !== "frontier" && argument !== "auto") {
@@ -5115,8 +5116,11 @@ export class InteractiveMode {
 			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== routing.config.handbackEnabled ? ` (configured ${routing.config.handbackEnabled ? "on" : "off"})` : ""}`,
 		);
 		lines.push(`Completion owner: ${state.completionOwner ?? "not assigned"}`);
+		const cycleLimit = state.maxDelegationCycles ?? routing.config.maxDelegationCycles;
 		lines.push(
-			`A2A cycles started: ${state.delegationCycle ?? 0}/${state.maxDelegationCycles ?? routing.config.maxDelegationCycles} (per-task safety limit)`,
+			cycleLimit === 0
+				? `A2A cycles started: ${state.delegationCycle ?? 0}/unlimited (no cycle limit)`
+				: `A2A cycles started: ${state.delegationCycle ?? 0}/${cycleLimit} (per-task safety limit)`,
 		);
 		if (state.lane === "direct" && state.selectedTarget && (state.handoffReason || state.decisionSource)) {
 			const lastRoute = state.selectedTarget === frontierModel ? "frontier" : "local";

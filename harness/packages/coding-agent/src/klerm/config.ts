@@ -38,8 +38,8 @@ function isActiveStartLane(value: unknown): value is KlermActiveStartLane {
 	return value === "auto" || value === "local" || value === "frontier" || value === "frontier-local";
 }
 
-function positiveInteger(value: unknown, fallback: number, maximum = Number.POSITIVE_INFINITY): number {
-	return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= maximum ? value : fallback;
+function integerAtLeast(value: unknown, fallback: number, minimum = 1): number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : fallback;
 }
 
 export class KlermConfigStore {
@@ -71,16 +71,16 @@ export class KlermConfigStore {
 				stored.allowFrontierFallback ??
 				DEFAULT_KLERM_CONFIG.allowFrontierFallback,
 			handbackEnabled: overrides.handbackEnabled ?? stored.handbackEnabled ?? DEFAULT_KLERM_CONFIG.handbackEnabled,
-			maxDelegationCycles: positiveInteger(
+			maxDelegationCycles: integerAtLeast(
 				overrides.maxDelegationCycles ?? stored.maxDelegationCycles,
 				DEFAULT_KLERM_CONFIG.maxDelegationCycles,
-				20,
+				0,
 			),
-			localMaxTurns: positiveInteger(
+			localMaxTurns: integerAtLeast(
 				overrides.localMaxTurns ?? stored.localMaxTurns,
 				DEFAULT_KLERM_CONFIG.localMaxTurns,
 			),
-			localMaxToolErrors: positiveInteger(
+			localMaxToolErrors: integerAtLeast(
 				overrides.localMaxToolErrors ?? stored.localMaxToolErrors,
 				DEFAULT_KLERM_CONFIG.localMaxToolErrors,
 			),

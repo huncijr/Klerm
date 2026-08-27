@@ -32,7 +32,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{
 		name: "routing",
 		description: "Configure Klerm routing, handback, and frontier fallback",
-		argumentHint: "<status|off|local|frontier|auto|fallback on|off|handback on|off|cycles <count>>",
+		argumentHint: "<status|off|local|frontier|auto|fallback on|off|handback on|off|cycles <count|unlimited>>",
 	},
 	{
 		name: "active",

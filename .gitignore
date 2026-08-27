@@ -39,3 +39,4 @@ npm-debug.log*
 
 # Local inherited harness instructions
 /harness/AGENTS.md
+/harness/APP_PLAN.md
