@@ -19,6 +19,7 @@ type FakeSession = {
 	subscribe: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
+	klermRouting?: object;
 };
 
 type FakeRuntimeHost = {
@@ -34,6 +35,7 @@ function createAssistantMessage(options?: {
 	text?: string;
 	stopReason?: AssistantMessage["stopReason"];
 	errorMessage?: string;
+	usage?: AssistantMessage["usage"];
 }): AssistantMessage {
 	return {
 		role: "assistant",
@@ -41,7 +43,7 @@ function createAssistantMessage(options?: {
 		api: "openai-responses",
 		provider: "openai",
 		model: "gpt-4o-mini",
-		usage: {
+		usage: options?.usage ?? {
 			input: 0,
 			output: 0,
 			cacheRead: 0,
@@ -55,7 +57,7 @@ function createAssistantMessage(options?: {
 	};
 }
 
-function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost {
+function createRuntimeHost(assistantMessage: AssistantMessage, klerm = false): FakeRuntimeHost {
 	const extensionRunner: FakeExtensionRunner = {
 		hasHandlers: (eventType: string) => eventType === "session_shutdown",
 		emit: vi.fn(async () => {}),
@@ -72,6 +74,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		subscribe: vi.fn(() => () => {}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
+		klermRouting: klerm ? {} : undefined,
 	};
 
 	return {
@@ -121,6 +124,38 @@ describe("runPrintMode", () => {
 		expect(session.prompt).toHaveBeenCalledWith("hello");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("prints finalized Klerm response usage after text output", async () => {
+		const runtimeHost = createRuntimeHost(
+			createAssistantMessage({
+				text: "done",
+				usage: {
+					input: 10,
+					output: 4,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 14,
+					cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+				},
+			}),
+			true,
+		);
+		const output: string[] = [];
+		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk, encodingOrCallback, callback) => {
+			output.push(String(chunk));
+			const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+			done?.();
+			return true;
+		}) as typeof process.stdout.write);
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+		});
+
+		expect(exitCode).toBe(0);
+		expect(output.join("")).toContain("done\nKlerm usage: input 10 | output 4 | total 14 | cost $0.003\n");
+		stdoutSpy.mockRestore();
 	});
 
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {

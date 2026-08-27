@@ -773,6 +773,9 @@ export class AgentSession {
 
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			await this._klermRoutingController?.recordModelResponse(event.message);
+		}
 
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);

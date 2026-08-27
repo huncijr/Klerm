@@ -16,10 +16,15 @@ Implementation status and strategy:
 - routing decisions are written to `.klerm/router-decisions.jsonl`;
 - automatic routing starts locally and enforces deterministic frontier
   recommendations for complex tasks;
+- routed provider responses produce single model-attributed token and
+  model-catalog cost accounting events without duplicating transition costs;
+- finalized TUI and text-mode answers show their response token and cost totals
+  directly below the answer;
 - local discovery supports Ollama and common OpenAI-compatible runtimes without
   automatic model downloads;
-- persistent active start-lane policy and trusted stdio MCP tools are integrated
-  into the CLI;
+- persistent active start-lane policy and trusted stdio, Streamable HTTP, and
+  SSE MCP tools are integrated into the CLI, including explicit AI-driven
+  credential-safe server configuration;
 - continue stabilizing and calibrating CLI A2A before building a desktop app;
 - build a Tauri app after the CLI A2A flow is stable;
 - target Linux desktop first, then Windows and macOS.

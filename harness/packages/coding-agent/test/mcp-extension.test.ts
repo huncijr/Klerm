@@ -1,14 +1,182 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI, ExtensionCommandContext, RegisteredCommand } from "../src/core/extensions/types.ts";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	RegisteredCommand,
+	ToolDefinition,
+} from "../src/core/extensions/types.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createMcpExtension } from "../src/klerm/mcp/extension.ts";
 
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
+
 describe("MCP extension commands", () => {
+	it("notifies the UI before an MCP tool call", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setMcpServer("fake", { command: process.execPath, args: [fixture] });
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void> | void>();
+		const tools: ToolDefinition[] = [];
+		const pi = {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void> | void) => {
+				handlers.set(event, handler);
+			},
+			registerCommand: vi.fn(),
+			registerTool: (tool: ToolDefinition) => tools.push(tool),
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const notify = vi.fn();
+		const context = {
+			ui: { notify },
+			sessionManager: { getSessionId: () => "session-1" },
+		} as unknown as ExtensionContext;
+
+		await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, context);
+		await tools
+			.find((tool) => tool.name === "mcp_fake_echo_text")
+			?.execute("call-1", { text: "hello" }, undefined, undefined, undefined as never);
+
+		expect(notify).toHaveBeenCalledWith("mcp: fake/echo-text used");
+		await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, context);
+	});
+
+	it("lets the AI configure stdio, HTTP, and SSE MCP servers without credentials", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		const tools: ToolDefinition[] = [];
+		const pi = {
+			on: vi.fn(),
+			registerCommand: vi.fn(),
+			registerTool: (tool: ToolDefinition) => tools.push(tool),
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const notify = vi.fn();
+		const context = {
+			ui: { notify },
+			isProjectTrusted: () => true,
+		} as unknown as ExtensionContext;
+		const tool = tools.find((candidate) => candidate.name === "configure_mcp_server");
+
+		const stdioResult = await tool?.execute(
+			"call-stdio",
+			{ name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "server"] },
+			undefined,
+			undefined,
+			context,
+		);
+		await tool?.execute(
+			"call-http",
+			{ name: "remote", transport: "http", url: "https://example.com/mcp" },
+			undefined,
+			undefined,
+			context,
+		);
+		await tool?.execute(
+			"call-sse",
+			{ name: "events", transport: "sse", url: "https://example.com/sse", enabled: false },
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(settingsManager.getMcpServers()).toEqual({
+			filesystem: { transport: "stdio", command: "npx", args: ["-y", "server"], enabled: true },
+			remote: { transport: "http", url: "https://example.com/mcp", enabled: true },
+			events: { transport: "sse", url: "https://example.com/sse", enabled: false },
+		});
+		expect(stdioResult?.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("Run /reload to load its tools"),
+		});
+		expect(notify).toHaveBeenCalledWith("mcp: filesystem configured");
+		expect(notify).toHaveBeenCalledWith("mcp: remote configured");
+		expect(notify).toHaveBeenCalledWith("mcp: events configured");
+	});
+
+	it("blocks untrusted AI project configuration", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		const tools: ToolDefinition[] = [];
+		const pi = {
+			on: vi.fn(),
+			registerCommand: vi.fn(),
+			registerTool: (tool: ToolDefinition) => tools.push(tool),
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const tool = tools.find((candidate) => candidate.name === "configure_mcp_server");
+		const context = {
+			ui: { notify: vi.fn() },
+			isProjectTrusted: () => false,
+		} as unknown as ExtensionContext;
+
+		await expect(
+			tool?.execute(
+				"call-project",
+				{ name: "blocked", transport: "stdio", scope: "project", command: "node" },
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow("Project is not trusted");
+		expect(settingsManager.getMcpServers()).toEqual({});
+	});
+
+	it("preserves compatible credentials without exposing them in the AI tool result", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setMcpServer("remote", {
+			transport: "http",
+			url: "https://old.example.com/mcp",
+			headers: { Authorization: "Bearer secret-token" },
+		});
+		const tools: ToolDefinition[] = [];
+		const pi = {
+			on: vi.fn(),
+			registerCommand: vi.fn(),
+			registerTool: (tool: ToolDefinition) => tools.push(tool),
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const tool = tools.find((candidate) => candidate.name === "configure_mcp_server");
+		const notify = vi.fn();
+		const context = {
+			ui: { notify },
+			isProjectTrusted: () => true,
+		} as unknown as ExtensionContext;
+		await expect(
+			tool?.execute(
+				"call-secret-url",
+				{ name: "remote", transport: "http", url: "https://user:secret-token@example.com/mcp" },
+				undefined,
+				undefined,
+				context,
+			),
+		).rejects.toThrow("URL cannot contain credentials");
+
+		const result = await tool?.execute(
+			"call-update",
+			{ name: "remote", transport: "http", url: "https://new.example.com/mcp" },
+			undefined,
+			undefined,
+			context,
+		);
+
+		expect(settingsManager.getMcpServers()).toEqual({
+			remote: {
+				transport: "http",
+				url: "https://new.example.com/mcp",
+				headers: { Authorization: "Bearer secret-token" },
+				enabled: true,
+			},
+		});
+		expect(JSON.stringify(result)).not.toContain("secret-token");
+		expect(JSON.stringify(notify.mock.calls)).not.toContain("secret-token");
+	});
+
 	it("configures a stdio server and reloads the session", async () => {
 		const settingsManager = SettingsManager.inMemory();
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -36,6 +204,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -74,6 +243,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -103,6 +273,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -142,6 +313,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -199,6 +371,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -242,6 +415,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},
@@ -276,6 +450,7 @@ describe("MCP extension commands", () => {
 		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
 		const pi = {
 			on: vi.fn(),
+			registerTool: vi.fn(),
 			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
 				commands.set(name, command);
 			},

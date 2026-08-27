@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage, PrepareNextTurnContext } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { KlermActiveStartLane, KlermConfig, KlermConfigStore, KlermRoutingMode } from "../config.ts";
 import { isLocalProviderId } from "../local-providers.ts";
+import { hasKlermResponseUsage } from "../response-usage.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
 	KlermCompletionOwner,
@@ -1927,6 +1928,52 @@ export class KlermRoutingController {
 			this.pendingReturnToFrontier = undefined;
 			this.preparedTransitionId = undefined;
 		}
+	}
+
+	async recordModelResponse(message: AssistantMessage): Promise<void> {
+		if (!this.state.taskId) return;
+		const usageAvailable = hasKlermResponseUsage(message.usage);
+		await this.log({
+			timestamp: new Date().toISOString(),
+			taskId: this.state.taskId,
+			event: "MODEL_RESPONSE",
+			task: this.task,
+			route: this.state.lane === "local" ? "LOCAL" : this.state.lane === "frontier" ? "FRONTIER" : "SELF",
+			routerModel: this.config.localModel,
+			selectedTarget: this.state.selectedTarget ?? `${message.provider}/${message.model}`,
+			reason: usageAvailable
+				? "provider response completed with usage metadata"
+				: "provider response completed without usage metadata",
+			complexity: this.state.complexity,
+			score: this.state.score,
+			confidence: this.state.confidence,
+			risk: this.state.risk,
+			capabilityFactors: this.state.capabilityFactors,
+			policyTriggers: this.state.policyTriggers,
+			decisionSource: this.state.decisionSource,
+			delegationRecommended: this.state.delegationRecommended,
+			fallbackReason: this.state.fallbackReason,
+			completionOwner: this.state.completionOwner,
+			handbackEnabled: this.handbackEnabledForCurrentTask(),
+			delegationCycle: this.state.delegationCycle,
+			maxDelegationCycles: this.state.maxDelegationCycles,
+			transcriptHash: this.state.lastTransition?.transcriptHash,
+			provider: message.provider,
+			model: message.responseModel ?? message.model,
+			inputTokens: message.usage.input,
+			outputTokens: message.usage.output,
+			cacheReadTokens: message.usage.cacheRead,
+			cacheWriteTokens: message.usage.cacheWrite,
+			reasoningTokens: message.usage.reasoning,
+			totalTokens: message.usage.totalTokens,
+			costUsd: message.usage.cost.total,
+			costSource: usageAvailable ? "model-catalog" : "unavailable",
+			usageAvailable,
+			registryProfileHash: this.profileHash(),
+			mode: this.config.routing,
+			activeStartLane: this.state.activeStartLane,
+			cwd: this.cwd,
+		});
 	}
 
 	describe(): string {

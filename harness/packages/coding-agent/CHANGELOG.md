@@ -11,6 +11,10 @@
 - Added trusted global/project stdio MCP server configuration, `/mcp` and `/mcpset` controls, and namespaced MCP tools.
 - Added a guided `/mcpset` setup wizard with Enter-to-skip optional MCP fields and masked environment-variable review.
 - Added Streamable HTTP and SSE MCP transport support with optional request headers.
+- Added visible `mcp: <server>/<tool> used` notices when an AI invokes an MCP tool.
+- Added the credential-safe `configure_mcp_server` tool so the AI can persist MCP configuration after explicit user requests.
+- Added one `MODEL_RESPONSE` decision event per routed provider response with model-attributed token, cache, reasoning, cost, source, and availability metadata.
+- Added per-response token and cost lines below finalized Klerm TUI and text-mode answers.
 
 ### Changed
 

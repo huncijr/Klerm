@@ -65,12 +65,32 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/changelog` | Display version history |
 | `/quit` | Quit pi |
 
+MCP tool calls display `mcp: <server>/<tool> used` before the remote call. Tool
+arguments and configured credentials are not included in this notice.
+
+The AI can create or update MCP settings with its `configure_mcp_server` tool
+when asked in natural language. It supports stdio, Streamable HTTP, and SSE,
+respects project trust, and cannot accept credential values. Add credentials
+with `/mcpset`, then run `/reload` to load tools from the new configuration.
+
 With handback enabled, `/routing frontier` and `/active frontier` start with the
 frontier model and return to the configured local completion owner. An explicit
 `/frontier task <prompt>` is frontier-owned: it can call `delegate_local`, and
 the local worker returns with `return_to_frontier`. Local-owned delegation uses
 `delegate_frontier` and `return_to_local`. One cycle is one delegation away from
 the owner plus its return; the return itself does not consume a second cycle.
+
+Routed provider responses are recorded once each as `MODEL_RESPONSE` entries in
+`.klerm/router-decisions.jsonl`. These entries include provider/model attribution,
+token class counts, total tokens, calculated USD cost, and deterministic usage
+availability. All-zero usage is marked unavailable because provider adapters do
+not expose a separate usage-provenance flag.
+
+In Klerm interactive mode, each finalized assistant response shows a dim
+`Klerm usage:` line directly underneath it with response token classes, total
+tokens, and cost. Text print mode (`-p`) prints the same line after the final
+answer. Streaming output does not show provisional usage, and JSON/RPC output
+remains structured without an added human-readable line.
 
 ## Message Queue
 

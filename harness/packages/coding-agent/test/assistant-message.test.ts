@@ -11,7 +11,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 function createAssistantMessage(
 	content: AssistantMessage["content"],
-	overrides: Partial<Pick<AssistantMessage, "stopReason">> = {},
+	overrides: Partial<Pick<AssistantMessage, "stopReason" | "usage">> = {},
 ): AssistantMessage {
 	return {
 		role: "assistant",
@@ -19,7 +19,7 @@ function createAssistantMessage(
 		api: "openai-responses",
 		provider: "openai",
 		model: "gpt-4o-mini",
-		usage: {
+		usage: overrides.usage ?? {
 			input: 0,
 			output: 0,
 			cacheRead: 0,
@@ -152,6 +152,42 @@ describe("AssistantMessageComponent", () => {
 		component.updateContent(message, false);
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("partial transformed");
 		expect(streamingStates).toEqual([true, false]);
+	});
+
+	test("shows finalized Klerm response usage below the answer", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "text", text: "completed answer" }], {
+			usage: {
+				input: 11,
+				output: 5,
+				cacheRead: 3,
+				cacheWrite: 2,
+				reasoning: 1,
+				totalTokens: 21,
+				cost: { input: 0.004, output: 0.005, cacheRead: 0.001, cacheWrite: 0.002, total: 0.012 },
+			},
+		});
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [], true);
+
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(100).join("\n"))).not.toContain("Klerm usage:");
+
+		component.updateContent(message, false);
+		const rendered = stripAnsi(component.render(160).join("\n"));
+		expect(rendered).toContain(
+			"Klerm usage: input 11 | output 5 | cache read 3 | cache write 2 | reasoning 1 | total 21 | cost $0.012",
+		);
+		expect(rendered.indexOf("completed answer")).toBeLessThan(rendered.indexOf("Klerm usage:"));
+	});
+
+	test("shows unavailable usage only when Klerm usage display is enabled", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([{ type: "text", text: "answer" }]);
+		const klermComponent = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [], true);
+		const normalComponent = new AssistantMessageComponent(message);
+
+		expect(stripAnsi(klermComponent.render(80).join("\n"))).toContain("Klerm usage: unavailable | cost unavailable");
+		expect(stripAnsi(normalComponent.render(80).join("\n"))).not.toContain("Klerm usage:");
 	});
 
 	test("reapplies Markdown transformers when available width changes", () => {

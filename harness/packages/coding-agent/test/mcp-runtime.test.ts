@@ -23,8 +23,12 @@ describe("MCP stdio runtime", () => {
 			disabled: { command: process.execPath, args: [fixture], enabled: false },
 		});
 		const tools: ToolDefinition[] = [];
+		const toolUseEvents: { serverName: string; remoteToolName: string; toolName: string }[] = [];
 
-		await runtime.start((tool) => tools.push(tool));
+		await runtime.start(
+			(tool) => tools.push(tool),
+			(event) => toolUseEvents.push(event),
+		);
 
 		expect(tools.map((tool) => tool.name)).toEqual(["mcp_fake_echo_text"]);
 		expect(runtime.getStatus("fake")).toEqual([
@@ -37,6 +41,9 @@ describe("MCP stdio runtime", () => {
 		expect(runtime.getStatus("disabled")[0]?.state).toBe("disabled");
 
 		const result = await tools[0]?.execute("call-1", { text: "hello" }, undefined, undefined, undefined as never);
+		expect(toolUseEvents).toEqual([
+			{ serverName: "fake", remoteToolName: "echo-text", toolName: "mcp_fake_echo_text" },
+		]);
 		expect(result).toEqual({
 			content: [{ type: "text", text: "echo:hello" }],
 			details: { echoed: "hello" },

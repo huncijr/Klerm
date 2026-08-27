@@ -1,7 +1,13 @@
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
+import { type Static, Type } from "typebox";
 import type { ExtensionCommandContext, ExtensionFactory } from "../../core/extensions/types.ts";
 import { parseCommandArgs } from "../../core/prompt-templates.ts";
-import type { McpServerTransport, SettingsManager, SettingsScope } from "../../core/settings-manager.ts";
+import type {
+	McpServerSettings,
+	McpServerTransport,
+	SettingsManager,
+	SettingsScope,
+} from "../../core/settings-manager.ts";
 import { McpRuntime } from "./runtime.ts";
 
 const USAGE = [
@@ -11,6 +17,20 @@ const USAGE = [
 	"/mcpset [--project] <name> sse <url> [Header=Value...]",
 	"/mcpset [--project] <name> remove|enable|disable|status",
 ].join("\n");
+
+const configureMcpServerSchema = Type.Object({
+	name: Type.String({
+		pattern: "^[A-Za-z0-9_-]+$",
+		maxLength: 100,
+		description: "Stable MCP server name using letters, numbers, underscores, or hyphens",
+	}),
+	transport: Type.Union([Type.Literal("stdio"), Type.Literal("http"), Type.Literal("sse")]),
+	scope: Type.Optional(Type.Union([Type.Literal("global"), Type.Literal("project")])),
+	command: Type.Optional(Type.String({ maxLength: 4000, description: "Required only for stdio" })),
+	args: Type.Optional(Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 200 })),
+	url: Type.Optional(Type.String({ maxLength: 8000, description: "Required only for HTTP and SSE" })),
+	enabled: Type.Optional(Type.Boolean()),
+});
 
 type WizardStep =
 	| "action"
@@ -108,6 +128,45 @@ function parseHeaderAssignments(values: string[]): Record<string, string> | unde
 		headers[key] = value.slice(separator + 1);
 	}
 	return headers;
+}
+
+function buildAgentMcpSettings(
+	params: Static<typeof configureMcpServerSchema>,
+	existing: McpServerSettings | undefined,
+): McpServerSettings {
+	if (params.transport === "stdio") {
+		if (!params.command?.trim()) throw new Error("command is required for stdio MCP servers");
+		if (params.url !== undefined) throw new Error("url cannot be set for a stdio MCP server");
+		return {
+			transport: "stdio",
+			command: params.command,
+			args: params.args ?? [],
+			...(existing?.transport !== "http" && existing?.transport !== "sse" && existing?.env
+				? { env: existing.env }
+				: {}),
+			enabled: params.enabled ?? existing?.enabled ?? true,
+		};
+	}
+	if (params.command !== undefined || params.args !== undefined) {
+		throw new Error(`command and args cannot be set for an ${params.transport} MCP server`);
+	}
+	if (!params.url?.trim()) throw new Error(`url is required for an ${params.transport} MCP server`);
+	let url: URL;
+	try {
+		url = new URL(params.url);
+		if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported protocol");
+	} catch {
+		throw new Error("MCP endpoint URL must be a valid http or https URL");
+	}
+	if (url.username || url.password) {
+		throw new Error("MCP endpoint URL cannot contain credentials; add authentication with /mcpset");
+	}
+	return {
+		transport: params.transport,
+		url: url.toString(),
+		...(existing?.transport !== "stdio" && existing?.headers ? { headers: existing.headers } : {}),
+		enabled: params.enabled ?? existing?.enabled ?? true,
+	};
 }
 
 async function wizardInput(
@@ -448,6 +507,47 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 		let runtime = new McpRuntime(cwd, {});
 		let unregisterSessionCleanup: (() => void) | undefined;
 
+		pi.registerTool({
+			name: "configure_mcp_server",
+			label: "Configure MCP server",
+			description:
+				"Create or update a Klerm MCP server when the user asks to configure MCP. Supports stdio, Streamable HTTP, and SSE. This tool intentionally cannot accept credentials; use /mcpset for environment values or HTTP headers.",
+			promptSnippet: "Create or update a credential-free stdio, HTTP, or SSE MCP server configuration.",
+			promptGuidelines: [
+				"Use configure_mcp_server when the user explicitly asks you to create, add, set up, or configure an MCP server.",
+				"Never request or place API keys, tokens, passwords, environment values, or HTTP headers in configure_mcp_server arguments.",
+				"After configuration, tell the user to add credentials with /mcpset if needed and run /reload to load the configured MCP tools.",
+			],
+			parameters: configureMcpServerSchema,
+			executionMode: "sequential",
+			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+				const scope = params.scope ?? "global";
+				if (scope === "project" && !ctx.isProjectTrusted()) {
+					throw new Error("Project is not trusted; refusing to write project MCP settings.");
+				}
+				const existing = settingsManager.getMcpServersForScope(scope)[params.name];
+				const server = buildAgentMcpSettings(params, existing);
+				settingsManager.setMcpServer(params.name, server, scope);
+				await settingsManager.flush();
+				ctx.ui.notify(`mcp: ${params.name} configured`);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `MCP server "${params.name}" configured in ${scope} settings. Run /reload to load its tools.${existing ? " Existing credential fields were preserved when compatible with the selected transport." : " Add credentials with /mcpset if the server requires them."}`,
+						},
+					],
+					details: {
+						name: params.name,
+						transport: params.transport,
+						scope,
+						enabled: server.enabled,
+						reloadRequired: true,
+					},
+				};
+			},
+		});
+
 		pi.on("session_start", async (_event, ctx) => {
 			await runtime.close();
 			unregisterSessionCleanup?.();
@@ -459,7 +559,10 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 				unregisterSessionCleanup = undefined;
 				void runtime.close();
 			});
-			await runtime.start((tool) => pi.registerTool(tool));
+			await runtime.start(
+				(tool) => pi.registerTool(tool),
+				({ serverName, remoteToolName }) => ctx.ui.notify(`mcp: ${serverName}/${remoteToolName} used`),
+			);
 			const failed = runtime.getStatus().filter((status) => status.state === "failed");
 			if (failed.length > 0) {
 				ctx.ui.notify(

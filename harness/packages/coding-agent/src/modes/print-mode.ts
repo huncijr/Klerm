@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import { formatKlermResponseUsage } from "../klerm/response-usage.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { toJsonEvent } from "./json-event.ts";
 
@@ -150,6 +151,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 						if (content.type === "text") {
 							writeRawStdout(`${content.text}\n`);
 						}
+					}
+					if (session.klermRouting !== undefined) {
+						writeRawStdout(`${formatKlermResponseUsage(assistantMsg.usage)}\n`);
 					}
 				}
 			}

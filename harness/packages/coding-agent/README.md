@@ -165,6 +165,19 @@ Streamable HTTP, and SSE tool transports. Prompts, resources, MCP tasks, and
 automatic server-side tool-list refresh are not implemented in this milestone;
 server-side tool-list changes require `/reload`.
 
+When an AI invokes an MCP tool, Klerm displays a notice before the remote call,
+for example `mcp: github/search_issues used`. The notice includes only the MCP
+server and tool names, never tool arguments, environment values, or headers.
+
+You can also ask the AI to configure a server, for example: `Configure a stdio
+MCP server named filesystem using npx -y @modelcontextprotocol/server-filesystem
+/home/user/project`. The AI uses `configure_mcp_server` to persist stdio,
+Streamable HTTP, or SSE settings and displays `mcp: <name> configured`. Run
+`/reload` afterward to load the new tools. For safety, the AI tool cannot accept
+credential values; add required environment values or HTTP headers through
+`/mcpset`. Compatible credentials already stored for a server are preserved
+when the AI updates it.
+
 ## Configuration And Logs
 
 ```text
@@ -180,6 +193,23 @@ klerm debug route "fix auth"
 klerm debug decisions
 klerm debug registry
 ```
+
+Each finalized routed provider response adds one `MODEL_RESPONSE` event to
+`.klerm/router-decisions.jsonl`. It records provider, resolved model, input,
+output, cache-read, cache-write, reasoning and total tokens, plus calculated USD
+cost. `costSource` is `model-catalog` when token metadata is available and
+`unavailable` for all-zero usage. One response produces one accounting event,
+so transition events cannot double-count delegated work.
+
+Klerm also shows the same response accounting directly below each finalized
+assistant response in the TUI and below the final response in `-p` text mode:
+
+```text
+Klerm usage: input 11 | output 5 | cache read 3 | total 19 | cost $0.012
+```
+
+The line is hidden while a response is streaming. When no token metadata is
+available it displays `Klerm usage: unavailable | cost unavailable`.
 
 ## Harness Documentation
 

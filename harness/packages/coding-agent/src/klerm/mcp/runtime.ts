@@ -23,6 +23,12 @@ export interface McpServerStatus {
 	error?: string;
 }
 
+export interface McpToolUseEvent {
+	serverName: string;
+	remoteToolName: string;
+	toolName: string;
+}
+
 interface McpConnection {
 	client: Client;
 	tools: Tool[];
@@ -263,7 +269,10 @@ export class McpRuntime {
 		}
 	}
 
-	async start(registerTool: (tool: ToolDefinition) => void): Promise<void> {
+	async start(
+		registerTool: (tool: ToolDefinition) => void,
+		onToolUsed?: (event: McpToolUseEvent) => void,
+	): Promise<void> {
 		if (this.closed) throw new Error("MCP runtime is closed");
 		const enabledServers = Object.entries(this.configuredServers)
 			.filter(([, settings]) => settings?.enabled !== false)
@@ -310,6 +319,7 @@ export class McpRuntime {
 					execute: async (_toolCallId, params, signal) => {
 						const argumentsValue =
 							typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
+						onToolUsed?.({ serverName: name, remoteToolName: remoteTool.name, toolName });
 						const callResult = await client.callTool(
 							{ name: remoteTool.name, arguments: argumentsValue },
 							undefined,

@@ -352,6 +352,14 @@ environment values or HTTP/SSE headers, enabled state, and a masked review
 screen. Optional fields accept plain Enter to skip where allowed; type `back`,
 `cancel`, or `?` at text prompts for navigation.
 
+The built-in `configure_mcp_server` tool lets the AI create or update these
+settings after an explicit natural-language request. It can set the server name,
+transport, scope, command and arguments or URL, and enabled state. It does not
+accept `env` or `headers`, preventing credentials from entering model tool
+arguments. Compatible credential fields from an existing server are preserved
+during updates. Project scope is rejected unless the project is trusted. Run
+`/reload` after the tool completes to connect the configured server.
+
 ## Example
 
 ```json

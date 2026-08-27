@@ -129,6 +129,70 @@ describe("Klerm routing runtime", () => {
 		});
 	});
 
+	it("logs deterministic model response token and cost metadata", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Record response accounting"))?.commit();
+		const reported = assistantMessage([{ type: "text", text: "done" }], local);
+		reported.responseModel = "qwen-resolved";
+		reported.usage = {
+			input: 11,
+			output: 5,
+			cacheRead: 3,
+			cacheWrite: 2,
+			reasoning: 1,
+			totalTokens: 21,
+			cost: { input: 0.004, output: 0.005, cacheRead: 0.001, cacheWrite: 0.002, total: 0.012 },
+		};
+		await controller.recordModelResponse(reported);
+		const unavailable = assistantMessage([{ type: "text", text: "no usage" }], local);
+		unavailable.usage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		await controller.recordModelResponse(unavailable);
+
+		const responses = (await readKlermRouteDecisionLog(tempDir))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>)
+			.filter((decision) => decision.event === "MODEL_RESPONSE");
+		expect(responses).toHaveLength(2);
+		expect(responses[0]).toMatchObject({
+			route: "LOCAL",
+			provider: "ollama",
+			model: "qwen-resolved",
+			inputTokens: 11,
+			outputTokens: 5,
+			cacheReadTokens: 3,
+			cacheWriteTokens: 2,
+			reasoningTokens: 1,
+			totalTokens: 21,
+			costUsd: 0.012,
+			costSource: "model-catalog",
+			usageAvailable: true,
+		});
+		expect(responses[1]).toMatchObject({
+			provider: "ollama",
+			model: "qwen2.5-coder:7b",
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 0,
+			costUsd: 0,
+			costSource: "unavailable",
+			usageAvailable: false,
+		});
+	});
+
 	it.each([
 		{
 			activeStartLane: "local" as const,
@@ -250,9 +314,11 @@ describe("Klerm routing runtime", () => {
 			expect(decisions.map((decision) => decision.event)).toEqual([
 				"INITIAL_ROUTE",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"FRONTIER_COMPLETED",
 				"RETURN_TO_LOCAL",
 				"LOCAL_RESUMED",
+				"MODEL_RESPONSE",
 				"TASK_COMPLETED",
 			]);
 			expect(decisions.every((decision) => decision.activeStartLane === "frontier-local")).toBe(true);
@@ -329,9 +395,11 @@ describe("Klerm routing runtime", () => {
 			expect(decisions.map((decision) => decision.event)).toEqual([
 				"INITIAL_ROUTE",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"FRONTIER_COMPLETED",
 				"RETURN_TO_LOCAL",
 				"LOCAL_RESUMED",
+				"MODEL_RESPONSE",
 				"TASK_COMPLETED",
 			]);
 			expect(decisions.every((decision) => decision.completionOwner === "local")).toBe(true);
@@ -433,10 +501,13 @@ describe("Klerm routing runtime", () => {
 			expect(decisions.map((decision) => decision.event)).toEqual([
 				"INITIAL_ROUTE",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"DELEGATE_LOCAL",
 				"LOCAL_STARTED",
+				"MODEL_RESPONSE",
 				"RETURN_TO_FRONTIER",
 				"FRONTIER_RESUMED",
+				"MODEL_RESPONSE",
 				"TASK_COMPLETED",
 			]);
 			expect(decisions.every((decision) => decision.completionOwner === "frontier")).toBe(true);
@@ -647,11 +718,14 @@ describe("Klerm routing runtime", () => {
 			expect(decisions.map((decision) => decision.event)).toEqual([
 				"INITIAL_ROUTE",
 				"LOCAL_STARTED",
+				"MODEL_RESPONSE",
 				"DELEGATE_FRONTIER",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"FRONTIER_COMPLETED",
 				"RETURN_TO_LOCAL",
 				"LOCAL_RESUMED",
+				"MODEL_RESPONSE",
 				"TASK_COMPLETED",
 			]);
 			expect(decisions.find((decision) => decision.event === "DELEGATE_FRONTIER")).toMatchObject({
@@ -1132,16 +1206,21 @@ describe("Klerm routing runtime", () => {
 			expect(decisions.map((decision) => decision.event)).toEqual([
 				"INITIAL_ROUTE",
 				"LOCAL_STARTED",
+				"MODEL_RESPONSE",
 				"DELEGATE_FRONTIER",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"FRONTIER_COMPLETED",
 				"RETURN_TO_LOCAL",
 				"LOCAL_RESUMED",
+				"MODEL_RESPONSE",
 				"DELEGATE_FRONTIER",
 				"FRONTIER_STARTED",
+				"MODEL_RESPONSE",
 				"FRONTIER_COMPLETED",
 				"RETURN_TO_LOCAL",
 				"LOCAL_RESUMED",
+				"MODEL_RESPONSE",
 				"TASK_COMPLETED",
 			]);
 			expect(

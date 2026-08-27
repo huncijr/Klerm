@@ -49,7 +49,18 @@
   tools to CLI sessions; server lifecycle, status, and global/project
   configuration are available through `/mcp` and `/mcpset`. Empty `/mcpset` and
   `/mcpset add` open a guided setup wizard with Enter-to-skip optional fields
-  and masked environment/header values.
+  and masked environment/header values. MCP tool execution shows a
+  credential-free `mcp: <server>/<tool> used` notice before the remote call.
+  The AI can persist credential-free MCP settings after an explicit request;
+  trusted project enforcement and compatible stored credential preservation
+  apply, with `/reload` required to load the resulting tools.
+- Every finalized routed provider response writes one `MODEL_RESPONSE` event
+  with provider/resolved-model attribution, token classes, total tokens,
+  model-catalog USD cost, cost source, and deterministic usage availability.
+  Keeping accounting separate from transition events prevents double-counting.
+- Finalized Klerm TUI responses display their token classes, total tokens, and
+  cost directly below the answer; text print mode does the same for its final
+  answer, while JSON/RPC output remains structured and unchanged.
 
 ## 2. Goal
 
@@ -263,8 +274,9 @@ Acceptance criteria:
 - Decision log explains why it selected that provider/model.
 - Token/cost metadata is captured when available.
 
-Status: **in progress**. Real frontier routing works; richer token/cost fields
-still need to be added to Klerm decision events.
+Status: **completed**. Real frontier routing works, and each finalized routed
+provider response records model-attributed token and model-catalog cost metadata
+in a single accounting event.
 
 ### Milestone 5 — Local Model Runtime
 
@@ -381,10 +393,13 @@ Status: **not started**.
 - [x] Persistent active start-lane controls with mandatory frontier-local handback.
 - [x] Trusted stdio, Streamable HTTP, and SSE MCP tool bridge and interactive server configuration.
 - [x] Guided MCP setup wizard for stdio, Streamable HTTP, and SSE server configuration.
+- [x] Visible credential-free notices for MCP tool execution.
+- [x] AI-facing credential-safe MCP server configuration tool.
+- [x] Per-response provider/model token and cost metadata in deterministic decision logs.
+- [x] Per-response token and cost display below Klerm TUI and text-mode answers.
 
 ## 7. Open Questions
 
-- Which token and cost fields should be added to Klerm lifecycle events?
 - Which real local task set should calibrate deterministic recommendation
   thresholds before the Tauri milestone?
 - Which stable CLI/RPC boundary should the Linux Tauri frontend use?

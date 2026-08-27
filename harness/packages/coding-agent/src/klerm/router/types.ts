@@ -4,6 +4,7 @@ export type KlermRouteMode = "mock";
 export type KlermRoute = "SELF" | "LOCAL" | "FRONTIER";
 export type KlermPromptRoutingOverride = "local" | "frontier";
 export type KlermDecisionSource = "local-model" | "deterministic-fallback" | "deterministic-policy";
+export type KlermCostSource = "model-catalog" | "unavailable";
 export type KlermWorkerLane = "local" | "frontier";
 export type KlermCompletionOwner = KlermWorkerLane | "direct";
 export type KlermTransitionKind = "initial" | "delegate" | "return";
@@ -30,6 +31,7 @@ export type KlermDecisionEventType =
 	| "FRONTIER_RESUMED"
 	| "HANDOFF_REJECTED"
 	| "HANDOFF_FAILED"
+	| "MODEL_RESPONSE"
 	| "TASK_COMPLETED"
 	| "TASK_FAILED";
 
@@ -85,6 +87,17 @@ export interface KlermRouteDecision {
 	changedFileCount?: number;
 	verificationCount?: number;
 	openIssueCount?: number;
+	provider?: string;
+	model?: string;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	reasoningTokens?: number;
+	totalTokens?: number;
+	costUsd?: number;
+	costSource?: KlermCostSource;
+	usageAvailable?: boolean;
 	registryProfileHash: string;
 	mode: KlermRouteMode | "local" | "frontier" | "auto" | "off";
 	activeStartLane?: KlermActiveStartLane;
