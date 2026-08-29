@@ -104,7 +104,18 @@ import {
 	formatLocalRuntimeModels,
 	formatLocalRuntimeStatus,
 } from "../../klerm/local-runtime-discovery.ts";
-import type { KlermRoutingState } from "../../klerm/router/types.ts";
+import {
+	isKlermSessionTransitionData,
+	KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
+	type KlermRoutingState,
+} from "../../klerm/router/types.ts";
+import {
+	deriveLegacyKlermTranscriptTransitions,
+	type KlermTranscriptTransition,
+} from "../../klerm/session-transitions.ts";
+
+export { deriveLegacyKlermTranscriptTransitions } from "../../klerm/session-transitions.ts";
+
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -218,7 +229,16 @@ type CompactionCostNotice = {
 	usage: Usage;
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
+type KlermTransitionNotice = {
+	type: "klerm_transition";
+	transition: KlermTranscriptTransition;
+};
+
+type RenderSessionItem =
+	| AgentMessage
+	| Extract<SessionEntry, { type: "custom" }>
+	| CompactionCostNotice
+	| KlermTransitionNotice;
 
 export type KlermLaneCommand =
 	| { action: "selector" }
@@ -244,12 +264,57 @@ export function parseKlermLaneCommand(argument: string): KlermLaneCommand {
 	return { action: "model", reference: command.trim() };
 }
 
+export function formatKlermStartupGuide(expanded: boolean, toggleKey: string): string {
+	const commands = [
+		"  /local model <model>     set a detected local router/worker",
+		"  /frontier model <model>  set the frontier worker, for example Codex",
+		"  /routing auto            local decides: small tasks local, hard tasks frontier",
+		...(expanded
+			? [
+					"  /routing local           force normal prompts to local",
+					"  /routing frontier        force normal prompts to frontier",
+					"  /routing handback on     return delegated work to the task owner",
+					"  /routing cycles <count|unlimited>  set or remove the per-task A2A cycle limit",
+					"  /active <lane>            override the initial worker; auto follows /routing",
+					"  /routing off             use /model directly when /active is auto",
+					"  /model <model>            set the direct model used when routing is off",
+				]
+			: []),
+	];
+	const action = `${toggleKey} show ${expanded ? "less" : "more"}`;
+	return theme.fg(
+		"dim",
+		[
+			"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
+			"",
+			"Klerm routing quick guide:",
+			...commands,
+			"",
+			action,
+		].join("\n"),
+	);
+}
+
+export function formatKlermStartupHeader(
+	logo: string,
+	expandedInstructions: string,
+	expanded: boolean,
+	toggleKey: string,
+): string {
+	const instructions = expanded ? `\n${expandedInstructions}` : "";
+	return `${logo}${instructions}\n\n${formatKlermStartupGuide(expanded, toggleKey)}`;
+}
+
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
 }
 
 function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCostNotice {
 	return "type" in item && item.type === "compaction_cost";
+}
+
+function isKlermTransitionNotice(item: RenderSessionItem): item is KlermTransitionNotice {
+	return "type" in item && item.type === "klerm_transition";
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
@@ -457,7 +522,7 @@ export class InteractiveMode {
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private klermRoutingStatus: Text;
-	private renderedKlermTransitionId?: string;
+	private renderedKlermTransitionIds = new Set<string>();
 	private pendingKlermHandoff?: KlermRoutingState;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
@@ -1069,7 +1134,7 @@ export class InteractiveMode {
 				hint("app.thinking.cycle", "to cycle thinking level"),
 				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
 				hint("app.model.select", "to select model"),
-				hint("app.tools.expand", "to expand tools"),
+				hint("app.tools.expand", "to show less"),
 				hint("app.thinking.toggle", "to expand thinking"),
 				hint("app.editor.external", "for external editor"),
 				rawKeyHint("/", "for commands"),
@@ -1080,38 +1145,9 @@ export class InteractiveMode {
 				hint("app.clipboard.pasteImage", "to paste image (with text fallback)"),
 				rawKeyHint("drop files", "to attach"),
 			].join("\n");
-			const compactInstructions = [
-				hint("app.interrupt", "interrupt"),
-				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-				rawKeyHint("/", "commands"),
-				rawKeyHint("!", "bash"),
-				hint("app.tools.expand", "more"),
-			].join(theme.fg("muted", " · "));
-			const compactOnboarding = theme.fg(
-				"dim",
-				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
-			);
-			const onboarding = theme.fg(
-				"dim",
-				[
-					"Klerm can explain its own features and look up its docs. Ask it how to use or extend Klerm.",
-					"",
-					"Klerm routing quick guide:",
-					"  /local model <model>     set a detected local router/worker",
-					"  /frontier model <model>  set the frontier worker, for example Codex",
-					"  /routing auto            local decides: small tasks local, hard tasks frontier",
-					"  /routing local           force normal prompts to local",
-					"  /routing frontier        force normal prompts to frontier",
-					"  /routing handback on     return delegated work to the task owner",
-					"  /routing cycles <count|unlimited>  set or remove the per-task A2A cycle limit",
-					"  /active <lane>            override the initial worker; auto follows /routing",
-					"  /routing off             use /model directly when /active is auto",
-					"  /model <model>            set the direct model used when routing is off",
-				].join("\n"),
-			);
 			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
+				() => formatKlermStartupHeader(logo, expandedInstructions, false, keyText("app.tools.expand")),
+				() => formatKlermStartupHeader(logo, expandedInstructions, true, keyText("app.tools.expand")),
 				this.getStartupExpansionState(),
 				1,
 				0,
@@ -2139,7 +2175,7 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingKlermHandoff = undefined;
-		this.renderedKlermTransitionId = undefined;
+		this.renderedKlermTransitionIds.clear();
 		this.pendingTools.clear();
 		this.renderInitialMessages();
 	}
@@ -2543,7 +2579,10 @@ export class InteractiveMode {
 			setTitle: (title) => this.ui.terminal.setTitle(title),
 			custom: (factory, options) => this.showExtensionCustom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
-			setEditorText: (text) => this.editor.setText(text),
+			setEditorText: (text) => {
+				this.editor.setText(text);
+				this.ui.requestRender();
+			},
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
 			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
 			addAutocompleteProvider: (factory) => {
@@ -3100,6 +3139,11 @@ export class InteractiveMode {
 				this.showKlermStatus();
 				return;
 			}
+			if (text === "/token" || text.startsWith("/token ")) {
+				this.editor.setText("");
+				this.handleTokenCommand(text.slice(6).trim());
+				return;
+			}
 			if (text === "/export" || text.startsWith("/export ")) {
 				await this.handleExportCommand(text);
 				this.editor.setText("");
@@ -3319,7 +3363,7 @@ export class InteractiveMode {
 				break;
 
 			case "entry_appended":
-				if (event.entry.type === "custom") {
+				if (event.entry.type === "custom" && event.entry.customType !== KLERM_SESSION_TRANSITION_CUSTOM_TYPE) {
 					this.addCustomEntryToChat(event.entry);
 					this.ui.requestRender();
 				}
@@ -3353,7 +3397,7 @@ export class InteractiveMode {
 						this.hiddenThinkingLabel,
 						this.outputPad,
 						this.getMarkdownTransformers(),
-						this.session.klermRouting !== undefined,
+						this.settingsManager.getShowKlermUsage(),
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
@@ -3543,6 +3587,7 @@ export class InteractiveMode {
 						throw new Error("Completed compaction is missing from the session context");
 					}
 					this.chatContainer.clear();
+					this.renderedKlermTransitionIds.clear();
 					// The latest compaction is prepended for model context; append it below at its chronological position.
 					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
@@ -3680,6 +3725,10 @@ export class InteractiveMode {
 	}
 
 	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
+		if (entry.customType === KLERM_SESSION_TRANSITION_CUSTOM_TYPE && isKlermSessionTransitionData(entry.data)) {
+			this.addKlermTransitionToChat(entry.data.transition);
+			return;
+		}
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
 			return;
@@ -3794,7 +3843,7 @@ export class InteractiveMode {
 					this.hiddenThinkingLabel,
 					this.outputPad,
 					this.getMarkdownTransformers(),
-					this.session.klermRouting !== undefined,
+					this.settingsManager.getShowKlermUsage(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
@@ -3827,6 +3876,10 @@ export class InteractiveMode {
 		}
 
 		for (const item of items) {
+			if (isKlermTransitionNotice(item)) {
+				this.addKlermTransitionToChat(item.transition);
+				continue;
+			}
 			if (isCustomSessionEntry(item)) {
 				this.addCustomEntryToChat(item);
 				continue;
@@ -3908,7 +3961,10 @@ export class InteractiveMode {
 		entries: SessionEntry[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
+		const legacyTransitions = deriveLegacyKlermTranscriptTransitions(entries);
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
+			const legacyTransition = legacyTransitions.get(entry.id);
+			if (legacyTransition) return [{ type: "klerm_transition", transition: legacyTransition }];
 			if (entry.type === "custom") {
 				return [entry];
 			}
@@ -4020,6 +4076,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
+		this.renderedKlermTransitionIds.clear();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -4321,7 +4378,8 @@ export class InteractiveMode {
 				}
 			}
 		}
-		this.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
+		this.updateKlermRoutingStatus();
+		this.showStatus(`Tool output, startup help, and routing details: ${expanded ? "expanded" : "collapsed"}`);
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -5086,6 +5144,22 @@ export class InteractiveMode {
 		this.showStatus(`Start lane: ${argument}`);
 	}
 
+	private handleTokenCommand(argument: string): void {
+		const normalized = argument.trim().toLowerCase();
+		if (normalized && normalized !== "on" && normalized !== "off") {
+			this.showError("Usage: /token [on|off]");
+			return;
+		}
+		const show = normalized === "on" || (normalized === "" && !this.settingsManager.getShowKlermUsage());
+		this.settingsManager.setShowKlermUsage(show);
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) child.setShowKlermUsage(show);
+		}
+		this.streamingComponent?.setShowKlermUsage(show);
+		this.showStatus(`Token and cost usage: ${show ? "shown" : "hidden"}`);
+		this.ui.requestRender();
+	}
+
 	private updateKlermRoutingStatus(): void {
 		const routing = this.session.klermRouting;
 		if (!routing) {
@@ -5100,9 +5174,27 @@ export class InteractiveMode {
 		const selectedTarget = state.lane === "direct" ? activeModel : state.selectedTarget;
 		const localModel = state.localModel ?? routing.config.localModel;
 		const frontierModel = state.frontierModel ?? routing.config.frontierModel;
-		const lines: string[] = [];
-
 		const activeLabel = theme.fg("success", "(currently active)");
+		if (!this.toolOutputExpanded) {
+			const activeRoute =
+				state.lane === "direct"
+					? selectedTarget === localModel
+						? "local"
+						: selectedTarget === frontierModel
+							? "frontier"
+							: "direct"
+					: state.lane;
+			this.klermRoutingStatus.setText(
+				[
+					`Local: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					`Frontier: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					`Route: ${state.mode} · ${activeRoute}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
+				].join("\n"),
+			);
+			return;
+		}
+
+		const lines: string[] = [];
 		lines.push(
 			`Local model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
@@ -5152,7 +5244,7 @@ export class InteractiveMode {
 		if (
 			!transition ||
 			transition.kind === "initial" ||
-			transition.id === this.renderedKlermTransitionId ||
+			this.renderedKlermTransitionIds.has(transition.id) ||
 			!state.selectedTarget ||
 			!state.handoffReason
 		) {
@@ -5167,7 +5259,16 @@ export class InteractiveMode {
 		if (!state || !transition || !state.selectedTarget || !state.handoffReason) return;
 
 		this.pendingKlermHandoff = undefined;
-		this.renderedKlermTransitionId = transition.id;
+		this.addKlermTransitionToChat({
+			...transition,
+			toTarget: state.selectedTarget,
+			reason: state.handoffReason,
+		});
+	}
+
+	private addKlermTransitionToChat(transition: KlermTranscriptTransition): void {
+		if (this.renderedKlermTransitionIds.has(transition.id)) return;
+		this.renderedKlermTransitionIds.add(transition.id);
 		const isReturn = transition.kind === "return";
 		const call = [
 			theme.bold(
@@ -5176,8 +5277,8 @@ export class InteractiveMode {
 					isReturn ? `+ returned to ${transition.toLane}` : "+ called other model",
 				),
 			),
-			`  ${theme.fg("warning", "model:")} ${state.selectedTarget}`,
-			`  ${theme.fg("warning", "reason:")} ${state.handoffReason}`,
+			`  ${theme.fg("warning", "model:")} ${transition.toTarget}`,
+			`  ${theme.fg("warning", "reason:")} ${transition.reason}`,
 		].join("\n");
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(call, this.outputPad, 0));

@@ -53,7 +53,12 @@ import {
 	type KlermRoutingController,
 	projectKlermHandoffContext,
 } from "../klerm/router/runtime.ts";
-import type { KlermPromptRoutingOverride, KlermRoutingState, KlermWorkerLane } from "../klerm/router/types.ts";
+import {
+	KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
+	type KlermPromptRoutingOverride,
+	type KlermRoutingState,
+	type KlermWorkerLane,
+} from "../klerm/router/types.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -626,6 +631,14 @@ export class AgentSession {
 		try {
 			await this._applyRoutedModel(transition.model, false, this._klermThinkingLevels[transition.state.toLane]);
 			await transition.commit();
+			if (transition.state.kind !== "initial") {
+				const entryId = this.sessionManager.appendCustomEntry(KLERM_SESSION_TRANSITION_CUSTOM_TYPE, {
+					version: 1,
+					transition: transition.state,
+				});
+				const entry = this.sessionManager.getEntry(entryId);
+				if (entry) this._emit({ type: "entry_appended", entry });
+			}
 			this._klermThinkingLevels[transition.state.toLane] = this.agent.state.thinkingLevel;
 			this.agent.state.systemPrompt = this._withKlermSystemPrompt(
 				this._systemPromptOverride ?? this._baseSystemPrompt,

@@ -45,6 +45,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		argumentHint: "<auto|local|frontier|frontier-local|status>",
 	},
 	{ name: "klerm", description: "Show Klerm A2A routing status" },
+	{ name: "token", description: "Show or hide response token and cost usage", argumentHint: "<on|off>" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
 	{ name: "import", description: "Import and resume a session from a JSONL file" },

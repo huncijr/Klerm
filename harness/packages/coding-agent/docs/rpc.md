@@ -2,6 +2,8 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
+The Klerm desktop readiness audit and the list of missing typed operations are documented in [Klerm Desktop RPC Contract Audit](klerm-desktop-rpc-contract.md).
+
 **Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
 
 ## Starting RPC Mode
@@ -850,6 +852,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
 | `queue_update` | Pending steering/follow-up queue changed |
+| `routing_changed` | Klerm routing state changed |
 | `compaction_start` | Compaction begins |
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
@@ -858,6 +861,32 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `summarization_retry_attempt_start` | Retried summarization request starts |
 | `summarization_retry_finished` | Summarization retry loop completes |
 | `extension_error` | Extension threw an error |
+
+### routing_changed
+
+Emitted when Klerm selects a route, changes worker lane, records a handoff, or
+settles routed work. The `state` field is a complete `KlermRoutingState`
+snapshot for that change.
+
+```json
+{
+  "type": "routing_changed",
+  "state": {
+    "taskId": "task-123",
+    "mode": "auto",
+    "activeStartLane": "auto",
+    "lane": "frontier",
+    "selectedTarget": "openai-codex/gpt-5.5",
+    "reason": "task requires frontier capability",
+    "delegationCycle": 1,
+    "maxDelegationCycles": 3
+  }
+}
+```
+
+RPC currently has no command that returns this state before the first routing
+change. Desktop clients must not infer it from model or message events; a typed
+routing-state query remains required by the desktop contract.
 
 ### agent_start
 

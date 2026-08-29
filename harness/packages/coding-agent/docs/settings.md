@@ -339,8 +339,9 @@ optional `enabled` (default `true`). Stdio servers use `command`, optional
 string `args`, and optional string-valued `env`; omitted `transport` is treated
 as `stdio` for existing configs. Streamable HTTP and SSE servers use `url` and
 optional string-valued `headers`. Klerm exposes discovered tools as
-`mcp_<server>_<tool>`. Use `/mcp` to inspect status and `/mcpset` to update
-servers. Project server entries replace global entries with the same name as a
+`mcp_<server>_<tool>`. Use `/mcp` or `/mcps` to select a connected tool,
+`/mcp status [server]` to inspect status, and `/mcpset` to update servers.
+Project server entries replace global entries with the same name as a
 whole object; their nested fields are never merged with global environment or
 header values. Environment values and headers are stored as plaintext; do not
 put secrets in a project settings file or commit them. Prefer a trusted wrapper

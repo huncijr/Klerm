@@ -21,6 +21,7 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import { KlermConfigStore } from "../src/klerm/config.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
 import { KlermRoutingController, projectKlermHandoffContext } from "../src/klerm/router/runtime.ts";
+import { isKlermSessionTransitionData, KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
 function createModel(provider: string, id: string, api: Api): Model<Api> {
@@ -274,9 +275,10 @@ describe("Klerm routing runtime", () => {
 			streamFn: streamSimple,
 			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
 		});
+		const sessionManager = SessionManager.inMemory(tempDir);
 		const session = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(tempDir),
+			sessionManager,
 			settingsManager: SettingsManager.inMemory(),
 			cwd: tempDir,
 			modelRuntime: runtime,
@@ -322,6 +324,21 @@ describe("Klerm routing runtime", () => {
 				"TASK_COMPLETED",
 			]);
 			expect(decisions.every((decision) => decision.activeStartLane === "frontier-local")).toBe(true);
+			const transitionEntries = sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "custom" && entry.customType === KLERM_SESSION_TRANSITION_CUSTOM_TYPE);
+			expect(transitionEntries).toHaveLength(1);
+			const transitionEntry = transitionEntries[0];
+			expect(transitionEntry?.type === "custom" && isKlermSessionTransitionData(transitionEntry.data)).toBe(true);
+			if (transitionEntry?.type === "custom" && isKlermSessionTransitionData(transitionEntry.data)) {
+				expect(transitionEntry.data.transition).toMatchObject({
+					kind: "return",
+					fromLane: "frontier",
+					toLane: "local",
+					toTarget: "ollama/qwen:local",
+					reason: "frontier pass complete",
+				});
+			}
 		} finally {
 			session.dispose();
 			localFaux.unregister();

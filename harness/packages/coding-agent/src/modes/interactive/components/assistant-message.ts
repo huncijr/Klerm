@@ -79,6 +79,13 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	setShowKlermUsage(show: boolean): void {
+		this.showKlermUsage = show;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
 	override render(width: number): string[] {
 		const lines = super.render(width);
 		if (this.hasToolCalls || lines.length === 0) {

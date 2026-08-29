@@ -12,6 +12,7 @@ type FakeExtensionRunner = {
 
 type FakeSession = {
 	sessionManager: { getHeader: () => object | undefined };
+	settingsManager: { getShowKlermUsage: () => boolean };
 	agent: { waitForIdle: () => Promise<void>; subscribe: ReturnType<typeof vi.fn> };
 	state: { messages: AssistantMessage[] };
 	extensionRunner: FakeExtensionRunner;
@@ -57,7 +58,7 @@ function createAssistantMessage(options?: {
 	};
 }
 
-function createRuntimeHost(assistantMessage: AssistantMessage, klerm = false): FakeRuntimeHost {
+function createRuntimeHost(assistantMessage: AssistantMessage, showKlermUsage = false): FakeRuntimeHost {
 	const extensionRunner: FakeExtensionRunner = {
 		hasHandlers: (eventType: string) => eventType === "session_shutdown",
 		emit: vi.fn(async () => {}),
@@ -67,6 +68,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage, klerm = false): F
 
 	const session: FakeSession = {
 		sessionManager: { getHeader: () => undefined },
+		settingsManager: { getShowKlermUsage: () => showKlermUsage },
 		agent: { waitForIdle: async () => {}, subscribe: vi.fn(() => () => {}) },
 		state,
 		extensionRunner,
@@ -74,7 +76,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage, klerm = false): F
 		subscribe: vi.fn(() => () => {}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
-		klermRouting: klerm ? {} : undefined,
+		klermRouting: showKlermUsage ? {} : undefined,
 	};
 
 	return {

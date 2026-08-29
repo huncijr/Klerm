@@ -502,6 +502,26 @@ async function runMcpSetupWizard(settingsManager: SettingsManager, ctx: Extensio
 	}
 }
 
+async function selectMcpTool(
+	runtime: McpRuntime,
+	ctx: Pick<ExtensionCommandContext, "ui">,
+): Promise<string | undefined> {
+	const choices = runtime
+		.getStatus()
+		.filter((status) => status.state === "connected")
+		.flatMap((status) => status.tools.map((tool) => ({ label: `${status.name} / ${tool}`, tool })))
+		.sort((left, right) => left.label.localeCompare(right.label));
+	if (choices.length === 0) {
+		ctx.ui.notify("No connected MCP tools. Configure one with /mcpset and run /reload.", "warning");
+		return undefined;
+	}
+	const selected = await ctx.ui.select(
+		"MCP tools",
+		choices.map((choice) => choice.label),
+	);
+	return choices.find((choice) => choice.label === selected)?.tool;
+}
+
 export function createMcpExtension(settingsManager: SettingsManager, cwd: string): ExtensionFactory {
 	return (pi) => {
 		let runtime = new McpRuntime(cwd, {});
@@ -579,11 +599,37 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 		});
 
 		pi.registerCommand("mcp", {
-			description: "List configured MCP servers and tools",
+			description: "Select an MCP tool or show MCP status",
 			handler: async (args, ctx) => {
-				const name = args.trim() || undefined;
-				ctx.ui.notify(runtime.describe(name));
+				const argument = args.trim();
+				if (argument || !ctx.hasUI || ctx.mode !== "tui") {
+					const isStatusCommand = argument === "status" || argument.startsWith("status ");
+					const name = isStatusCommand ? argument.slice("status".length).trim() || undefined : argument;
+					ctx.ui.notify(runtime.describe(name || undefined));
+					return;
+				}
+				const tool = await selectMcpTool(runtime, ctx);
+				if (tool) ctx.ui.setEditorText(`Use MCP tool ${tool}`);
 			},
+		});
+
+		pi.registerCommand("mcps", {
+			description: "Insert an MCP tool name into the prompt",
+			handler: async (_args, ctx) => {
+				if (!ctx.hasUI || ctx.mode !== "tui") {
+					ctx.ui.notify("/mcps is available in interactive mode only.", "warning");
+					return;
+				}
+				const tool = await selectMcpTool(runtime, ctx);
+				if (tool) ctx.ui.setEditorText(tool);
+			},
+		});
+
+		pi.on("input", async (event, ctx) => {
+			if (event.source !== "interactive" || ctx.mode !== "tui" || !/(^|\s)\/mcps\b/.test(event.text)) return;
+			const tool = await selectMcpTool(runtime, ctx);
+			ctx.ui.setEditorText(tool ? event.text.replace(/(^|\s)\/mcps\b/, `$1${tool}`) : event.text);
+			return { action: "handled" };
 		});
 
 		pi.registerCommand("mcpset", {

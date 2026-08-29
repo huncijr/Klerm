@@ -1,7 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
+import type { SessionEntry } from "../src/core/session-manager.ts";
 import { OllamaClient } from "../src/extensions/ollama/client.ts";
-import { InteractiveMode, parseKlermLaneCommand } from "../src/modes/interactive/interactive-mode.ts";
+import { KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
+import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import {
+	deriveLegacyKlermTranscriptTransitions,
+	formatKlermStartupGuide,
+	formatKlermStartupHeader,
+	InteractiveMode,
+	parseKlermLaneCommand,
+} from "../src/modes/interactive/interactive-mode.ts";
+import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 type LaneContext = {
 	session: {
@@ -84,6 +95,176 @@ function createLaneContext(): LaneContext {
 }
 
 describe("interactive Klerm commands", () => {
+	it("reconstructs enforced delegation and native return markers from a legacy session", () => {
+		const entries = [
+			{
+				type: "model_change",
+				id: "local-model",
+				parentId: null,
+				timestamp: "2026-08-27T17:03:40.905Z",
+				provider: "ollama",
+				modelId: "qwen3.5-16k:latest",
+			},
+			{
+				type: "model_change",
+				id: "frontier-model",
+				parentId: "local-model",
+				timestamp: "2026-08-27T17:04:42.033Z",
+				provider: "openai-codex",
+				modelId: "gpt-5.5",
+			},
+			{
+				type: "message",
+				id: "handoff-prompt",
+				parentId: "frontier-model",
+				timestamp: "2026-08-27T17:04:42.033Z",
+				message: {
+					role: "user",
+					content: "[Klerm enforced frontier handoff]\nReason: explicit delegation",
+					timestamp: 2,
+				},
+			},
+			{
+				type: "message",
+				id: "return-result",
+				parentId: "handoff-prompt",
+				timestamp: "2026-08-27T17:10:40.673Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "return-call",
+					toolName: "return_to_local",
+					content: [{ type: "text", text: "Frontier return recorded." }],
+					details: { reason: "frontier pass complete" },
+					isError: false,
+					timestamp: 3,
+				},
+			},
+			{
+				type: "model_change",
+				id: "resumed-local-model",
+				parentId: "return-result",
+				timestamp: "2026-08-27T17:10:40.675Z",
+				provider: "ollama",
+				modelId: "qwen3.5-16k:latest",
+			},
+		] as SessionEntry[];
+
+		expect([...deriveLegacyKlermTranscriptTransitions(entries).entries()]).toEqual([
+			[
+				"frontier-model",
+				expect.objectContaining({
+					kind: "delegate",
+					toLane: "frontier",
+					toTarget: "openai-codex/gpt-5.5",
+					reason: "explicit delegation",
+				}),
+			],
+			[
+				"resumed-local-model",
+				expect.objectContaining({
+					kind: "return",
+					toLane: "local",
+					toTarget: "ollama/qwen3.5-16k:latest",
+					reason: "frontier pass complete",
+				}),
+			],
+		]);
+	});
+
+	it("does not reconstruct a duplicate marker beside a persisted transition", () => {
+		const entries = [
+			{
+				type: "model_change",
+				id: "frontier-model",
+				parentId: null,
+				timestamp: "2026-08-27T17:04:42.033Z",
+				provider: "openai-codex",
+				modelId: "gpt-5.5",
+			},
+			{
+				type: "custom",
+				customType: KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
+				id: "persisted-transition",
+				parentId: "frontier-model",
+				timestamp: "2026-08-27T17:04:42.034Z",
+				data: {
+					version: 1,
+					transition: {
+						id: "transition-task-1",
+						sequence: 1,
+						kind: "delegate",
+						fromLane: "local",
+						toLane: "frontier",
+						toTarget: "openai-codex/gpt-5.5",
+						reason: "specialist",
+						trigger: "native-tool",
+						cycle: 1,
+						maxCycles: 3,
+					},
+				},
+			},
+		] as SessionEntry[];
+
+		expect(deriveLegacyKlermTranscriptTransitions(entries).size).toBe(0);
+	});
+
+	beforeAll(() => initTheme("dark"));
+
+	it("shows three startup commands when collapsed and the full guide when expanded", () => {
+		const collapsed = stripAnsi(formatKlermStartupGuide(false, "ctrl+o"));
+		const expanded = stripAnsi(formatKlermStartupGuide(true, "ctrl+o"));
+		const commandLines = (text: string) => text.split("\n").filter((line) => line.trimStart().startsWith("/"));
+
+		expect(commandLines(collapsed)).toHaveLength(3);
+		expect(collapsed).toContain("ctrl+o show more");
+		expect(collapsed).not.toContain("/routing cycles");
+		expect(commandLines(expanded)).toHaveLength(10);
+		expect(expanded).toContain("/routing cycles <count|unlimited>");
+		expect(expanded).toContain("ctrl+o show less");
+	});
+
+	it("hides basic keyboard instructions until startup help is expanded", () => {
+		const collapsed = stripAnsi(formatKlermStartupHeader("LOGO", "escape to interrupt", false, "ctrl+o"));
+		const expanded = stripAnsi(formatKlermStartupHeader("LOGO", "escape to interrupt", true, "ctrl+o"));
+
+		expect(collapsed).not.toContain("escape to interrupt");
+		expect(expanded).toContain("escape to interrupt");
+	});
+
+	it("persistently toggles token and cost usage for rendered responses", () => {
+		let shown = true;
+		const rendered = new AssistantMessageComponent();
+		const streaming = new AssistantMessageComponent();
+		const renderedSpy = vi.spyOn(rendered, "setShowKlermUsage");
+		const streamingSpy = vi.spyOn(streaming, "setShowKlermUsage");
+		const context = {
+			settingsManager: {
+				getShowKlermUsage: () => shown,
+				setShowKlermUsage: (value: boolean) => {
+					shown = value;
+				},
+			},
+			chatContainer: { children: [rendered] },
+			streamingComponent: streaming,
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			ui: { requestRender: vi.fn() },
+		};
+
+		(InteractiveMode as any).prototype.handleTokenCommand.call(context, "off");
+		expect(shown).toBe(false);
+		expect(renderedSpy).toHaveBeenCalledWith(false);
+		expect(streamingSpy).toHaveBeenCalledWith(false);
+		expect(context.showStatus).toHaveBeenCalledWith("Token and cost usage: hidden");
+
+		(InteractiveMode as any).prototype.handleTokenCommand.call(context, "");
+		expect(shown).toBe(true);
+		expect(context.showStatus).toHaveBeenCalledWith("Token and cost usage: shown");
+
+		(InteractiveMode as any).prototype.handleTokenCommand.call(context, "sometimes");
+		expect(context.showError).toHaveBeenCalledWith("Usage: /token [on|off]");
+	});
+
 	it("parses selector, explicit model, legacy model, and full task remainder forms", () => {
 		expect(parseKlermLaneCommand("")).toEqual({ action: "selector" });
 		expect(parseKlermLaneCommand(" model ")).toEqual({ action: "selector" });

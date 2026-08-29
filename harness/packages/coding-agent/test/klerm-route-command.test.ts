@@ -82,6 +82,63 @@ describe("Klerm debug command", () => {
 		expect(output[0]).toContain("No Klerm route decisions found");
 	});
 
+	it("filters and limits route decisions", async () => {
+		await runKlermDebugCommand(["debug", "route", "first"], {
+			cwd: tempDir,
+			now: () => new Date("2026-08-18T12:00:00.000Z"),
+			stdout: () => {},
+		});
+		await runKlermDebugCommand(["debug", "route", "second"], {
+			cwd: tempDir,
+			now: () => new Date("2026-08-19T12:00:00.000Z"),
+			stdout: () => {},
+		});
+		const output: string[] = [];
+
+		await runKlermDebugCommand(["debug", "decisions", "--since", "2026-08-19", "--route", "self", "--limit", "1"], {
+			cwd: tempDir,
+			stdout: (message) => output.push(message),
+		});
+
+		expect(output).toHaveLength(1);
+		expect(JSON.parse(output[0])).toMatchObject({ task: "second", route: "SELF" });
+	});
+
+	it("summarizes filtered route decisions", async () => {
+		await runKlermDebugCommand(["debug", "route", "fix auth"], {
+			cwd: tempDir,
+			now: () => new Date("2026-08-18T12:00:00.000Z"),
+			stdout: () => {},
+		});
+		const output: string[] = [];
+
+		await runKlermDebugCommand(["debug", "decisions", "--event", "INITIAL_ROUTE", "--summary"], {
+			cwd: tempDir,
+			stdout: (message) => output.push(message),
+		});
+
+		expect(JSON.parse(output[0])).toEqual({
+			total: 1,
+			firstTimestamp: "2026-08-18T12:00:00.000Z",
+			lastTimestamp: "2026-08-18T12:00:00.000Z",
+			events: { INITIAL_ROUTE: 1 },
+			routes: { SELF: 1 },
+			totalTokens: 0,
+			totalCostUsd: 0,
+		});
+	});
+
+	it("rejects invalid decision filters", async () => {
+		const errors: string[] = [];
+		await runKlermDebugCommand(["debug", "decisions", "--limit", "zero"], {
+			cwd: tempDir,
+			stderr: (message) => errors.push(message),
+		});
+
+		expect(process.exitCode).toBe(1);
+		expect(errors[0]).toContain("positive integer");
+	});
+
 	it("ignores non-Klerm commands", async () => {
 		await expect(runKlermDebugCommand(["--help"], { cwd: tempDir })).resolves.toBe(false);
 	});

@@ -147,6 +147,8 @@ Klerm exposes tools from configured MCP servers as
 /mcpset remote http https://example.com/mcp Authorization="Bearer token"
 /mcpset legacy-sse sse https://example.com/sse X-API-Key=token
 /mcp
+/mcp status
+/mcps
 /mcpset filesystem disable
 /mcpset filesystem enable
 /mcpset filesystem remove
@@ -164,6 +166,11 @@ connections close before the tool registry is rebuilt. Klerm supports stdio,
 Streamable HTTP, and SSE tool transports. Prompts, resources, MCP tasks, and
 automatic server-side tool-list refresh are not implemented in this milestone;
 server-side tool-list changes require `/reload`.
+
+Run `/mcp` to select a connected tool and insert `Use MCP tool <name>` into the
+editor. Run `/mcp status [server]` for connection details. Type `/mcps` alone or
+inside prompt text to select a tool and insert only its namespaced name, such as
+`mcp_filesystem_read_file`; `@` remains reserved for project files.
 
 When an AI invokes an MCP tool, Klerm displays a notice before the remote call,
 for example `mcp: github/search_issues used`. The notice includes only the MCP

@@ -280,8 +280,13 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
   ${APP_NAME} local <status|models>     Inspect detected local model runtimes
   ${APP_NAME} providers                 List all model providers and status
+  ${APP_NAME} doctor [--json]           Check Klerm storage, config, runtimes, and providers
+  ${APP_NAME} session timeline <id>     Print a structured session timeline
+  ${APP_NAME} routing status [--json]   Show the persisted routing configuration
+  ${APP_NAME} config get [key]          Read the persisted Klerm routing configuration
+  ${APP_NAME} config set <key> <value>  Update the persisted Klerm routing configuration
   ${APP_NAME} debug route <task>        Preview a mock routing decision
-  ${APP_NAME} debug decisions           Print Klerm routing decisions
+  ${APP_NAME} debug decisions [flags]   Print or summarize Klerm routing decisions
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/debug
 
 ${chalk.bold("Options:")}

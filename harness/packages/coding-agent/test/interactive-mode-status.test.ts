@@ -179,6 +179,7 @@ describe("InteractiveMode.setToolsExpanded", () => {
 			chatContainer: { children: [chatChild] },
 			ui: { requestRender: vi.fn() },
 			showStatus: vi.fn(),
+			updateKlermRoutingStatus: vi.fn(),
 		};
 
 		(InteractiveMode as any).prototype.setToolsExpanded.call(fakeThis, true);
@@ -187,7 +188,8 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
-		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output: expanded");
+		expect(fakeThis.updateKlermRoutingStatus).toHaveBeenCalledOnce();
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Tool output, startup help, and routing details: expanded");
 	});
 });
 
@@ -338,6 +340,21 @@ describe("InteractiveMode.createExtensionUIContext addAutocompleteProvider", () 
 
 		expect(fakeThis.autocompleteProviderWrappers).toEqual([wrapper]);
 		expect(fakeThis.setupAutocompleteProvider).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("InteractiveMode.createExtensionUIContext setEditorText", () => {
+	test("updates the editor and requests an immediate render", () => {
+		const fakeThis = {
+			editor: { setText: vi.fn() },
+			ui: { requestRender: vi.fn() },
+		};
+
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		uiContext.setEditorText("Use MCP tool mcp_fake_echo_text");
+
+		expect(fakeThis.editor.setText).toHaveBeenCalledWith("Use MCP tool mcp_fake_echo_text");
+		expect(fakeThis.ui.requestRender).toHaveBeenCalledOnce();
 	});
 });
 
@@ -1283,8 +1300,11 @@ describe("InteractiveMode Klerm handoff status", () => {
 		const fakeThis: any = {
 			chatContainer: new Container(),
 			outputPad: 1,
-			renderedKlermTransitionId: undefined,
+			renderedKlermTransitionIds: new Set<string>(),
 			pendingKlermHandoff: undefined,
+			addKlermTransitionToChat(transition: unknown) {
+				return (InteractiveMode as any).prototype.addKlermTransitionToChat.call(this, transition);
+			},
 		};
 		const state = {
 			taskId: "task-1",
@@ -1347,7 +1367,7 @@ describe("InteractiveMode Klerm handoff status", () => {
 		expect(fakeThis.chatContainer.children).toHaveLength(4);
 	});
 
-	test("shows the completed frontier route without handoff details in the persistent panel", () => {
+	test("shows compact routing details by default and full details when expanded", () => {
 		const state = {
 			taskId: "task-1",
 			mode: "auto",
@@ -1366,6 +1386,7 @@ describe("InteractiveMode Klerm handoff status", () => {
 		};
 		const fakeThis: any = {
 			klermRoutingStatus: new Text("", 0, 0),
+			toolOutputExpanded: false,
 			session: {
 				state: { model: { provider: "openai-codex", id: "gpt-5.5" } },
 				klermRouting: {
@@ -1376,12 +1397,32 @@ describe("InteractiveMode Klerm handoff status", () => {
 		};
 
 		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
+		const compactOutput = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
+		expect(compactOutput).toContain("Local: ollama/qwen3.5:9b-q4_K_M");
+		expect(compactOutput).toContain("Frontier: openai-codex/gpt-5.5 (currently active)");
+		expect(compactOutput).toContain("Route: auto · frontier · openai-codex/gpt-5.5");
+		expect(compactOutput).not.toContain("KLERM");
+		expect(compactOutput).not.toContain("Auto score:");
+
+		fakeThis.toolOutputExpanded = true;
+		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
 		const output = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
 		expect(output).toContain("Last route: frontier · openai-codex/gpt-5.5");
 		expect(output).toContain("Auto score: frontier · capability 58% · confidence 62% · risk 71%");
 		expect(output).not.toContain("called other model");
 		expect(output).not.toContain("reason:");
 		expect(output).not.toContain("Delegation recommended: frontier");
+	});
+
+	test("hides the persistent panel when routing is unavailable", () => {
+		const fakeThis: any = {
+			klermRoutingStatus: new Text("", 0, 0),
+			session: { klermRouting: undefined },
+		};
+
+		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
+
+		expect(stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n")).trimEnd()).toBe("");
 	});
 
 	test("shows the completion icon only after a successful settled run", async () => {

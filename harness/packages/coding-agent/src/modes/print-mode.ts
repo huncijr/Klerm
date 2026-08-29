@@ -152,7 +152,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 							writeRawStdout(`${content.text}\n`);
 						}
 					}
-					if (session.klermRouting !== undefined) {
+					if (session.settingsManager.getShowKlermUsage()) {
 						writeRawStdout(`${formatKlermResponseUsage(assistantMsg.usage)}\n`);
 					}
 				}

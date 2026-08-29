@@ -453,6 +453,16 @@ describe("SettingsManager", () => {
 		expect(reloadedManager.getFullscreenScrollbar()).toBe("auto");
 	});
 
+	it("shows Klerm response usage by default and persists the toggle", async () => {
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getShowKlermUsage()).toBe(true);
+
+		manager.setShowKlermUsage(false);
+		await manager.flush();
+
+		expect(SettingsManager.create(projectDir, agentDir).getShowKlermUsage()).toBe(false);
+	});
+
 	describe("outputPad", () => {
 		it("should default to 1 and persist binary values", async () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

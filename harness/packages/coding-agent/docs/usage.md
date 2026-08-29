@@ -14,12 +14,16 @@ The interface has four main areas:
 - **Footer** - working directory, session name, token/cache usage, cost, context usage, and current model. Totals include assistant responses, usage reported by tools, and summary generation.
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI.
+The default startup view omits the basic shortcut list and keeps routing status to
+three lines. Press Ctrl+O to expand or collapse shortcuts, routing details, the
+full routing guide, and tool output together.
 
 ### Editor Features
 
 | Feature | How |
 |---------|-----|
 | File reference | Type `@` to fuzzy-search project files |
+| MCP tool reference | Type `/mcps` by itself or inside prompt text, then press Enter and select a connected tool |
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
 | Copy response | Ctrl+X copies the last assistant message; in `/tree`, it copies the selected message |
@@ -42,9 +46,12 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/active <auto|local|frontier|frontier-local>` | Set the Klerm initial worker lane (`/activ` is an alias) |
 | `/routing handback on|off` | Return delegated work to the task's completion owner |
 | `/routing cycles <count|unlimited>` | Set any positive per-task A2A cycle limit, or remove it with `unlimited`/`0` (default `3`) |
-| `/mcp` | List configured MCP servers and exposed tools |
+| `/mcp` | Select a connected tool and insert `Use MCP tool <name>` into the editor |
+| `/mcp status [server]` | List configured MCP servers and exposed tools |
+| `/mcps` | Select and insert a namespaced MCP tool name; also works inside prompt text |
 | `/mcpset`, `/mcpset add` | Add an MCP server with a guided setup wizard |
 | `/mcpset [--project] <name> ...` | Add, remove, enable, or disable an MCP server with a scripted command |
+| `/token [on|off]` | Show or hide response token and cost lines; `/token` toggles the current state |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Thinking level, theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
@@ -67,6 +74,11 @@ Type `/` in the editor to open command completion. Extensions can register custo
 
 MCP tool calls display `mcp: <server>/<tool> used` before the remote call. Tool
 arguments and configured credentials are not included in this notice.
+Run `/mcp` to select a connected tool and prepare an explicit instruction such
+as `Use MCP tool mcp_fake_echo_text`. To reference a tool inside an existing
+prompt, type `/mcps`, press Enter, and select it; Klerm replaces that marker with
+the namespaced tool name without sending the prompt. The `@` autocomplete remains
+reserved for project files.
 
 The AI can create or update MCP settings with its `configure_mcp_server` tool
 when asked in natural language. It supports stdio, Streamable HTTP, and SSE,
@@ -84,6 +96,14 @@ any positive integer, or `/routing cycles unlimited` (equivalent to `0`) to
 remove the limit. Cycle counts and transitions remain visible in decision logs
 when unlimited mode is active.
 
+Successful delegation and return transitions are also stored as privacy-safe
+session entries. Reopening a session with `--session`, `--continue`, or
+`--resume` renders the same `called other model` and `returned to` markers that
+were shown during the live run. Sessions created before these entries existed
+reconstruct the markers from their persisted Klerm handoff messages, routing
+tool results, and model changes. This reconstruction does not copy worker
+response bodies into routing metadata.
+
 Routed provider responses are recorded once each as `MODEL_RESPONSE` entries in
 `.klerm/router-decisions.jsonl`. These entries include provider/model attribution,
 token class counts, total tokens, calculated USD cost, and deterministic usage
@@ -93,8 +113,10 @@ not expose a separate usage-provenance flag.
 In Klerm interactive mode, each finalized assistant response shows a dim
 `Klerm usage:` line directly underneath it with response token classes, total
 tokens, and cost. Text print mode (`-p`) prints the same line after the final
-answer. Streaming output does not show provisional usage, and JSON/RPC output
-remains structured without an added human-readable line.
+answer. This display is on by default; use `/token off`, `/token on`, or
+`/token` to persistently hide, show, or toggle it. Streaming output does not
+show provisional usage, and JSON/RPC output remains structured without an
+added human-readable line.
 
 ## Message Queue
 
@@ -201,6 +223,32 @@ pi config                    # Enable/disable package resources
 These commands manage pi packages and `pi update` can update the pi CLI installation. To uninstall pi itself, see [Quickstart](quickstart.md#uninstall). `pi config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command. `pi update` never prompts for project trust.
 
 See [Pi Packages](packages.md) for package sources and security notes.
+
+### Klerm Diagnostics Commands
+
+```bash
+klerm doctor [--json]                # Health check: storage, config, decision log, runtimes, providers
+klerm session timeline <session>     # Structured timeline of one session (id, prefix, or file path)
+klerm routing status [--json]        # Show the persisted routing configuration
+klerm config get [key] [--json]      # Read persisted Klerm routing config
+klerm config set <key> <value>       # Update persisted Klerm routing config
+klerm debug decisions [flags]        # Print, filter, or summarize routing decisions
+```
+
+`klerm doctor` checks that the agent and session storage is writable, the Klerm
+config parses, `.klerm/router-decisions.jsonl` contains valid JSONL, at least
+one local model is reachable, at least one frontier provider is configured, and
+routing is not disabled. Exit codes: `0` all pass, `2` warnings only, `1`
+failure. It never calls models, providers, or prints credentials.
+
+`klerm session timeline` prints model changes, Klerm transitions (including
+reconstructed legacy handoffs), and messages. Tool output is hidden by default;
+use `--with-tools`, `--with-cost`, `--compact`, or `--json` for structured
+output.
+
+`klerm debug decisions` accepts `--event <type>`, `--route <route>`,
+`--task-id <id>`, `--since <ISO date>`, `--limit <count>`, and `--summary`
+(total events, event/route counts, token and cost sums).
 
 ### Modes
 

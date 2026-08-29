@@ -42,6 +42,50 @@ describe("MCP extension commands", () => {
 		await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, context);
 	});
 
+	it("inserts selected MCP tools through /mcp, /mcps, and inline /mcps", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setMcpServer("fake", { command: process.execPath, args: [fixture] });
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown>();
+		const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
+		const pi = {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown) => {
+				handlers.set(event, handler);
+			},
+			registerTool: vi.fn(),
+			registerCommand: (name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) => {
+				commands.set(name, command);
+			},
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const notify = vi.fn();
+		const setEditorText = vi.fn();
+		const select = vi.fn(async () => "fake / mcp_fake_echo_text");
+		const context = {
+			mode: "tui",
+			hasUI: true,
+			ui: { notify, select, setEditorText },
+			sessionManager: { getSessionId: () => "session-picker" },
+		} as unknown as ExtensionCommandContext;
+
+		await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, context);
+		await commands.get("mcp")?.handler("", context);
+		expect(setEditorText).toHaveBeenLastCalledWith("Use MCP tool mcp_fake_echo_text");
+
+		await commands.get("mcps")?.handler("", context);
+		expect(setEditorText).toHaveBeenLastCalledWith("mcp_fake_echo_text");
+
+		const result = await handlers.get("input")?.(
+			{ type: "input", text: "Please use /mcps for this", source: "interactive" },
+			context,
+		);
+		expect(result).toEqual({ action: "handled" });
+		expect(setEditorText).toHaveBeenLastCalledWith("Please use mcp_fake_echo_text for this");
+
+		await commands.get("mcp")?.handler("status fake", context);
+		expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("fake: connected"));
+		await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, context);
+	});
+
 	it("lets the AI configure stdio, HTTP, and SSE MCP servers without credentials", async () => {
 		const settingsManager = SettingsManager.inMemory();
 		const tools: ToolDefinition[] = [];
@@ -256,7 +300,7 @@ describe("MCP extension commands", () => {
 			reload: vi.fn(),
 		} as unknown as ExtensionCommandContext;
 
-		await commands.get("mcp")?.handler("", context);
+		await commands.get("mcp")?.handler("status", context);
 		await commands.get("mcpset")?.handler("--project demo stdio node server.mjs", context);
 
 		expect(notify).toHaveBeenNthCalledWith(1, "No MCP servers configured.");

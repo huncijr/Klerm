@@ -15,6 +15,12 @@
 - Added the credential-safe `configure_mcp_server` tool so the AI can persist MCP configuration after explicit user requests.
 - Added one `MODEL_RESPONSE` decision event per routed provider response with model-attributed token, cache, reasoning, cost, source, and availability metadata.
 - Added per-response token and cost lines below finalized Klerm TUI and text-mode answers.
+- Added the persistent, default-on `/token` toggle for response token and cost lines.
+- Added interactive MCP tool pickers: `/mcp` inserts `Use MCP tool <name>`, while `/mcps` inserts a namespaced tool name as a standalone command or inline prompt marker.
+- Added `klerm doctor` diagnostics with human and `--json` output covering storage, config, decision-log integrity, local runtimes, and frontier providers, with exit codes `0`/`2`/`1` for pass/warning/fail.
+- Added filtering (`--event`, `--route`, `--task-id`, `--since`, `--limit`) and `--summary` aggregates to `klerm debug decisions`.
+- Added `klerm session timeline` printing model changes, Klerm transitions, and messages for a session, with `--json`, `--compact`, `--with-tools`, and `--with-cost` options and tool output hidden by default.
+- Added `klerm routing status` and typed `klerm config get`/`set` for the persisted Klerm routing configuration.
 
 ### Changed
 
@@ -22,9 +28,11 @@
 - Changed automatic routing to always start locally, deterministically recommend frontier for complex tasks, and enforce ignored recommendations after the first completed local response.
 - Changed the persistent A2A cycle budget to accept any positive safe integer or an explicit unlimited mode through `/routing cycles unlimited` or `0`.
 - Changed interactive mode to show animated startup/working feedback and a compact completion indicator.
+- Changed `Ctrl+O` to expand or collapse tool output, startup shortcuts, the routing guide, and routing details; the default view is compact and no longer repeats the Klerm wordmark.
 
 ### Fixed
 
+- Fixed resumed Klerm sessions omitting the local/frontier delegation and return markers that were visible before exit; new transitions are persisted in the session, and legacy sessions are reconstructed from their routing messages and tool results.
 - Fixed complex automatic tasks bypassing deterministic frontier delegation enforcement when the persistent active start lane was local, and recognized explicit Hungarian requests for the other configured model.
 - Fixed the subagent example repeatedly prompting before running project-local agents in trusted repositories ([#8261](https://github.com/earendil-works/pi/issues/8261)).
 - Added `session_compact_failed` extension events so compaction failures and aborts expose their reason, retry state, source, and error message to handlers ([#8175](https://github.com/earendil-works/pi/issues/8175)).

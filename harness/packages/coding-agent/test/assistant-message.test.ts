@@ -190,6 +190,16 @@ describe("AssistantMessageComponent", () => {
 		expect(stripAnsi(normalComponent.render(80).join("\n"))).not.toContain("Klerm usage:");
 	});
 
+	test("updates finalized usage visibility", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(createAssistantMessage([{ type: "text", text: "answer" }]));
+
+		component.setShowKlermUsage(true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("Klerm usage:");
+		component.setShowKlermUsage(false);
+		expect(stripAnsi(component.render(80).join("\n"))).not.toContain("Klerm usage:");
+	});
+
 	test("reapplies Markdown transformers when available width changes", () => {
 		initTheme("dark");
 		const availableWidths: number[] = [];

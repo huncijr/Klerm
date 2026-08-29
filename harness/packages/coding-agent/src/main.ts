@@ -60,9 +60,12 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
+import { runKlermConfigCommand } from "./klerm/cli/config-command.ts";
+import { runKlermDoctorCommand } from "./klerm/cli/doctor-command.ts";
 import { runKlermLocalCommand } from "./klerm/cli/local-command.ts";
 import { runKlermProvidersCommand } from "./klerm/cli/providers-command.ts";
 import { runKlermDebugCommand } from "./klerm/cli/route-command.ts";
+import { runKlermSessionCommand } from "./klerm/cli/session-command.ts";
 import { KlermConfigStore } from "./klerm/config.ts";
 import { KlermRoutingController } from "./klerm/router/runtime.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
@@ -589,6 +592,12 @@ export async function main(args: string[], options?: MainOptions) {
 	if (await runKlermLocalCommand(args)) {
 		return;
 	}
+	if (await runKlermSessionCommand(args)) {
+		return;
+	}
+	if (await runKlermConfigCommand(args)) {
+		return;
+	}
 
 	if (await runAuthCommand(args)) {
 		return;
@@ -879,6 +888,10 @@ export async function main(args: string[], options?: MainOptions) {
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 
 	if (await runKlermProvidersCommand(args, modelRuntime)) {
+		process.exit(process.exitCode ?? 0);
+		return;
+	}
+	if (await runKlermDoctorCommand(args, { modelRuntime })) {
 		process.exit(process.exitCode ?? 0);
 		return;
 	}

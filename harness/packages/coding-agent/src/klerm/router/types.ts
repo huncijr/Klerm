@@ -50,6 +50,27 @@ export interface KlermTransitionState {
 	transcriptHash?: string;
 }
 
+export const KLERM_SESSION_TRANSITION_CUSTOM_TYPE = "klerm-transition";
+
+export interface KlermSessionTransitionData {
+	version: 1;
+	transition: KlermTransitionState;
+}
+
+export function isKlermSessionTransitionData(data: unknown): data is KlermSessionTransitionData {
+	if (!data || typeof data !== "object") return false;
+	const candidate = data as { version?: unknown; transition?: unknown };
+	if (candidate.version !== 1 || !candidate.transition || typeof candidate.transition !== "object") return false;
+	const transition = candidate.transition as Partial<KlermTransitionState>;
+	return (
+		typeof transition.id === "string" &&
+		(transition.kind === "delegate" || transition.kind === "return") &&
+		(transition.toLane === "local" || transition.toLane === "frontier") &&
+		typeof transition.toTarget === "string" &&
+		typeof transition.reason === "string"
+	);
+}
+
 export interface KlermRouteRequest {
 	task: string;
 }
