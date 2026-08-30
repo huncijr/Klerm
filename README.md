@@ -294,6 +294,39 @@ that launched it. It does not provide a built-in filesystem, process, network,
 or credential sandbox. Use a container or another isolation layer for untrusted
 repositories and instructions.
 
+## Desktop Development
+
+The current Tauri app is a source-tree development shell for Linux. It uses the
+versioned JSONL RPC backend, discovers installed local models, persists the
+selected local model, lists and resumes sessions, streams responses and tool
+activity, and can stop an active task.
+
+On Fedora, install the native build dependencies and Rust toolchain first:
+
+```bash
+sudo dnf install gtk3-devel webkit2gtk4.1-devel dbus-devel librsvg2-devel
+rustup default stable
+```
+
+Start the desktop app from the harness workspace:
+
+```bash
+cd harness
+npm install --ignore-scripts
+npm run tauri:dev
+```
+
+The command performs an offline backend build before starting Vite and Tauri.
+The Klerm splash should be followed by the workspace with `Backend connected`
+in the sidebar. Start Ollama and install a model before testing a local prompt.
+Routing decisions continue to be written to the active project's
+`.klerm/router-decisions.jsonl` file.
+
+The desktop is not release-packaged yet. Development currently requires Node.js
+on `PATH` and the source checkout because the backend and Node runtime are not
+bundled as a sidecar. Linux startup has been agent-smoke-tested on Fedora;
+Windows startup, installers, and clean-machine Linux bundles remain unverified.
+
 ## Development
 
 ```bash
