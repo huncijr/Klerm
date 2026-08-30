@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="theme-color" content="#080b0f" />
+		<title>Klerm</title>
+		<script type="module" src="/src/main.ts"></script>
+	</head>
+	<body>
+		<div id="splash" class="splash" aria-label="Klerm is starting">
+			<div class="splash-glow"></div>
+			<img src="/Klerm_logo.png" alt="Klerm" class="splash-logo" />
+			<div class="splash-status"><span></span>Starting local workspace</div>
+		</div>
+
+		<div id="app" class="app-shell is-booting">
+			<aside id="sidebar" class="sidebar">
+				<header class="brand">
+					<div class="brand-mark"><img src="/Klerm_logo.png" alt="Klerm" /></div>
+				</header>
+
+				<button id="new-session" class="new-session" type="button">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+					New session
+				</button>
+
+				<section class="sessions">
+					<div class="section-heading"><p class="section-label">Sessions</p><button id="refresh-sessions" type="button" aria-label="Refresh sessions">Refresh</button></div>
+					<div id="session-list" class="session-list"><p class="muted">Loading sessions...</p></div>
+				</section>
+
+				<footer class="sidebar-footer">
+					<span id="sidebar-status" class="status-dot is-starting"></span>
+					<div><strong id="sidebar-status-label">Starting backend</strong><small id="version-label">RPC handshake</small></div>
+				</footer>
+			</aside>
+
+			<main id="workspace" class="workspace">
+				<header class="topbar">
+					<button id="sidebar-toggle" class="icon-button sidebar-toggle" type="button" aria-label="Toggle navigation">
+						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+					</button>
+					<div class="workspace-title">
+						<span>WORKSPACE</span>
+						<strong id="session-title">New local session</strong>
+						<small id="session-cwd"></small>
+					</div>
+					<div class="current-model"><span>CURRENT MODEL</span><strong id="current-model">Not configured</strong></div>
+				</header>
+
+				<section id="content" class="content">
+					<div id="conversation" class="conversation">
+						<div id="empty-state" class="empty-state">
+							<div class="orbital-mark"><div></div><span>K</span></div>
+							<p class="eyebrow">LOCAL-FIRST CODING AGENT</p>
+							<h1>What should we build?</h1>
+							<p>Choose an installed local model, then send a task. Klerm keeps the work and routing decisions on this machine.</p>
+							<div id="runtime-card" class="runtime-card">
+								<span id="runtime-indicator" class="status-dot is-starting"></span>
+								<div><strong id="runtime-title">Checking Ollama</strong><small id="runtime-detail">Looking for installed local models</small></div>
+								<button id="refresh-models" type="button">Refresh</button>
+							</div>
+						</div>
+					</div>
+					<div id="activity" class="activity" hidden></div>
+				</section>
+
+				<footer id="composer-wrap" class="composer-wrap">
+					<div id="error-banner" class="error-banner" hidden></div>
+					<form id="composer" class="composer">
+						<textarea id="prompt" rows="1" placeholder="Describe a task for Klerm..." aria-label="Task prompt"></textarea>
+						<button id="stop-button" class="stop-button" type="button" hidden>Stop</button>
+						<button id="send-button" class="send-button" type="submit" aria-label="Send task" disabled>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Zm7 1 7-8" /></svg>
+						</button>
+					</form>
+					<div class="composer-controls">
+						<label class="control-field">
+							<span>Local model</span>
+							<select id="local-model-select" disabled><option>Discovering models...</option></select>
+						</label>
+						<label class="control-field">
+							<span>Frontier model</span>
+							<select id="frontier-model-select" disabled><option>Discovering models...</option></select>
+						</label>
+						<label class="control-field">
+							<span>Routing</span>
+							<select id="routing-select" disabled>
+								<option value="off">Off</option>
+								<option value="local">Local</option>
+								<option value="frontier">Frontier</option>
+								<option value="auto">Auto</option>
+							</select>
+						</label>
+					</div>
+					<div class="composer-meta"><span>Enter to send, Shift+Enter for a new line</span><span id="task-state">Backend starting</span></div>
+				</footer>
+			</main>
+		</div>
+	</body>
+</html>
