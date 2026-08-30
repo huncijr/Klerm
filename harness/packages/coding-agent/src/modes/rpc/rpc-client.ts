@@ -11,9 +11,20 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
+import type { KlermConfig } from "../../klerm/config.ts";
+import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
+import type { KlermRoutingState } from "../../klerm/router/types.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
+import type {
+	RpcCommand,
+	RpcDesktopHandshake,
+	RpcDesktopSessionInfo,
+	RpcKlermConfigUpdate,
+	RpcResponse,
+	RpcSessionState,
+	RpcSlashCommand,
+} from "./rpc-types.ts";
 
 // ============================================================================
 // Types
@@ -48,6 +59,16 @@ export interface ModelInfo {
 }
 
 export type RpcEventListener = (event: JsonAgentSessionEvent) => void;
+
+export class RpcResponseError extends Error {
+	readonly code: string | undefined;
+
+	constructor(message: string, code?: string) {
+		super(message);
+		this.name = "RpcResponseError";
+		this.code = code;
+	}
+}
 
 // ============================================================================
 // RPC Client
@@ -189,6 +210,38 @@ export class RpcClient {
 	// =========================================================================
 	// Command Methods
 	// =========================================================================
+
+	/** Get the versioned desktop protocol capabilities and initial state. */
+	async desktopHandshake(): Promise<RpcDesktopHandshake> {
+		const response = await this.send({ type: "desktop_handshake" });
+		return this.getData(response);
+	}
+
+	/** Discover local runtimes and their installed models. */
+	async getLocalRuntimes(): Promise<LocalRuntimeDiscoveryResult[]> {
+		const response = await this.send({ type: "get_local_runtimes" });
+		return this.getData<{ runtimes: LocalRuntimeDiscoveryResult[] }>(response).runtimes;
+	}
+
+	/** Read the persisted Klerm routing configuration. */
+	async getKlermConfig(): Promise<KlermConfig> {
+		const response = await this.send({ type: "get_klerm_config" });
+		return this.getData(response);
+	}
+
+	/** Persist desktop-supported Klerm routing configuration fields. */
+	async setKlermConfig(
+		update: RpcKlermConfigUpdate,
+	): Promise<{ config: KlermConfig; routingState?: KlermRoutingState }> {
+		const response = await this.send({ type: "set_klerm_config", update });
+		return this.getData(response);
+	}
+
+	/** List stored sessions using opaque tokens accepted by switchSession(). */
+	async listSessions(): Promise<RpcDesktopSessionInfo[]> {
+		const response = await this.send({ type: "list_sessions" });
+		return this.getData<{ sessions: RpcDesktopSessionInfo[] }>(response).sessions;
+	}
 
 	/**
 	 * Send a prompt to the agent.
@@ -591,7 +644,7 @@ export class RpcClient {
 	private getData<T>(response: RpcResponse): T {
 		if (!response.success) {
 			const errorResponse = response as Extract<RpcResponse, { success: false }>;
-			throw new Error(errorResponse.error);
+			throw new RpcResponseError(errorResponse.error, errorResponse.code);
 		}
 		// Type assertion: we trust response.data matches T based on the command sent.
 		// This is safe because each public method specifies the correct T for its command.

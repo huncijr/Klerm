@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
 	ExtensionUIContext,
@@ -25,33 +26,73 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
+import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
+	RpcDesktopSessionInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.ts";
+import { KLERM_DESKTOP_RPC_PROTOCOL_VERSION } from "./rpc-types.ts";
 
 // Re-export types for consumers
 export type {
 	RpcCommand,
+	RpcDesktopHandshake,
+	RpcDesktopSessionInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcKlermConfigUpdate,
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc-types.ts";
+
+export interface RunRpcModeOptions {
+	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
+	listSessions?: () => Promise<SessionInfo[]>;
+}
+
+const DESKTOP_COMMANDS = [
+	"desktop_handshake",
+	"get_local_runtimes",
+	"get_klerm_config",
+	"set_klerm_config",
+	"list_sessions",
+	"get_state",
+	"get_messages",
+	"get_entries",
+	"prompt",
+	"abort",
+	"new_session",
+	"switch_session",
+] as const;
+
+const DESKTOP_EVENTS = [
+	"message_start",
+	"message_update",
+	"message_end",
+	"tool_execution_start",
+	"tool_execution_update",
+	"tool_execution_end",
+	"routing_changed",
+	"agent_start",
+	"agent_end",
+	"agent_settled",
+] as const;
 
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
+export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunRpcModeOptions = {}): Promise<never> {
 	takeOverStdout();
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
@@ -72,9 +113,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		return { id, type: "response", command, success: true, data } as RpcResponse;
 	};
 
-	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
-		return { id, type: "response", command, success: false, error: message };
+	const error = (id: string | undefined, command: string, message: string, code?: string): RpcResponse => {
+		return { id, type: "response", command, success: false, error: message, code };
 	};
+
+	const getSessionState = (): RpcSessionState => ({
+		model: session.model,
+		cwd: session.sessionManager.getCwd(),
+		thinkingLevel: session.thinkingLevel,
+		isStreaming: session.isStreaming,
+		isCompacting: session.isCompacting,
+		steeringMode: session.steeringMode,
+		followUpMode: session.followUpMode,
+		sessionFile: session.sessionFile,
+		sessionId: session.sessionId,
+		sessionName: session.sessionName,
+		autoCompactionEnabled: session.autoCompactionEnabled,
+		messageCount: session.messages.length,
+		pendingMessageCount: session.pendingMessageCount,
+	});
 
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
@@ -388,6 +445,131 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		switch (command.type) {
 			// =================================================================
+			// Desktop capability and status
+			// =================================================================
+
+			case "desktop_handshake": {
+				return success(id, "desktop_handshake", {
+					protocolVersion: KLERM_DESKTOP_RPC_PROTOCOL_VERSION,
+					klermVersion: VERSION,
+					capabilities: {
+						commands: [...DESKTOP_COMMANDS],
+						events: [...DESKTOP_EVENTS],
+					},
+					state: getSessionState(),
+					routingState: session.klermRouting ? { ...session.klermRouting.routingState } : undefined,
+				});
+			}
+
+			case "get_local_runtimes": {
+				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
+				const runtimes = await discover(undefined, AbortSignal.timeout(5000));
+				return success(id, "get_local_runtimes", { runtimes });
+			}
+
+			case "get_klerm_config": {
+				const controller = session.klermRouting;
+				if (!controller) {
+					return error(id, "get_klerm_config", "Klerm routing is unavailable.", "ROUTING_UNAVAILABLE");
+				}
+				return success(id, "get_klerm_config", { ...controller.config });
+			}
+
+			case "set_klerm_config": {
+				const controller = session.klermRouting;
+				if (!controller) {
+					return error(id, "set_klerm_config", "Klerm routing is unavailable.", "ROUTING_UNAVAILABLE");
+				}
+				if (session.isStreaming) {
+					return error(
+						id,
+						"set_klerm_config",
+						"Routing configuration cannot change during a task.",
+						"TASK_ACTIVE",
+					);
+				}
+				const update: unknown = command.update;
+				if (!update || typeof update !== "object" || Array.isArray(update)) {
+					return error(id, "set_klerm_config", "A configuration update object is required.", "INVALID_CONFIG");
+				}
+				const keys = Object.keys(update);
+				if (
+					keys.length === 0 ||
+					keys.some((key) => key !== "routing" && key !== "localModel" && key !== "frontierModel")
+				) {
+					return error(
+						id,
+						"set_klerm_config",
+						"Only routing, localModel, and frontierModel can be updated.",
+						"INVALID_CONFIG",
+					);
+				}
+				const typedUpdate = update as { routing?: unknown; localModel?: unknown; frontierModel?: unknown };
+				if (
+					typedUpdate.routing !== undefined &&
+					typedUpdate.routing !== "off" &&
+					typedUpdate.routing !== "local" &&
+					typedUpdate.routing !== "frontier" &&
+					typedUpdate.routing !== "auto"
+				) {
+					return error(id, "set_klerm_config", "Invalid routing mode.", "INVALID_CONFIG");
+				}
+				if (
+					"localModel" in typedUpdate &&
+					typedUpdate.localModel !== null &&
+					(typeof typedUpdate.localModel !== "string" || typedUpdate.localModel.trim().length === 0)
+				) {
+					return error(id, "set_klerm_config", "Invalid local model reference.", "INVALID_CONFIG");
+				}
+				if (
+					"frontierModel" in typedUpdate &&
+					typedUpdate.frontierModel !== null &&
+					(typeof typedUpdate.frontierModel !== "string" || typedUpdate.frontierModel.trim().length === 0)
+				) {
+					return error(id, "set_klerm_config", "Invalid frontier model reference.", "INVALID_CONFIG");
+				}
+				try {
+					if ("localModel" in typedUpdate) {
+						await controller.setLocalModel(
+							typeof typedUpdate.localModel === "string" ? typedUpdate.localModel.trim() : undefined,
+						);
+					}
+					if ("frontierModel" in typedUpdate) {
+						await controller.setFrontierModel(
+							typeof typedUpdate.frontierModel === "string" ? typedUpdate.frontierModel.trim() : undefined,
+						);
+					}
+					if (typeof typedUpdate.routing === "string") await controller.setRoutingMode(typedUpdate.routing);
+				} catch (configError) {
+					return error(
+						id,
+						"set_klerm_config",
+						configError instanceof Error ? configError.message : String(configError),
+						"INVALID_CONFIG",
+					);
+				}
+				return success(id, "set_klerm_config", {
+					config: { ...controller.config },
+					routingState: { ...controller.routingState },
+				});
+			}
+
+			case "list_sessions": {
+				const sessions = await (options.listSessions?.() ?? SessionManager.listAll());
+				const desktopSessions: RpcDesktopSessionInfo[] = sessions.map((storedSession) => ({
+					id: storedSession.id,
+					sessionToken: storedSession.path,
+					name: storedSession.name,
+					cwd: storedSession.cwd,
+					created: storedSession.created.toISOString(),
+					modified: storedSession.modified.toISOString(),
+					messageCount: storedSession.messageCount,
+					firstMessage: storedSession.firstMessage,
+				}));
+				return success(id, "list_sessions", { sessions: desktopSessions });
+			}
+
+			// =================================================================
 			// Prompting
 			// =================================================================
 
@@ -444,21 +626,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					messageCount: session.messages.length,
-					pendingMessageCount: session.pendingMessageCount,
-				};
-				return success(id, "get_state", state);
+				return success(id, "get_state", getSessionState());
 			}
 
 			// =================================================================

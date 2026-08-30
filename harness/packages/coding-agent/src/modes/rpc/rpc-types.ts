@@ -12,12 +12,52 @@ import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import type { KlermConfig, KlermRoutingMode } from "../../klerm/config.ts";
+import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
+import type { KlermRoutingState } from "../../klerm/router/types.ts";
+
+export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
+
+export interface RpcDesktopHandshake {
+	protocolVersion: number;
+	klermVersion: string;
+	capabilities: {
+		commands: string[];
+		events: string[];
+	};
+	state: RpcSessionState;
+	routingState?: KlermRoutingState;
+}
+
+export interface RpcDesktopSessionInfo {
+	id: string;
+	sessionToken: string;
+	name?: string;
+	cwd: string;
+	created: string;
+	modified: string;
+	messageCount: number;
+	firstMessage: string;
+}
+
+export interface RpcKlermConfigUpdate {
+	routing?: KlermRoutingMode;
+	localModel?: string | null;
+	frontierModel?: string | null;
+}
 
 // ============================================================================
 // RPC Commands (stdin)
 // ============================================================================
 
 export type RpcCommand =
+	// Desktop capability and status
+	| { id?: string; type: "desktop_handshake" }
+	| { id?: string; type: "get_local_runtimes" }
+	| { id?: string; type: "get_klerm_config" }
+	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
+	| { id?: string; type: "list_sessions" }
+
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
@@ -94,6 +134,7 @@ export interface RpcSlashCommand {
 
 export interface RpcSessionState {
 	model?: Model<any>;
+	cwd: string;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -113,6 +154,31 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	// Desktop capability and status
+	| { id?: string; type: "response"; command: "desktop_handshake"; success: true; data: RpcDesktopHandshake }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_local_runtimes";
+			success: true;
+			data: { runtimes: LocalRuntimeDiscoveryResult[] };
+	  }
+	| { id?: string; type: "response"; command: "get_klerm_config"; success: true; data: KlermConfig }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_klerm_config";
+			success: true;
+			data: { config: KlermConfig; routingState?: KlermRoutingState };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_sessions";
+			success: true;
+			data: { sessions: RpcDesktopSessionInfo[] };
+	  }
+
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }
@@ -228,7 +294,7 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail)
-	| { id?: string; type: "response"; command: string; success: false; error: string };
+	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };
 
 // ============================================================================
 // Extension UI Events (stdout)
