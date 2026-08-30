@@ -130,6 +130,28 @@ describe("Klerm routing runtime", () => {
 		});
 	});
 
+	it("records the session id on decision log events", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		let sessionId: string | undefined = "session-before-switch";
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store, () => sessionId);
+		const transition = await controller.routePrompt("Fix a typo");
+		await transition?.commit();
+		sessionId = "session-after-switch";
+		await controller.recordCompletion(true);
+
+		const decisions = (await readKlermRouteDecisionLog(tempDir))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(decisions.length).toBeGreaterThanOrEqual(2);
+		expect(decisions[0]).toMatchObject({ sessionId: "session-before-switch" });
+		expect(decisions.at(-1)).toMatchObject({ sessionId: "session-after-switch" });
+	});
+
 	it("logs deterministic model response token and cost metadata", async () => {
 		const store = await KlermConfigStore.load(tempDir, {
 			routing: "local",

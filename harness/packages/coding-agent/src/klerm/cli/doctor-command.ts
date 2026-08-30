@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { getAgentDir, getSessionsDir } from "../../config.ts";
+import { SettingsManager } from "../../core/settings-manager.ts";
 import { KlermConfigStore } from "../config.ts";
 import {
 	discoverLocalRuntimes,
@@ -34,6 +35,7 @@ export interface RunKlermDoctorCommandOptions {
 		probes: readonly LocalRuntimeProbe[],
 		signal: AbortSignal,
 	) => Promise<LocalRuntimeDiscoveryResult[]>;
+	getMcpServers?: () => Record<string, { enabled?: boolean }>;
 	stdout?: (message: string) => void;
 	stderr?: (message: string) => void;
 }
@@ -73,6 +75,20 @@ async function checkDecisionLog(cwd: string): Promise<KlermDoctorCheck> {
 	}
 }
 
+function checkMcpServers(servers: Record<string, { enabled?: boolean }>): KlermDoctorCheck {
+	const names = Object.keys(servers);
+	if (names.length === 0) {
+		return { id: "mcp-servers", status: "pass", message: "No MCP servers configured" };
+	}
+	const disabled = names.filter((name) => servers[name]?.enabled === false);
+	const enabledCount = names.length - disabled.length;
+	const message =
+		disabled.length === 0
+			? `${names.length} MCP server(s) configured`
+			: `${enabledCount} of ${names.length} MCP server(s) enabled (disabled: ${disabled.join(", ")})`;
+	return { id: "mcp-servers", status: "pass", message };
+}
+
 function statusExitCode(checks: readonly KlermDoctorCheck[]): number {
 	if (checks.some((check) => check.status === "fail")) return 1;
 	if (checks.some((check) => check.status === "warning")) return 2;
@@ -108,6 +124,10 @@ export async function runKlermDoctorCommand(args: string[], options: RunKlermDoc
 	checks.push(await checkExistingPath("agent-storage", "Agent storage", agentDir));
 	checks.push(await checkExistingPath("session-storage", "Session storage", sessionsDir));
 	checks.push(await checkDecisionLog(cwd));
+
+	const getMcpServers =
+		options.getMcpServers ?? (() => SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getMcpServers());
+	checks.push(checkMcpServers(getMcpServers()));
 
 	const probes = options.probes ?? getLocalRuntimeProbes();
 	const discover = options.discoverLocal ?? discoverLocalRuntimes;

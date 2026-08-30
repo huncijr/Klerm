@@ -57,14 +57,42 @@ describe("Klerm doctor command", () => {
 				modelRuntime,
 				probes,
 				discoverLocal: async () => localResults,
+				getMcpServers: () => ({ echo: {} }),
 				stdout: (message) => output.push(message),
 			}),
 		).resolves.toBe(true);
 
 		const result = JSON.parse(output[0]);
 		expect(result).toMatchObject({ status: "pass", exitCode: 0 });
-		expect(result.checks).toHaveLength(7);
+		expect(result.checks).toHaveLength(8);
+		expect(result.checks).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "mcp-servers", message: "1 MCP server(s) configured" }),
+			]),
+		);
 		expect(output[0]).not.toContain("secret");
+		expect(process.exitCode).toBe(0);
+	});
+
+	it("reports disabled MCP servers without failing", async () => {
+		writeFileSync(join(agentDir, "klerm.json"), JSON.stringify({ routing: "auto" }));
+		const output: string[] = [];
+
+		await runKlermDoctorCommand(["doctor"], {
+			cwd: tempDir,
+			agentDir,
+			sessionsDir,
+			modelRuntime: {
+				getProviders: () => [{ id: "anthropic", name: "Anthropic" }],
+				getProviderAuthStatus: () => ({ configured: true }),
+			},
+			probes,
+			discoverLocal: async () => localResults,
+			getMcpServers: () => ({ echo: {}, legacy: { enabled: false } }),
+			stdout: (message) => output.push(message),
+		});
+
+		expect(output[0]).toContain("PASS mcp-servers: 1 of 2 MCP server(s) enabled (disabled: legacy)");
 		expect(process.exitCode).toBe(0);
 	});
 

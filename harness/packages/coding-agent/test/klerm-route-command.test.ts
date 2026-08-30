@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runKlermDebugCommand } from "../src/klerm/cli/route-command.ts";
-import { getKlermDecisionLogPath } from "../src/klerm/router/decision-log.ts";
+import { appendKlermRouteDecision, getKlermDecisionLogPath } from "../src/klerm/router/decision-log.ts";
 import { routeWithMock } from "../src/klerm/router/mock-router.ts";
 
 describe("Klerm debug command", () => {
@@ -137,6 +137,63 @@ describe("Klerm debug command", () => {
 
 		expect(process.exitCode).toBe(1);
 		expect(errors[0]).toContain("positive integer");
+	});
+
+	it("filters decisions by provider, model, and session", async () => {
+		const base = routeWithMock({ task: "task one" }, { now: () => new Date("2026-08-18T12:00:00.000Z") });
+		const second = routeWithMock({ task: "task two" }, { now: () => new Date("2026-08-18T13:00:00.000Z") });
+		await appendKlermRouteDecision(tempDir, {
+			...base,
+			event: "MODEL_RESPONSE",
+			provider: "ollama",
+			model: "qwen3",
+			sessionId: "session-one",
+		});
+		await appendKlermRouteDecision(tempDir, {
+			...second,
+			event: "MODEL_RESPONSE",
+			provider: "openai-codex",
+			model: "gpt-5.5",
+			sessionId: "session-two",
+		});
+
+		const output: string[] = [];
+		await runKlermDebugCommand(
+			["debug", "decisions", "--event", "MODEL_RESPONSE", "--provider", "ollama", "--session", "session-one"],
+			{ cwd: tempDir, stdout: (message) => output.push(message) },
+		);
+
+		expect(output).toHaveLength(1);
+		expect(JSON.parse(output[0])).toMatchObject({ provider: "ollama", model: "qwen3", sessionId: "session-one" });
+
+		output.length = 0;
+		await runKlermDebugCommand(["debug", "decisions", "--model", "gpt-5.5"], {
+			cwd: tempDir,
+			stdout: (message) => output.push(message),
+		});
+		expect(output).toHaveLength(1);
+		expect(JSON.parse(output[0])).toMatchObject({ provider: "openai-codex" });
+	});
+
+	it("exports filtered decisions with a sharing warning", async () => {
+		await runKlermDebugCommand(["debug", "route", "fix", "auth"], {
+			cwd: tempDir,
+			now: () => new Date("2026-08-18T12:00:00.000Z"),
+			stdout: () => {},
+		});
+		const outputPath = join(tempDir, "export.jsonl");
+		const output: string[] = [];
+
+		await runKlermDebugCommand(["debug", "decisions", "--export", outputPath], {
+			cwd: tempDir,
+			stdout: (message) => output.push(message),
+		});
+
+		const exported = readFileSync(outputPath, "utf8").trim().split("\n");
+		expect(exported).toHaveLength(1);
+		expect(JSON.parse(exported[0])).toMatchObject({ task: "fix auth", route: "SELF" });
+		expect(output[0]).toContain("Exported 1 decision(s)");
+		expect(output[0]).toContain("Warning");
 	});
 
 	it("ignores non-Klerm commands", async () => {

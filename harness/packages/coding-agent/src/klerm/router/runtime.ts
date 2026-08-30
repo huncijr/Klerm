@@ -337,11 +337,18 @@ export class KlermRoutingController {
 	private repeatedToolCalls = 0;
 	private task = "";
 	private explicitFrontierRequest = false;
+	private readonly getSessionId?: () => string | undefined;
 
-	constructor(cwd: string, modelRuntime: ModelRuntime, configStore: KlermConfigStore) {
+	constructor(
+		cwd: string,
+		modelRuntime: ModelRuntime,
+		configStore: KlermConfigStore,
+		getSessionId?: () => string | undefined,
+	) {
 		this.cwd = cwd;
 		this.modelRuntime = modelRuntime;
 		this.configStore = configStore;
+		this.getSessionId = getSessionId;
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
@@ -624,7 +631,9 @@ export class KlermRoutingController {
 	}
 
 	private async log(decision: KlermRouteDecision): Promise<void> {
-		await appendKlermRouteDecision(this.cwd, decision);
+		const sessionId = this.getSessionId?.();
+		const enriched = sessionId && !decision.sessionId ? { ...decision, sessionId } : decision;
+		await appendKlermRouteDecision(this.cwd, enriched);
 	}
 
 	private async logLifecycle(

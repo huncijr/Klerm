@@ -128,4 +128,60 @@ describe("Klerm session timeline command", () => {
 		expect(process.exitCode).toBe(1);
 		expect(errors[0]).toContain("was not found");
 	});
+
+	it("lists sessions with metadata and omits full transcript text", async () => {
+		const sessions = [
+			{
+				path: "/sessions/a.jsonl",
+				id: "session-aaa",
+				cwd: "/project",
+				name: "named session",
+				created: new Date("2026-08-01T10:00:00.000Z"),
+				modified: new Date("2026-08-27T17:00:00.000Z"),
+				messageCount: 12,
+				firstMessage: "first prompt text",
+				allMessagesText: "full transcript text that must not leak",
+			},
+			{
+				path: "/sessions/b.jsonl",
+				id: "session-bbb",
+				cwd: "/other",
+				created: new Date("2026-08-02T10:00:00.000Z"),
+				modified: new Date("2026-08-26T17:00:00.000Z"),
+				messageCount: 3,
+				firstMessage: "second prompt text",
+				allMessagesText: "another transcript",
+			},
+		];
+		const output: string[] = [];
+
+		await runKlermSessionCommand(["session", "list", "--json"], {
+			listSessions: async () => sessions,
+			stdout: (message) => output.push(message),
+		});
+
+		const result = JSON.parse(output[0]);
+		expect(result.sessions).toHaveLength(2);
+		expect(result.sessions[0]).toMatchObject({ id: "session-aaa", name: "named session", messageCount: 12 });
+		expect(output[0]).not.toContain("allMessagesText");
+		expect(output[0]).not.toContain("full transcript text");
+
+		output.length = 0;
+		await runKlermSessionCommand(["session", "list"], {
+			listSessions: async () => sessions,
+			stdout: (message) => output.push(message),
+		});
+		expect(output[0]).toContain("session-aaa");
+		expect(output[0]).toContain("named session");
+		expect(output[0]).toContain("second prompt text");
+	});
+
+	it("reports when no sessions exist", async () => {
+		const output: string[] = [];
+		await runKlermSessionCommand(["session", "list"], {
+			listSessions: async () => [],
+			stdout: (message) => output.push(message),
+		});
+		expect(output[0]).toBe("No sessions found.");
+	});
 });

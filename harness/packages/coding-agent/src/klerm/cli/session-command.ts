@@ -6,6 +6,8 @@ import { isKlermSessionTransitionData, KLERM_SESSION_TRANSITION_CUSTOM_TYPE } fr
 import { deriveLegacyKlermTranscriptTransitions, type KlermTranscriptTransition } from "../session-transitions.ts";
 
 const SESSION_TIMELINE_USAGE = `${APP_NAME} session timeline <session-id|path> [--json] [--compact] [--with-tools] [--with-cost]`;
+const SESSION_LIST_USAGE = `${APP_NAME} session list [--json] [--dir <dir>]`;
+const SESSION_USAGE = `Usage:\n  ${SESSION_LIST_USAGE}\n  ${SESSION_TIMELINE_USAGE}`;
 
 interface SessionTimelineEvent {
 	timestamp: string;
@@ -117,6 +119,67 @@ function formatTimelineEvent(event: SessionTimelineEvent): string {
 	return `${timestamp} ${(event.role ?? "message").toUpperCase()}${target}${tool}${usage}${text ? `: ${text}` : ""}`;
 }
 
+function listSessionInfo(session: SessionInfo): Record<string, unknown> {
+	return {
+		id: session.id,
+		name: session.name,
+		path: session.path,
+		cwd: session.cwd,
+		created: session.created.toISOString(),
+		modified: session.modified.toISOString(),
+		messageCount: session.messageCount,
+		firstMessage: session.firstMessage,
+	};
+}
+
+async function runSessionList(
+	args: string[],
+	options: RunKlermSessionCommandOptions,
+	stdout: (message: string) => void,
+	stderr: (message: string) => void,
+): Promise<boolean> {
+	const rest = args.slice(2);
+	let json = false;
+	let dir: string | undefined;
+	for (let index = 0; index < rest.length; index++) {
+		const arg = rest[index];
+		if (arg === "--json") json = true;
+		else if (arg === "--dir") {
+			const value = rest[++index];
+			if (!value) {
+				stderr(`Error: --dir requires a directory.\nUsage: ${SESSION_LIST_USAGE}`);
+				process.exitCode = 1;
+				return true;
+			}
+			dir = value;
+		} else if (arg === "--help" || arg === "-h") {
+			stdout(`Usage: ${SESSION_LIST_USAGE}`);
+			return true;
+		} else {
+			stderr(`Error: Unknown session list option "${arg}".\nUsage: ${SESSION_LIST_USAGE}`);
+			process.exitCode = 1;
+			return true;
+		}
+	}
+
+	const sessions = await (options.listSessions?.() ?? SessionManager.listAll(dir ?? options.sessionsDir));
+	if (json) {
+		stdout(JSON.stringify({ sessions: sessions.map(listSessionInfo) }, null, 2));
+		return true;
+	}
+	if (sessions.length === 0) {
+		stdout(dir ? `No sessions found in ${dir}.` : "No sessions found.");
+		return true;
+	}
+	const lines = sessions.map((session) => {
+		const name = session.name ?? session.firstMessage.replace(/\s+/g, " ").slice(0, 60);
+		const modified = session.modified.toISOString();
+		return `${modified}  ${session.id}  msgs=${String(session.messageCount).padStart(5)}  ${name}${session.cwd ? `  (${session.cwd})` : ""}`;
+	});
+	stdout(lines.join("\n"));
+	return true;
+}
+
 export async function runKlermSessionCommand(
 	args: string[],
 	options: RunKlermSessionCommandOptions = {},
@@ -125,11 +188,14 @@ export async function runKlermSessionCommand(
 	const stdout = options.stdout ?? console.log;
 	const stderr = options.stderr ?? console.error;
 	if (args.length === 1 || args[1] === "--help" || args[1] === "-h") {
-		stdout(`Usage:\n  ${SESSION_TIMELINE_USAGE}`);
+		stdout(SESSION_USAGE);
 		return true;
 	}
+	if (args[1] === "list") {
+		return runSessionList(args, options, stdout, stderr);
+	}
 	if (args[1] !== "timeline") {
-		stderr(`Error: Unknown session command "${args[1]}".\nUsage: ${SESSION_TIMELINE_USAGE}`);
+		stderr(`Error: Unknown session command "${args[1]}".\n${SESSION_USAGE}`);
 		process.exitCode = 1;
 		return true;
 	}

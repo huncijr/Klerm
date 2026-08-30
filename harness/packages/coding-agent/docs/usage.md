@@ -227,19 +227,26 @@ See [Pi Packages](packages.md) for package sources and security notes.
 ### Klerm Diagnostics Commands
 
 ```bash
-klerm doctor [--json]                # Health check: storage, config, decision log, runtimes, providers
+klerm doctor [--json]                # Health check: storage, config, decision log, runtimes, providers, MCP
+klerm session list [--json]          # List stored sessions with metadata
 klerm session timeline <session>     # Structured timeline of one session (id, prefix, or file path)
 klerm routing status [--json]        # Show the persisted routing configuration
 klerm config get [key] [--json]      # Read persisted Klerm routing config
 klerm config set <key> <value>       # Update persisted Klerm routing config
-klerm debug decisions [flags]        # Print, filter, or summarize routing decisions
+klerm debug decisions [flags]        # Print, filter, summarize, or export routing decisions
 ```
 
 `klerm doctor` checks that the agent and session storage is writable, the Klerm
 config parses, `.klerm/router-decisions.jsonl` contains valid JSONL, at least
-one local model is reachable, at least one frontier provider is configured, and
-routing is not disabled. Exit codes: `0` all pass, `2` warnings only, `1`
-failure. It never calls models, providers, or prints credentials.
+one local model is reachable, at least one frontier provider is configured, MCP
+servers are reported, and routing is not disabled. Exit codes: `0` all pass, `2`
+warnings only, `1` failure. It never calls models, providers, or prints
+credentials.
+
+`klerm session list` lists stored sessions sorted by modification time with
+their id, message count, display name (or first message), and working
+directory. `--json` emits structured session metadata without full transcript
+text. `--dir <dir>` limits the scan to one session directory.
 
 `klerm session timeline` prints model changes, Klerm transitions (including
 reconstructed legacy handoffs), and messages. Tool output is hidden by default;
@@ -247,8 +254,11 @@ use `--with-tools`, `--with-cost`, `--compact`, or `--json` for structured
 output.
 
 `klerm debug decisions` accepts `--event <type>`, `--route <route>`,
-`--task-id <id>`, `--since <ISO date>`, `--limit <count>`, and `--summary`
-(total events, event/route counts, token and cost sums).
+`--task-id <id>`, `--session <id>`, `--provider <provider>`,
+`--model <model>`, `--since <ISO date>`, `--limit <count>`, and `--summary`
+(total events, event/route counts, token and cost sums). Use
+`--export <file>` to write the filtered decisions as JSONL; the export prints a
+warning because decisions include task text, cwd, and model references.
 
 ### Modes
 

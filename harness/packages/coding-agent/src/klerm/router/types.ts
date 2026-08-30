@@ -78,6 +78,7 @@ export interface KlermRouteRequest {
 export interface KlermRouteDecision {
 	timestamp: string;
 	taskId: string;
+	sessionId?: string;
 	event: KlermDecisionEventType;
 	task: string;
 	route: KlermRoute;

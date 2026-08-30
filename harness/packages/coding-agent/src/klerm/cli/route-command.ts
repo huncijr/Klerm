@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { APP_NAME, getAgentDir } from "../../config.ts";
 import { KlermConfigStore } from "../config.ts";
 import {
@@ -9,7 +10,7 @@ import { routeWithMock } from "../router/mock-router.ts";
 import type { KlermRouteDecision } from "../router/types.ts";
 
 const KLERM_DEBUG_ROUTE_USAGE = `${APP_NAME} debug route <task>`;
-const KLERM_DEBUG_DECISIONS_USAGE = `${APP_NAME} debug decisions [--event <type>] [--route <route>] [--task-id <id>] [--since <ISO date>] [--limit <count>] [--summary]`;
+const KLERM_DEBUG_DECISIONS_USAGE = `${APP_NAME} debug decisions [--event <type>] [--route <route>] [--task-id <id>] [--session <id>] [--provider <provider>] [--model <model>] [--since <ISO date>] [--limit <count>] [--summary] [--export <file>]`;
 
 export interface RunKlermCommandOptions {
 	cwd?: string;
@@ -69,9 +70,13 @@ export async function runKlermDebugCommand(args: string[], options: RunKlermComm
 			event?: string;
 			route?: string;
 			taskId?: string;
+			sessionId?: string;
+			provider?: string;
+			model?: string;
 			since?: number;
 			limit?: number;
 			summary: boolean;
+			exportPath?: string;
 		} = {
 			summary: false,
 		};
@@ -82,7 +87,20 @@ export async function runKlermDebugCommand(args: string[], options: RunKlermComm
 				continue;
 			}
 			const value = args[++index];
-			if (!value || !["--event", "--route", "--task-id", "--since", "--limit"].includes(flag)) {
+			if (
+				!value ||
+				![
+					"--event",
+					"--route",
+					"--task-id",
+					"--session",
+					"--provider",
+					"--model",
+					"--since",
+					"--limit",
+					"--export",
+				].includes(flag)
+			) {
 				stderr(`Error: Invalid decisions argument "${flag}".\nUsage: ${KLERM_DEBUG_DECISIONS_USAGE}`);
 				process.exitCode = 1;
 				return true;
@@ -90,6 +108,10 @@ export async function runKlermDebugCommand(args: string[], options: RunKlermComm
 			if (flag === "--event") filters.event = value;
 			else if (flag === "--route") filters.route = value.toUpperCase();
 			else if (flag === "--task-id") filters.taskId = value;
+			else if (flag === "--session") filters.sessionId = value;
+			else if (flag === "--provider") filters.provider = value;
+			else if (flag === "--model") filters.model = value;
+			else if (flag === "--export") filters.exportPath = value;
 			else if (flag === "--since") {
 				filters.since = Date.parse(value);
 				if (Number.isNaN(filters.since)) {
@@ -107,26 +129,49 @@ export async function runKlermDebugCommand(args: string[], options: RunKlermComm
 			}
 		}
 
+		let decisions: KlermRouteDecision[];
 		try {
 			const log = await readKlermRouteDecisionLog(cwd);
-			let decisions = parseDecisionLog(log).filter(
+			decisions = parseDecisionLog(log).filter(
 				(decision) =>
 					(!filters.event || decision.event === filters.event) &&
 					(!filters.route || decision.route === filters.route) &&
 					(!filters.taskId || decision.taskId === filters.taskId) &&
+					(!filters.sessionId || decision.sessionId === filters.sessionId) &&
+					(!filters.provider || decision.provider === filters.provider) &&
+					(!filters.model || decision.model === filters.model) &&
 					(filters.since === undefined || Date.parse(decision.timestamp) >= filters.since),
 			);
-			if (filters.limit !== undefined) decisions = decisions.slice(-filters.limit);
-			if (filters.summary) stdout(JSON.stringify(summarizeDecisions(decisions), null, 2));
-			else {
-				stdout(
-					decisions.map((decision) => JSON.stringify(decision)).join("\n") ||
-						`No Klerm route decisions found at ${getKlermDecisionLogPath(cwd)}.`,
-				);
-			}
 		} catch {
 			stderr(`Error: Klerm decision log contains invalid JSONL at ${getKlermDecisionLogPath(cwd)}.`);
 			process.exitCode = 1;
+			return true;
+		}
+		if (filters.limit !== undefined) decisions = decisions.slice(-filters.limit);
+		if (filters.exportPath) {
+			try {
+				await writeFile(
+					filters.exportPath,
+					`${decisions.map((decision) => JSON.stringify(decision)).join("\n")}\n`,
+					"utf8",
+				);
+			} catch (error) {
+				stderr(`Error: Could not write export file: ${error instanceof Error ? error.message : String(error)}`);
+				process.exitCode = 1;
+				return true;
+			}
+			stdout(
+				`Exported ${decisions.length} decision(s) to ${filters.exportPath}.\n` +
+					"Warning: exported decisions include task text, cwd, and model references. Review before sharing.",
+			);
+			return true;
+		}
+		if (filters.summary) stdout(JSON.stringify(summarizeDecisions(decisions), null, 2));
+		else {
+			stdout(
+				decisions.map((decision) => JSON.stringify(decision)).join("\n") ||
+					`No Klerm route decisions found at ${getKlermDecisionLogPath(cwd)}.`,
+			);
 		}
 		return true;
 	}

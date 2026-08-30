@@ -811,7 +811,9 @@ export async function main(args: string[], options?: MainOptions) {
 			frontierModel: parsed.frontierModel,
 			allowFrontierFallback: parsed.allowFrontierFallback,
 		});
-		const klermRoutingController = new KlermRoutingController(cwd, modelRuntime, klermConfigStore);
+		const klermRoutingController = new KlermRoutingController(cwd, modelRuntime, klermConfigStore, () =>
+			sessionManager.getSessionId(),
+		);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,
 			...services.diagnostics,
