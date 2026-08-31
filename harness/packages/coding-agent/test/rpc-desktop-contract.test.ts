@@ -108,6 +108,7 @@ describe("Klerm desktop RPC contract", () => {
 			}),
 		} as unknown as KlermRoutingController;
 		Object.defineProperty(harness.session, "_klermRoutingController", { value: controller });
+		const deleteSession = vi.fn(async () => {});
 
 		try {
 			void runRpcMode(createRuntimeHost(harness), {
@@ -132,6 +133,7 @@ describe("Klerm desktop RPC contract", () => {
 						allMessagesText: "Hello world",
 					},
 				],
+				deleteSession,
 			});
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 
@@ -188,6 +190,37 @@ describe("Klerm desktop RPC contract", () => {
 				},
 			});
 			expect(JSON.stringify(sessions)).not.toContain("allMessagesText");
+
+			const deleted = await send({
+				id: "delete-session",
+				type: "delete_session",
+				sessionToken: "/private/session.jsonl",
+			});
+			expect(deleted).toMatchObject({ success: true, data: { sessionId: "session-1" } });
+			expect(deleteSession).toHaveBeenCalledWith("/private/session.jsonl");
+
+			const invalidDelete = await send({
+				id: "invalid-delete",
+				type: "delete_session",
+				sessionToken: "/private/not-listed.jsonl",
+			});
+			expect(invalidDelete).toMatchObject({ success: false, code: "SESSION_NOT_FOUND" });
+
+			const missingDeleteToken = await send({ id: "missing-delete-token", type: "delete_session" });
+			expect(missingDeleteToken).toMatchObject({ success: false, code: "INVALID_SESSION" });
+
+			deleteSession.mockImplementationOnce(async () => {
+				const notFound = new Error("no such file or directory") as Error & { code?: string };
+				notFound.code = "ENOENT";
+				throw notFound;
+			});
+			const missingFileDelete = await send({
+				id: "missing-file-delete",
+				type: "delete_session",
+				sessionToken: "/private/session.jsonl",
+			});
+			expect(missingFileDelete).toMatchObject({ success: true, data: { sessionId: "session-1" } });
+			expect(deleteSession).toHaveBeenCalledTimes(2);
 		} finally {
 			harness.cleanup();
 			for (const listener of process.stdin.listeners("end") as NodeListener[]) {

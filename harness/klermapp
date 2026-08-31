@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HARNESS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DESKTOP="$HARNESS/packages/desktop"
+BINARY="$DESKTOP/src-tauri/target/debug/klerm-desktop"
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/klerm"
+LAUNCH_CWD="$PWD"
+
+mkdir -p "$LOG_DIR"
+
+if [[ ! -x "$BINARY" ]]; then
+	printf 'Klerm app is not built. Build it from %s first.\n' "$HARNESS" >&2
+	exit 1
+fi
+
+if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+	setsid nohup npm --prefix "$HARNESS" run dev --workspace=@klerm/desktop \
+		>"$LOG_DIR/vite.log" 2>&1 </dev/null &
+
+	for _ in {1..50}; do
+		if curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+			break
+		fi
+		sleep 0.1
+	done
+fi
+
+if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+	printf 'Klerm app frontend did not start. See %s/vite.log.\n' "$LOG_DIR" >&2
+	exit 1
+fi
+
+setsid nohup env KLERM_DESKTOP_CWD="$LAUNCH_CWD" "$BINARY" \
+	>"$LOG_DIR/app.log" 2>&1 </dev/null &
+
+printf 'Klerm app started for %s.\n' "$LAUNCH_CWD"

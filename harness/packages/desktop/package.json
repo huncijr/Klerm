@@ -5,18 +5,25 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"typecheck": "tsc --noEmit",
-		"build": "tsc --noEmit && vite build",
+		"typecheck": "svelte-check --tsconfig ./tsconfig.json",
+		"build": "svelte-check --tsconfig ./tsconfig.json && vite build",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build"
 	},
 	"dependencies": {
+		"@lucide/svelte": "1.37.0",
 		"@tauri-apps/api": "2.11.1",
-		"@tauri-apps/plugin-dialog": "2.7.2"
+		"@tauri-apps/plugin-dialog": "2.7.2",
+		"svelte": "5.57.0"
 	},
 	"devDependencies": {
+		"@sveltejs/vite-plugin-svelte": "7.3.0",
+		"@tailwindcss/vite": "4.3.3",
 		"@tauri-apps/cli": "2.11.4",
+		"@tsconfig/svelte": "5.0.8",
+		"svelte-check": "4.7.6",
+		"tailwindcss": "4.3.3",
 		"typescript": "5.9.3",
 		"vite": "8.2.2"
 	}

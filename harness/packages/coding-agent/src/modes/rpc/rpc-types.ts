@@ -57,6 +57,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_klerm_config" }
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
 	| { id?: string; type: "list_sessions" }
+	| { id?: string; type: "delete_session"; sessionToken: string }
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -177,6 +178,13 @@ export type RpcResponse =
 			command: "list_sessions";
 			success: true;
 			data: { sessions: RpcDesktopSessionInfo[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "delete_session";
+			success: true;
+			data: { sessionId: string };
 	  }
 
 	// Prompting (async - events follow)

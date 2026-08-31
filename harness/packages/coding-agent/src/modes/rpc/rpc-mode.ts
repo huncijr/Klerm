@@ -12,6 +12,9 @@
  */
 
 import * as crypto from "node:crypto";
+import { unlink } from "node:fs/promises";
+import { constants as errnoConstants } from "node:os";
+import { resolve } from "node:path";
 import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
@@ -58,6 +61,7 @@ export type {
 export interface RunRpcModeOptions {
 	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
 	listSessions?: () => Promise<SessionInfo[]>;
+	deleteSession?: (sessionPath: string) => Promise<void>;
 }
 
 const DESKTOP_COMMANDS = [
@@ -66,6 +70,7 @@ const DESKTOP_COMMANDS = [
 	"get_klerm_config",
 	"set_klerm_config",
 	"list_sessions",
+	"delete_session",
 	"get_state",
 	"get_messages",
 	"get_entries",
@@ -567,6 +572,39 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					firstMessage: storedSession.firstMessage,
 				}));
 				return success(id, "list_sessions", { sessions: desktopSessions });
+			}
+
+			case "delete_session": {
+				if (session.isStreaming) {
+					return error(id, "delete_session", "A session cannot be deleted during a task.", "TASK_ACTIVE");
+				}
+				if (typeof command.sessionToken !== "string" || command.sessionToken.trim().length === 0) {
+					return error(id, "delete_session", "A valid session token is required.", "INVALID_SESSION");
+				}
+				const sessions = await (options.listSessions?.() ?? SessionManager.listAll());
+				const requestedPath = resolve(command.sessionToken);
+				const storedSession = sessions.find((candidate) => resolve(candidate.path) === requestedPath);
+				if (!storedSession) {
+					return error(id, "delete_session", "Session not found.", "SESSION_NOT_FOUND");
+				}
+				if (session.sessionFile && resolve(session.sessionFile) === requestedPath) {
+					return error(id, "delete_session", "The active session cannot be deleted.", "ACTIVE_SESSION");
+				}
+				try {
+					await (options.deleteSession?.(storedSession.path) ?? unlink(storedSession.path));
+				} catch (deleteError) {
+					const deleteErrorCode = (deleteError as { code?: string | number } | undefined)?.code;
+					if (deleteErrorCode === "ENOENT" || deleteErrorCode === errnoConstants.errno.ENOENT) {
+						return success(id, "delete_session", { sessionId: storedSession.id });
+					}
+					return error(
+						id,
+						"delete_session",
+						deleteError instanceof Error ? deleteError.message : String(deleteError),
+						"DELETE_FAILED",
+					);
+				}
+				return success(id, "delete_session", { sessionId: storedSession.id });
 			}
 
 			// =================================================================

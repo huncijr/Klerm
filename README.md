@@ -296,10 +296,29 @@ repositories and instructions.
 
 ## Desktop Development
 
-The current Tauri app is a source-tree development shell for Linux. It uses the
-versioned JSONL RPC backend, discovers installed local models, persists the
-selected local model, lists and resumes sessions, streams responses and tool
-activity, and can stop an active task.
+The current Tauri app is a source-tree development shell for Linux. Its frontend
+is built with Svelte 5 (runes), Tailwind CSS v4, and `@lucide/svelte` icons;
+the RPC bridge and domain types stay as plain TypeScript under
+`packages/desktop/src/lib/`. It uses the versioned JSONL RPC backend, discovers
+installed local models, persists the selected local model, lists and resumes
+sessions, streams responses and tool activity, and can stop an active task. Its
+custom local, frontier, and routing selectors sit below the prompt; entering a
+draft hides the empty-state introduction without moving the composer. Assistant
+responses identify the actual model directly above the response text. During
+generation, a working spinner is visible and a square stop control replaces Send
+in the same position. Hovering a session reveals an ellipsis menu with a
+two-step delete confirmation; deleting the active conversation starts a fresh
+session first, then removes the old one. Tool, MCP, routing, retry, and error
+activity render as a persistent timeline under the conversation: green cards for
+file edits and writes, blue cards for MCP calls, arrow cards for
+delegation/return transitions with reasons, amber cards for in-flight provider
+retries, red cards for provider failures, frontier fallback, and errors, and a
+`Task completed` card after each settled task. Every card shows its kind label
+above the summary line, with expandable details below. File cards are compressed
+by default and expand on click. In short windows, long prompts scroll inside
+the input so send/stop and model controls remain visible. At compact widths,
+the session sidebar becomes a drawer opened by the small Menu control under
+the Workspace label and closed through the backdrop or Escape.
 
 On Fedora, install the native build dependencies and Rust toolchain first:
 
@@ -316,11 +335,27 @@ npm install --ignore-scripts
 npm run tauri:dev
 ```
 
-The command performs an offline backend build before starting Vite and Tauri.
-The Klerm splash should be followed by the workspace with `Backend connected`
-in the sidebar. Start Ollama and install a model before testing a local prompt.
-Routing decisions continue to be written to the active project's
-`.klerm/router-decisions.jsonl` file.
+On this development machine, `klerm` starts the CLI and `klermapp` starts the
+desktop application. After installing the local launcher, run the app from any
+project directory so that directory becomes its initial workspace:
+
+```bash
+cd ~/Desktop/test-project
+klermapp
+```
+
+The launcher is installed at `~/.npm-global/bin/klermapp` and points to the
+checkout's `harness/klermapp` script. It starts the Vite development server when
+needed and then opens the latest locally built desktop binary. After Rust or
+backend source changes, rebuild with `npm run build:desktop-backend` and
+`cargo build` in `packages/desktop/src-tauri` before launching again.
+
+The launcher does not rebuild Rust or backend sources. It starts Vite when
+needed, then opens the latest locally built debug binary. The Klerm splash
+should be followed by the workspace with `Backend connected` in the sidebar.
+Start Ollama and install a model before testing a local prompt. Routing decisions
+continue to be written to the active project's `.klerm/router-decisions.jsonl`
+file.
 
 The desktop is not release-packaged yet. Development currently requires Node.js
 on `PATH` and the source checkout because the backend and Node runtime are not

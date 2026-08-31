@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+	--color-bg: #080b0f;
+	--color-panel: #0d1216;
+	--color-raised: #11171d;
+	--color-line: #202830;
+	--color-line-soft: #171e25;
+	--color-muted: #77838d;
+	--color-dim: #4e5962;
+	--color-accent: #d6ff3f;
+	--color-danger: #ff6f61;
+	--color-hero: #f0a044;
+	--font-sans: "Segoe UI Variable", "Segoe UI", Ubuntu, sans-serif;
+	--font-mono: "Cascadia Mono", "Liberation Mono", monospace;
+}
+
+@custom-variant narrow-900 (@media (max-width: 900px));
+@custom-variant narrow-720 (@media (max-width: 720px));
+@custom-variant narrow-520 (@media (max-width: 520px));
+@custom-variant short-650 (@media (max-height: 650px));
+@custom-variant short-500 (@media (max-height: 500px));
+
+@layer base {
+	html,
+	body,
+	#app {
+		height: 100%;
+	}
+	body {
+		margin: 0;
+		overflow: hidden;
+		background: var(--color-bg);
+		color: #e8edf1;
+		font-family: var(--font-sans);
+		font-synthesis: none;
+		text-rendering: optimizeLegibility;
+	}
+	button {
+		color: inherit;
+	}
+}
+
+@keyframes reveal {
+	from {
+		opacity: 0;
+		transform: scale(0.96) translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
