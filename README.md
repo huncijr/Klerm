@@ -302,23 +302,48 @@ the RPC bridge and domain types stay as plain TypeScript under
 `packages/desktop/src/lib/`. It uses the versioned JSONL RPC backend, discovers
 installed local models, persists the selected local model, lists and resumes
 sessions, streams responses and tool activity, and can stop an active task. Its
-custom local, frontier, and routing selectors sit below the prompt; entering a
-draft hides the empty-state introduction without moving the composer. Assistant
-responses identify the actual model directly above the response text. During
+custom local and frontier selectors sit below the prompt with a smaller routing
+control; entering a draft keeps the empty-state introduction visible until the
+first prompt is accepted. Assistant responses identify the actual model directly
+above Markdown-lite headings, emphasis, lists, inline code, and fenced code
+blocks. During
 generation, a working spinner is visible and a square stop control replaces Send
-in the same position. Hovering a session reveals an ellipsis menu with a
-two-step delete confirmation; deleting the active conversation starts a fresh
-session first, then removes the old one. Tool, MCP, routing, retry, and error
-activity render as a persistent timeline under the conversation: green cards for
-file edits and writes, blue cards for MCP calls, arrow cards for
-delegation/return transitions with reasons, amber cards for in-flight provider
-retries, red cards for provider failures, frontier fallback, and errors, and a
-`Task completed` card after each settled task. Every card shows its kind label
+in the same position. Enter inserts a line break; Send or Ctrl/Cmd+Enter submits
+the prompt. ArrowUp/ArrowDown recall prior prompts at the beginning/end of the
+composer. Sent prompts expose `Edit`, `Save & rerun`, and `Cancel`; rerunning
+appends a corrected prompt without rewriting the persisted original. Local
+and Frontier each show a compact effort slider below their model selector only
+when that model supports effort. Each slider exposes only supported levels, stores
+its value separately, and routing applies the matching value when changing
+lanes. Routing selection updates routing mode and active-start policy together
+so Frontier starts on the configured frontier model and Frontier -> Local
+preserves local handback. The Workspace title and sidebar sessions can be
+renamed. Hovering a session reveals an ellipsis menu with Rename and an arrow
+submenu for delete confirmation; deleting the active conversation starts a fresh
+session first, then removes the old one. Assistant text and tool, MCP, routing,
+retry, and error activity render in one chronological feed: neutral edit cards
+with expandable red removed lines and green added lines, green write cards, blue
+cards for MCP calls, amber arrow cards for initial routing,
+delegation, and return transitions with reasons, amber cards for in-flight
+provider retries, red cards for provider failures, frontier fallback, and
+errors, and an outcome card after each settled, failed, or stopped task. Every
+card shows its kind label
 above the summary line, with expandable details below. File cards are compressed
 by default and expand on click. In short windows, long prompts scroll inside
 the input so send/stop and model controls remain visible. At compact widths,
 the session sidebar becomes a drawer opened by the small Menu control under
 the Workspace label and closed through the backdrop or Escape.
+
+The project workspace uses the launch directory as its default root. New session
+starts immediately in that root; only the center root selector opens a folder
+dialog and restarts the backend for another project. The typed backend detects an
+enclosing Git root and powers the collapsible right-side File Changes panel with
+staged/unstaged state, diffs, safe text preview/editing, and actor badges. Klerm
+tool writes persist lane and provider/model attribution in the session; unmatched
+Git changes are `external`, and desktop saves are `manual`. The panel can open
+installed Zed, VS Code, or Linux Vim without shell command construction. A
+collapsible read-only bottom panel shows recent command/error activity and Linux
+localhost listeners; writable PTY input is deferred.
 
 On Fedora, install the native build dependencies and Rust toolchain first:
 
@@ -361,6 +386,12 @@ The desktop is not release-packaged yet. Development currently requires Node.js
 on `PATH` and the source checkout because the backend and Node runtime are not
 bundled as a sidecar. Linux startup has been agent-smoke-tested on Fedora;
 Windows startup, installers, and clean-machine Linux bundles remain unverified.
+
+For the complete Git, diff, editor, attribution, collapse, and prompt-rerun
+workspace smoke procedure, follow the Human test steps under App Milestone 2A in
+[`APP_PLAN.md`](APP_PLAN.md). Workspace text editing is limited to existing
+non-binary files up to 2 MiB inside the detected project root. Vim launching and
+listener discovery are Linux-only in this increment.
 
 ## Development
 

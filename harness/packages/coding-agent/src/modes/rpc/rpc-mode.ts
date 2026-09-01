@@ -14,7 +14,7 @@
 import * as crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { constants as errnoConstants } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
@@ -31,6 +31,7 @@ import {
 } from "../../core/output-guard.ts";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
+import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
@@ -38,13 +39,25 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
 	RpcDesktopSessionInfo,
+	RpcEditorInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
+	RpcWorkspaceAttribution,
 } from "./rpc-types.ts";
 import { KLERM_DESKTOP_RPC_PROTOCOL_VERSION } from "./rpc-types.ts";
+import {
+	getAvailableEditors,
+	getRunningServices,
+	getWorkspaceDiff,
+	getWorkspaceStatus,
+	openLocalUrl,
+	openWorkspaceEditor,
+	readWorkspaceTextFile,
+	writeWorkspaceTextFile,
+} from "./workspace.ts";
 
 // Re-export types for consumers
 export type {
@@ -61,6 +74,7 @@ export type {
 export interface RunRpcModeOptions {
 	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
 	listSessions?: () => Promise<SessionInfo[]>;
+	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
 }
 
@@ -70,14 +84,27 @@ const DESKTOP_COMMANDS = [
 	"get_klerm_config",
 	"set_klerm_config",
 	"list_sessions",
+	"rename_session",
 	"delete_session",
+	"get_workspace_status",
+	"get_workspace_diff",
+	"read_workspace_file",
+	"write_workspace_file",
+	"get_available_editors",
+	"open_workspace_editor",
+	"get_running_services",
+	"open_local_url",
 	"get_state",
 	"get_messages",
 	"get_entries",
+	"get_available_models",
+	"get_available_thinking_levels",
+	"set_thinking_level",
 	"prompt",
 	"abort",
 	"new_session",
 	"switch_session",
+	"set_session_name",
 ] as const;
 
 const DESKTOP_EVENTS = [
@@ -91,7 +118,14 @@ const DESKTOP_EVENTS = [
 	"agent_start",
 	"agent_end",
 	"agent_settled",
+	"model_select",
+	"thinking_level_changed",
+	"auto_retry_start",
+	"auto_retry_end",
+	"workspace_files_changed",
 ] as const;
+
+const WORKSPACE_ATTRIBUTION_CUSTOM_TYPE = "klerm-workspace-attribution";
 
 /**
  * Run in RPC mode.
@@ -102,6 +136,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
+	const pendingFileMutations = new Map<
+		string,
+		{
+			path: string;
+			attribution: {
+				source: "local" | "frontier" | "direct";
+				provider?: string;
+				model?: string;
+				lane: "local" | "frontier" | "direct";
+				timestamp: string;
+			};
+		}
+	>();
+	const fileAttributions = new Map<string, RpcWorkspaceAttribution>();
+	let workspaceProjectRoot = session.sessionManager.getCwd();
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -378,6 +427,40 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
+		workspaceProjectRoot = (await getWorkspaceStatus(session.sessionManager.getCwd())).projectRoot;
+		pendingFileMutations.clear();
+		fileAttributions.clear();
+		for (const entry of session.sessionManager.getEntries()) {
+			if (entry.type !== "custom" || entry.customType !== WORKSPACE_ATTRIBUTION_CUSTOM_TYPE) continue;
+			const data = entry.data as { path?: unknown; attribution?: unknown } | undefined;
+			if (
+				typeof data?.path !== "string" ||
+				!isAbsolute(data.path) ||
+				!data.attribution ||
+				typeof data.attribution !== "object"
+			) {
+				continue;
+			}
+			const attribution = data.attribution as Partial<RpcWorkspaceAttribution>;
+			if (
+				attribution.source !== "local" &&
+				attribution.source !== "frontier" &&
+				attribution.source !== "direct" &&
+				attribution.source !== "manual"
+			) {
+				continue;
+			}
+			fileAttributions.set(canonicalizePath(resolve(data.path)), {
+				source: attribution.source,
+				provider: typeof attribution.provider === "string" ? attribution.provider : undefined,
+				model: typeof attribution.model === "string" ? attribution.model : undefined,
+				lane:
+					attribution.lane === "local" || attribution.lane === "frontier" || attribution.lane === "direct"
+						? attribution.lane
+						: undefined,
+				timestamp: typeof attribution.timestamp === "string" ? attribution.timestamp : undefined,
+			});
+		}
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -416,6 +499,42 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		unsubscribeBackpressure?.();
 		unsubscribe = session.subscribe((event) => {
 			output(toJsonEvent(event));
+			if (event.type === "tool_execution_start" && (event.toolName === "edit" || event.toolName === "write")) {
+				const args = event.args as Record<string, unknown>;
+				const path =
+					typeof args.path === "string"
+						? args.path
+						: typeof args.file_path === "string"
+							? args.file_path
+							: undefined;
+				if (path) {
+					const lane = session.klermRouting?.routingState.lane ?? "direct";
+					const reference = session.klermRouting?.routingState.selectedTarget;
+					const separator = reference?.indexOf("/") ?? -1;
+					pendingFileMutations.set(event.toolCallId, {
+						path: canonicalizePath(resolve(session.sessionManager.getCwd(), path)),
+						attribution: {
+							source: lane,
+							provider: separator > 0 ? reference?.slice(0, separator) : session.model?.provider,
+							model: separator > 0 ? reference?.slice(separator + 1) : session.model?.id,
+							lane,
+							timestamp: new Date().toISOString(),
+						},
+					});
+				}
+			}
+			if (event.type === "tool_execution_end") {
+				const mutation = pendingFileMutations.get(event.toolCallId);
+				pendingFileMutations.delete(event.toolCallId);
+				if (mutation && !event.isError) {
+					fileAttributions.set(mutation.path, mutation.attribution);
+					session.sessionManager.appendCustomEntry(WORKSPACE_ATTRIBUTION_CUSTOM_TYPE, mutation);
+					const eventPath = relative(workspaceProjectRoot, mutation.path);
+					if (eventPath && !eventPath.startsWith("..") && !isAbsolute(eventPath)) {
+						output({ type: "workspace_files_changed", path: eventPath, attribution: mutation.attribution });
+					}
+				}
+			}
 			if (event.type === "agent_settled") {
 				void checkShutdownRequested();
 			}
@@ -500,16 +619,24 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				const keys = Object.keys(update);
 				if (
 					keys.length === 0 ||
-					keys.some((key) => key !== "routing" && key !== "localModel" && key !== "frontierModel")
+					keys.some(
+						(key) =>
+							key !== "routing" && key !== "activeStartLane" && key !== "localModel" && key !== "frontierModel",
+					)
 				) {
 					return error(
 						id,
 						"set_klerm_config",
-						"Only routing, localModel, and frontierModel can be updated.",
+						"Only routing, activeStartLane, localModel, and frontierModel can be updated.",
 						"INVALID_CONFIG",
 					);
 				}
-				const typedUpdate = update as { routing?: unknown; localModel?: unknown; frontierModel?: unknown };
+				const typedUpdate = update as {
+					routing?: unknown;
+					activeStartLane?: unknown;
+					localModel?: unknown;
+					frontierModel?: unknown;
+				};
 				if (
 					typedUpdate.routing !== undefined &&
 					typedUpdate.routing !== "off" &&
@@ -518,6 +645,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					typedUpdate.routing !== "auto"
 				) {
 					return error(id, "set_klerm_config", "Invalid routing mode.", "INVALID_CONFIG");
+				}
+				if (
+					typedUpdate.activeStartLane !== undefined &&
+					typedUpdate.activeStartLane !== "auto" &&
+					typedUpdate.activeStartLane !== "local" &&
+					typedUpdate.activeStartLane !== "frontier" &&
+					typedUpdate.activeStartLane !== "frontier-local"
+				) {
+					return error(id, "set_klerm_config", "Invalid active start lane.", "INVALID_CONFIG");
 				}
 				if (
 					"localModel" in typedUpdate &&
@@ -545,6 +681,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						);
 					}
 					if (typeof typedUpdate.routing === "string") await controller.setRoutingMode(typedUpdate.routing);
+					if (typeof typedUpdate.activeStartLane === "string") {
+						await controller.setActiveStartLane(typedUpdate.activeStartLane);
+					}
 				} catch (configError) {
 					return error(
 						id,
@@ -572,6 +711,50 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					firstMessage: storedSession.firstMessage,
 				}));
 				return success(id, "list_sessions", { sessions: desktopSessions });
+			}
+
+			case "rename_session": {
+				if (typeof command.sessionToken !== "string" || command.sessionToken.trim().length === 0) {
+					return error(id, "rename_session", "A valid session token is required.", "INVALID_SESSION");
+				}
+				if (typeof command.name !== "string" || command.name.trim().length === 0) {
+					return error(id, "rename_session", "A non-empty session name is required.", "INVALID_SESSION_NAME");
+				}
+				const sessions = await (options.listSessions?.() ?? SessionManager.listAll());
+				const requestedPath = resolve(command.sessionToken);
+				const storedSession = sessions.find((candidate) => resolve(candidate.path) === requestedPath);
+				if (!storedSession) {
+					return error(id, "rename_session", "Session not found.", "SESSION_NOT_FOUND");
+				}
+				if (
+					session.sessionFile &&
+					canonicalizePath(resolve(session.sessionFile)) === canonicalizePath(resolve(storedSession.path))
+				) {
+					return error(id, "rename_session", "Use set_session_name for the active session.", "ACTIVE_SESSION");
+				}
+				try {
+					if (options.renameSession) {
+						await options.renameSession(storedSession.path, command.name.trim());
+					} else {
+						const target = SessionManager.open(storedSession.path);
+						if (target.getSessionId() !== storedSession.id) {
+							return error(id, "rename_session", "Session changed during rename.", "SESSION_NOT_FOUND");
+						}
+						target.appendSessionInfo(command.name.trim());
+					}
+				} catch (renameError) {
+					const renameErrorCode = (renameError as { code?: string | number } | undefined)?.code;
+					if (renameErrorCode === "ENOENT" || renameErrorCode === errnoConstants.errno.ENOENT) {
+						return error(id, "rename_session", "Session not found.", "SESSION_NOT_FOUND");
+					}
+					return error(
+						id,
+						"rename_session",
+						renameError instanceof Error ? renameError.message : String(renameError),
+						"RENAME_FAILED",
+					);
+				}
+				return success(id, "rename_session", { sessionId: storedSession.id });
 			}
 
 			case "delete_session": {
@@ -605,6 +788,82 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					);
 				}
 				return success(id, "delete_session", { sessionId: storedSession.id });
+			}
+
+			case "get_workspace_status": {
+				const workspace = await getWorkspaceStatus(session.sessionManager.getCwd());
+				workspaceProjectRoot = workspace.projectRoot;
+				for (const file of workspace.files) {
+					file.attribution =
+						fileAttributions.get(canonicalizePath(resolve(workspace.projectRoot, file.path))) ?? file.attribution;
+				}
+				return success(id, "get_workspace_status", workspace);
+			}
+
+			case "get_workspace_diff": {
+				if (typeof command.path !== "string") {
+					return error(id, "get_workspace_diff", "A workspace-relative file path is required.", "INVALID_PATH");
+				}
+				return success(
+					id,
+					"get_workspace_diff",
+					await getWorkspaceDiff(session.sessionManager.getCwd(), command.path),
+				);
+			}
+
+			case "read_workspace_file": {
+				if (typeof command.path !== "string") {
+					return error(id, "read_workspace_file", "A workspace-relative file path is required.", "INVALID_PATH");
+				}
+				return success(
+					id,
+					"read_workspace_file",
+					await readWorkspaceTextFile(session.sessionManager.getCwd(), command.path),
+				);
+			}
+
+			case "write_workspace_file": {
+				if (typeof command.path !== "string" || typeof command.content !== "string") {
+					return error(id, "write_workspace_file", "A file path and text content are required.", "INVALID_FILE");
+				}
+				await writeWorkspaceTextFile(session.sessionManager.getCwd(), command.path, command.content);
+				const workspace = await getWorkspaceStatus(session.sessionManager.getCwd());
+				workspaceProjectRoot = workspace.projectRoot;
+				const attribution = { source: "manual" as const, timestamp: new Date().toISOString() };
+				const absolutePath = canonicalizePath(resolve(workspace.projectRoot, command.path));
+				fileAttributions.set(absolutePath, attribution);
+				session.sessionManager.appendCustomEntry(WORKSPACE_ATTRIBUTION_CUSTOM_TYPE, {
+					path: absolutePath,
+					attribution,
+				});
+				output({ type: "workspace_files_changed", path: command.path, attribution });
+				return success(id, "write_workspace_file", { path: command.path });
+			}
+
+			case "get_available_editors": {
+				return success(id, "get_available_editors", { editors: await getAvailableEditors() });
+			}
+
+			case "open_workspace_editor": {
+				if (command.editor !== "zed" && command.editor !== "vscode" && command.editor !== "vim") {
+					return error(id, "open_workspace_editor", "Unsupported editor.", "INVALID_EDITOR");
+				}
+				await openWorkspaceEditor(session.sessionManager.getCwd(), command.editor as RpcEditorInfo["id"]);
+				return success(id, "open_workspace_editor", { editor: command.editor });
+			}
+
+			case "get_running_services": {
+				return success(id, "get_running_services", {
+					services: await getRunningServices(session.sessionManager.getCwd()),
+				});
+			}
+
+			case "open_local_url": {
+				if (typeof command.url !== "string") {
+					return error(id, "open_local_url", "A local service URL is required.", "INVALID_URL");
+				}
+				openLocalUrl(command.url);
+				return success(id, "open_local_url", { url: command.url });
 			}
 
 			// =================================================================
@@ -699,6 +958,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 
 			case "set_thinking_level": {
+				if (command.lane !== undefined && command.lane !== "local" && command.lane !== "frontier") {
+					return error(id, "set_thinking_level", "Invalid Klerm thinking lane.", "INVALID_CONFIG");
+				}
+				if (command.lane) {
+					const setting = await session.setKlermThinkingLevel(command.lane, command.level);
+					return success(id, "set_thinking_level", setting);
+				}
 				session.setThinkingLevel(command.level);
 				return success(id, "set_thinking_level");
 			}
@@ -712,6 +978,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "get_available_thinking_levels": {
+				if (command.lane !== undefined && command.lane !== "local" && command.lane !== "frontier") {
+					return error(id, "get_available_thinking_levels", "Invalid Klerm thinking lane.", "INVALID_CONFIG");
+				}
+				if (command.lane) {
+					return success(id, "get_available_thinking_levels", session.getKlermThinkingSetting(command.lane));
+				}
 				const levels = session.getAvailableThinkingLevels();
 				return success(id, "get_available_thinking_levels", { levels });
 			}

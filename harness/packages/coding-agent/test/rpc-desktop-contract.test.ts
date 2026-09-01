@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import type { KlermConfig } from "../src/klerm/config.ts";
@@ -75,6 +78,14 @@ describe("Klerm desktop RPC contract", () => {
 		const signals: NodeJS.Signals[] = process.platform === "win32" ? ["SIGTERM"] : ["SIGTERM", "SIGHUP"];
 		const signalListeners = new Map(signals.map((signal) => [signal, process.listeners(signal) as NodeListener[]]));
 		const harness = await createHarness();
+		(harness.sessionManager as unknown as { cwd: string }).cwd = harness.tempDir;
+		execFileSync("git", ["init"], { cwd: harness.tempDir, stdio: "ignore" });
+		const persistedFile = join(harness.tempDir, "persisted-attribution.txt");
+		writeFileSync(persistedFile, "before\n", "utf8");
+		harness.sessionManager.appendCustomEntry("klerm-workspace-attribution", {
+			path: persistedFile,
+			attribution: { source: "local", provider: "ollama", model: "qwen", lane: "local" },
+		});
 		const config: KlermConfig = {
 			routing: "off",
 			activeStartLane: "auto",
@@ -106,9 +117,26 @@ describe("Klerm desktop RPC contract", () => {
 				config.routing = mode;
 				routingState.mode = mode;
 			}),
+			setActiveStartLane: vi.fn(async (lane: "auto" | "local" | "frontier" | "frontier-local") => {
+				config.activeStartLane = lane;
+				routingState.activeStartLane = lane;
+			}),
 		} as unknown as KlermRoutingController;
 		Object.defineProperty(harness.session, "_klermRoutingController", { value: controller });
+		const renameSession = vi.fn(async () => {});
 		const deleteSession = vi.fn(async () => {});
+		const getKlermThinkingSetting = vi
+			.spyOn(harness.session, "getKlermThinkingSetting")
+			.mockImplementation((lane) => ({
+				level: lane === "local" ? "low" : "high",
+				levels: ["off", "low", "high"],
+			}));
+		const setKlermThinkingLevel = vi
+			.spyOn(harness.session, "setKlermThinkingLevel")
+			.mockImplementation(async (lane, level) => ({
+				level,
+				levels: lane === "local" ? ["off", "low"] : ["low", "high"],
+			}));
 
 		try {
 			void runRpcMode(createRuntimeHost(harness), {
@@ -133,6 +161,7 @@ describe("Klerm desktop RPC contract", () => {
 						allMessagesText: "Hello world",
 					},
 				],
+				renameSession,
 				deleteSession,
 			});
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
@@ -142,7 +171,30 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: {
 					protocolVersion: KLERM_DESKTOP_RPC_PROTOCOL_VERSION,
-					capabilities: { commands: expect.arrayContaining(["prompt", "get_local_runtimes"]) },
+					capabilities: {
+						commands: expect.arrayContaining([
+							"prompt",
+							"get_local_runtimes",
+							"get_available_thinking_levels",
+							"set_thinking_level",
+							"rename_session",
+							"set_session_name",
+							"get_workspace_status",
+							"get_workspace_diff",
+							"read_workspace_file",
+							"write_workspace_file",
+							"get_available_editors",
+							"open_workspace_editor",
+							"get_running_services",
+							"open_local_url",
+						]),
+						events: expect.arrayContaining([
+							"model_select",
+							"thinking_level_changed",
+							"auto_retry_end",
+							"workspace_files_changed",
+						]),
+					},
 					state: { cwd: expect.any(String) },
 					routingState: { mode: "off", lane: "direct" },
 				},
@@ -154,6 +206,75 @@ describe("Klerm desktop RPC contract", () => {
 				data: { runtimes: [{ providerId: "ollama", models: [{ id: "qwen3" }] }] },
 			});
 
+			const workspace = await send({ id: "workspace", type: "get_workspace_status" });
+			expect(workspace).toMatchObject({
+				success: true,
+				data: {
+					workspaceRoot: expect.any(String),
+					projectRoot: expect.any(String),
+					isGit: expect.any(Boolean),
+					files: expect.arrayContaining([
+						expect.objectContaining({
+							path: "persisted-attribution.txt",
+							attribution: expect.objectContaining({ source: "local", model: "qwen" }),
+						}),
+					]),
+				},
+			});
+
+			const saved = await send({
+				id: "write-workspace-file",
+				type: "write_workspace_file",
+				path: "persisted-attribution.txt",
+				content: "after\n",
+			});
+			expect(saved).toMatchObject({ success: true, data: { path: "persisted-attribution.txt" } });
+			expect(parseOutputLines()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "workspace_files_changed",
+						path: "persisted-attribution.txt",
+						attribution: expect.objectContaining({ source: "manual" }),
+					}),
+				]),
+			);
+			expect(
+				harness.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom" && entry.customType === "klerm-workspace-attribution"),
+			).toHaveLength(2);
+
+			const localThinking = await send({
+				id: "local-thinking",
+				type: "get_available_thinking_levels",
+				lane: "local",
+			});
+			expect(localThinking).toMatchObject({
+				success: true,
+				data: { level: "low", levels: ["off", "low", "high"] },
+			});
+			expect(getKlermThinkingSetting).toHaveBeenCalledWith("local");
+
+			const frontierThinking = await send({
+				id: "frontier-thinking",
+				type: "set_thinking_level",
+				lane: "frontier",
+				level: "high",
+			});
+			expect(frontierThinking).toMatchObject({
+				success: true,
+				data: { level: "high", levels: ["low", "high"] },
+			});
+			expect(setKlermThinkingLevel).toHaveBeenCalledWith("frontier", "high");
+
+			const invalidThinkingLane = await send({
+				id: "invalid-thinking-lane",
+				type: "set_thinking_level",
+				lane: "direct",
+				level: "low",
+			});
+			expect(invalidThinkingLane).toMatchObject({ success: false, code: "INVALID_CONFIG" });
+
 			const updated = await send({
 				id: "config",
 				type: "set_klerm_config",
@@ -161,6 +282,17 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(updated).toMatchObject({ success: true, data: { config: { routing: "local" } } });
 			expect(controller.setRoutingMode).toHaveBeenCalledWith("local");
+
+			const frontierRouting = await send({
+				id: "frontier-routing",
+				type: "set_klerm_config",
+				update: { routing: "frontier", activeStartLane: "auto" },
+			});
+			expect(frontierRouting).toMatchObject({
+				success: true,
+				data: { config: { routing: "frontier", activeStartLane: "auto" } },
+			});
+			expect(controller.setActiveStartLane).toHaveBeenCalledWith("auto");
 
 			const frontier = await send({
 				id: "frontier",
@@ -175,6 +307,12 @@ describe("Klerm desktop RPC contract", () => {
 
 			const invalid = await send({ id: "invalid", type: "set_klerm_config", update: {} });
 			expect(invalid).toMatchObject({ success: false, code: "INVALID_CONFIG" });
+			const invalidStartLane = await send({
+				id: "invalid-start-lane",
+				type: "set_klerm_config",
+				update: { activeStartLane: "direct" },
+			});
+			expect(invalidStartLane).toMatchObject({ success: false, code: "INVALID_CONFIG" });
 
 			const sessions = await send({ id: "sessions", type: "list_sessions" });
 			expect(sessions).toMatchObject({
@@ -190,6 +328,31 @@ describe("Klerm desktop RPC contract", () => {
 				},
 			});
 			expect(JSON.stringify(sessions)).not.toContain("allMessagesText");
+
+			const renamed = await send({
+				id: "rename-session",
+				type: "rename_session",
+				sessionToken: "/private/session.jsonl",
+				name: "  Renamed session  ",
+			});
+			expect(renamed).toMatchObject({ success: true, data: { sessionId: "session-1" } });
+			expect(renameSession).toHaveBeenCalledWith("/private/session.jsonl", "Renamed session");
+
+			const invalidRename = await send({
+				id: "invalid-rename",
+				type: "rename_session",
+				sessionToken: "/private/not-listed.jsonl",
+				name: "Renamed session",
+			});
+			expect(invalidRename).toMatchObject({ success: false, code: "SESSION_NOT_FOUND" });
+
+			const emptyRename = await send({
+				id: "empty-rename",
+				type: "rename_session",
+				sessionToken: "/private/session.jsonl",
+				name: "  ",
+			});
+			expect(emptyRename).toMatchObject({ success: false, code: "INVALID_SESSION_NAME" });
 
 			const deleted = await send({
 				id: "delete-session",

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 export type KlermRoutingMode = "off" | "local" | "frontier" | "auto";
 export type KlermActiveStartLane = "auto" | "local" | "frontier" | "frontier-local";
@@ -9,6 +10,8 @@ export interface KlermConfig {
 	activeStartLane: KlermActiveStartLane;
 	localModel?: string;
 	frontierModel?: string;
+	localThinkingLevel?: ThinkingLevel;
+	frontierThinkingLevel?: ThinkingLevel;
 	allowFrontierFallback: boolean;
 	handbackEnabled: boolean;
 	maxDelegationCycles: number;
@@ -36,6 +39,18 @@ function isRoutingMode(value: unknown): value is KlermRoutingMode {
 
 function isActiveStartLane(value: unknown): value is KlermActiveStartLane {
 	return value === "auto" || value === "local" || value === "frontier" || value === "frontier-local";
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+	return (
+		value === "off" ||
+		value === "minimal" ||
+		value === "low" ||
+		value === "medium" ||
+		value === "high" ||
+		value === "xhigh" ||
+		value === "max"
+	);
 }
 
 function integerAtLeast(value: unknown, fallback: number, minimum = 1): number {
@@ -66,6 +81,12 @@ export class KlermConfigStore {
 				: DEFAULT_KLERM_CONFIG.activeStartLane,
 			localModel: overrides.localModel ?? stored.localModel,
 			frontierModel: overrides.frontierModel ?? stored.frontierModel,
+			localThinkingLevel: isThinkingLevel(overrides.localThinkingLevel ?? stored.localThinkingLevel)
+				? (overrides.localThinkingLevel ?? stored.localThinkingLevel)
+				: undefined,
+			frontierThinkingLevel: isThinkingLevel(overrides.frontierThinkingLevel ?? stored.frontierThinkingLevel)
+				? (overrides.frontierThinkingLevel ?? stored.frontierThinkingLevel)
+				: undefined,
 			allowFrontierFallback:
 				overrides.allowFrontierFallback ??
 				stored.allowFrontierFallback ??

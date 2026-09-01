@@ -40,6 +40,65 @@ In particular, Node `readline` is not protocol-compliant for RPC mode because it
 
 ## Commands
 
+### Klerm Desktop Workspace
+
+Protocol version 1 exposes the following typed workspace commands. Clients must
+use these operations instead of parsing CLI output or constructing shell command
+strings.
+
+| Command | Result |
+|---|---|
+| `get_workspace_status` | Selected workspace root, detected Git root, and porcelain status entries with attribution |
+| `get_workspace_diff` | Staged and unstaged textual diff for one project-relative path |
+| `read_workspace_file` | Existing text file content and byte size |
+| `write_workspace_file` | Save an existing text file and record `manual` attribution |
+| `get_available_editors` | Availability of allowlisted Zed, VS Code, and Vim launchers |
+| `open_workspace_editor` | Open the detected project root with one allowlisted editor |
+| `get_running_services` | Linux localhost listeners reported by `ss` |
+| `open_local_url` | Open an `http` or `https` localhost URL |
+
+Example status request:
+
+```json
+{"id":"workspace-1","type":"get_workspace_status"}
+```
+
+```json
+{
+  "id": "workspace-1",
+  "type": "response",
+  "command": "get_workspace_status",
+  "success": true,
+  "data": {
+    "workspaceRoot": "/project/packages/app",
+    "projectRoot": "/project",
+    "gitRoot": "/project",
+    "isGit": true,
+    "files": [{
+      "path": "src/main.ts",
+      "indexStatus": " ",
+      "worktreeStatus": "M",
+      "status": "modified",
+      "staged": false,
+      "attribution": {
+        "source": "local",
+        "provider": "ollama",
+        "model": "qwen3.5:9b-q4_K_M",
+        "lane": "local",
+        "timestamp": "2026-09-01T10:00:00.000Z"
+      }
+    }]
+  }
+}
+```
+
+Diff, read, and write commands take a project-relative `path`. Reads and writes
+are confined to the canonical project root. Preview and editing reject binary
+files and files larger than 2 MiB; writes only replace existing files. Editor
+commands use an allowlist and pass paths as process arguments. Vim and listener
+discovery are currently Linux-only. `open_local_url` accepts only `localhost`,
+`127.0.0.1`, or `::1` over HTTP(S).
+
 ### Prompting
 
 #### prompt
@@ -288,6 +347,14 @@ Set the reasoning/thinking level for models that support it.
 {"type": "set_thinking_level", "level": "high"}
 ```
 
+Klerm routing clients may include `"lane": "local"` or
+`"lane": "frontier"`. A lane-specific value is persisted separately and
+applied whenever routing enters that lane:
+
+```json
+{"type": "set_thinking_level", "lane": "frontier", "level": "high"}
+```
+
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
 
 `"xhigh"` and `"max"` are exposed only when supported by the selected model. Some models, including GPT-5.6, expose both.
@@ -296,6 +363,9 @@ Response:
 ```json
 {"type": "response", "command": "set_thinking_level", "success": true}
 ```
+
+Lane-specific requests return the effective, model-clamped level and available
+levels in `data`.
 
 #### cycle_thinking_level
 
@@ -318,6 +388,9 @@ Response:
 #### get_available_thinking_levels
 
 List the thinking levels supported by the current model. Returns `["off"]` for a model without reasoning support.
+
+Include `"lane": "local"` or `"lane": "frontier"` to query the configured
+model and saved value for that Klerm routing lane.
 
 ```json
 {"type": "get_available_thinking_levels"}
@@ -790,6 +863,27 @@ Response:
 
 The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
 
+#### rename_session
+
+Rename an inactive stored session without switching the active runtime. `sessionToken` must be a token returned by the desktop `list_sessions` command. Use `set_session_name` for the active session.
+
+```json
+{"type": "rename_session", "sessionToken": "/path/to/session.jsonl", "name": "my-feature-work"}
+```
+
+Response:
+
+```json
+{
+  "type": "response",
+  "command": "rename_session",
+  "success": true,
+  "data": {"sessionId": "abc123"}
+}
+```
+
+The command rejects blank names, unknown tokens, and the active session with machine-readable error codes. It appends session metadata through `SessionManager`; it does not rewrite the transcript or switch sessions.
+
 ### Commands
 
 #### get_commands
@@ -853,6 +947,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `tool_execution_end` | Tool completes |
 | `queue_update` | Pending steering/follow-up queue changed |
 | `routing_changed` | Klerm routing state changed |
+| `workspace_files_changed` | An observed Klerm tool write or desktop save changed a project-relative file |
 | `compaction_start` | Compaction begins |
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
@@ -884,9 +979,32 @@ snapshot for that change.
 }
 ```
 
-RPC currently has no command that returns this state before the first routing
-change. Desktop clients must not infer it from model or message events; a typed
-routing-state query remains required by the desktop contract.
+`desktop_handshake` includes the initial routing state. There is no standalone
+query after later session transitions, so clients must not infer that state from
+model or message events; a typed routing-state query remains required by the
+desktop contract.
+
+### workspace_files_changed
+
+Emitted after a successful Klerm `edit`/`write` tool call or desktop text save.
+The path is relative to the detected project root. Tool writes include the
+active source, provider, model, lane, and timestamp; desktop saves use source
+`manual`. Matching attribution is persisted in a
+`klerm-workspace-attribution` custom session entry and restored after rebinding.
+
+```json
+{
+  "type": "workspace_files_changed",
+  "path": "src/main.ts",
+  "attribution": {
+    "source": "frontier",
+    "provider": "openai-codex",
+    "model": "gpt-5.5",
+    "lane": "frontier",
+    "timestamp": "2026-09-01T10:00:00.000Z"
+  }
+}
+```
 
 ### agent_start
 

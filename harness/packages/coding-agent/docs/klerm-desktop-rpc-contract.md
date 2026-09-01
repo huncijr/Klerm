@@ -11,11 +11,17 @@ The existing protocol is a useful base for the workspace spike:
 | Desktop need | Existing RPC surface | Status |
 |---|---|---|
 | Read current session and backend state | `get_state`, `get_messages`, `get_entries`, `get_tree`, `get_session_stats` | Available |
-| Start, list, switch, delete, clone, fork, and rename sessions | `new_session`, `list_sessions`, `switch_session`, `delete_session`, `clone`, `fork`, `set_session_name` | Available except desktop rename-by-token; active-session deletion is rejected |
+| Start, list, switch, delete, clone, fork, and rename sessions | `new_session`, `list_sessions`, `switch_session`, `rename_session`, `delete_session`, `clone`, `fork`, `set_session_name` | Available; direct active-session deletion and rename-by-token are rejected in favor of their active-session flows |
+| Negotiate the desktop boundary | `desktop_handshake` | Available with protocol version, Klerm version, command/event capabilities, session state, and initial routing state |
+| Discover local runtimes and update routing config | `get_local_runtimes`, `get_klerm_config`, `set_klerm_config` | Available for the current desktop controls |
+| Read and safely edit the project workspace | `get_workspace_status`, `get_workspace_diff`, `read_workspace_file`, `write_workspace_file` | Available; paths are project-relative, existing text files are limited to 2 MiB, and binary/out-of-root writes are rejected |
+| Discover/open editors and localhost services | `get_available_editors`, `open_workspace_editor`, `get_running_services`, `open_local_url` | Available through allowlisted process arguments and localhost-only URL validation; current Vim/listener implementations are Linux-only |
 | Submit and stop work | `prompt`, `steer`, `follow_up`, `abort` | Available |
 | Stream responses and tool activity | `message_*`, `tool_execution_*`, `turn_*`, `agent_*` events | Available |
-| Observe live Klerm routing state | `routing_changed` event | Available after a routing change; no initial query |
+| Observe live Klerm routing state | Handshake state and `routing_changed` event | Available initially and after routing changes; no standalone query |
+| Observe attributed file writes | `workspace_files_changed` event and `klerm-workspace-attribution` session entries | Available; observed Klerm writes include source, provider, model, lane, and timestamp, desktop saves are `manual`, and unmatched Git changes are `external` |
 | List and select configured models | `get_available_models`, `set_model` | Available |
+| Read and set thinking effort | `get_available_thinking_levels`, `set_thinking_level` | Available for the active model or an explicit `local`/`frontier` lane; lane values persist independently and are clamped to that model's supported levels |
 | Correlate requests and responses | Optional command `id`, echoed by responses | Available |
 | Detect completion | `agent_settled` | Available |
 
@@ -23,18 +29,13 @@ The existing protocol is a useful base for the workspace spike:
 enough to reconstruct an active session after reconnecting, but it is not a
 replacement for a typed routing-history query or a decision-event stream.
 
-## Missing Desktop Operations
+## Remaining Desktop Operations
 
 The following operations need typed RPC commands before their corresponding UI
 milestones. The CLI equivalents added for diagnostics are not desktop APIs.
 
 | Required operation | Earliest milestone | Required response/event data |
 |---|---|---|
-| Backend handshake and capability negotiation | App 0 | Protocol version, Klerm version, supported command/event names, readiness |
-| List sessions | App 2 | Stable session ID, path token, name, cwd, created/modified timestamps, message count |
-| Delete a session | App 2 | Implemented through validated session tokens with deterministic success/error codes; missing session files are treated as already deleted, and the desktop deletes the active conversation by opening a new session first |
-| Query local runtime health and models | App 1 | Runtime ID, endpoint metadata, availability, models, privacy-safe error |
-| Get and update Klerm routing configuration | App 1 for local model; App 4 for full routing | Typed config, validation errors, persisted/effective values |
 | Query current routing state | App 4 | Full `KlermRoutingState`, even before the next `routing_changed` event |
 | Read/filter decision events | App 4 | Typed `KlermRouteDecision` records and deterministic filter fields |
 | Subscribe to decision events | App 4 | Append-only event with task/session correlation and no response body content |
@@ -78,10 +79,10 @@ capability negotiation, process shutdown, and incompatible protocol versions.
 
 ## Audit Conclusion
 
-The inherited RPC transport is suitable for the Linux shell spike and the core
-prompt-stream-abort workspace flow. Protocol negotiation, session discovery and
-validated deletion, local runtime discovery, and routing configuration queries
-are now typed desktop operations. The desktop backend remains incomplete:
-session rename-by-token, decision history/streaming, provider auth status, and
-MCP status still require explicit backend work. The Tauri frontend must not work
-around these gaps by invoking diagnostic CLI commands and parsing text.
+The inherited RPC transport supports the Linux shell, core prompt lifecycle,
+session management, model controls, and project workspace through typed
+operations. Workspace attribution survives session rebinding without entering
+LLM context. The desktop backend remains incomplete: a standalone routing-state
+query, decision history/streaming, provider auth status, and MCP status still
+require explicit backend work. The Tauri frontend must not work around these
+gaps by invoking diagnostic CLI commands and parsing text.

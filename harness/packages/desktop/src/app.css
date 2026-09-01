@@ -16,6 +16,7 @@
 }
 
 @custom-variant narrow-900 (@media (max-width: 900px));
+@custom-variant narrow-1200 (@media (max-width: 1200px));
 @custom-variant narrow-720 (@media (max-width: 720px));
 @custom-variant narrow-520 (@media (max-width: 520px));
 @custom-variant short-650 (@media (max-height: 650px));

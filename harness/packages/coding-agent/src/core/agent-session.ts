@@ -278,6 +278,11 @@ export interface ModelCycleResult {
 	isScoped: boolean;
 }
 
+export interface KlermLaneThinkingSetting {
+	level: ThinkingLevel;
+	levels: ThinkingLevel[];
+}
+
 /** Session statistics for /session command */
 export interface SessionStats {
 	sessionFile: string | undefined;
@@ -409,6 +414,12 @@ export class AgentSession {
 		];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		if (this._klermRoutingController?.config.localThinkingLevel) {
+			this._klermThinkingLevels.local = this._klermRoutingController.config.localThinkingLevel;
+		}
+		if (this._klermRoutingController?.config.frontierThinkingLevel) {
+			this._klermThinkingLevels.frontier = this._klermRoutingController.config.frontierThinkingLevel;
+		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -1988,6 +1999,41 @@ export class AgentSession {
 	getAvailableThinkingLevels(): ThinkingLevel[] {
 		if (!this.model) return THINKING_LEVELS;
 		return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
+	}
+
+	getKlermThinkingSetting(lane: KlermWorkerLane): KlermLaneThinkingSetting {
+		const model = this._getKlermLaneModel(lane);
+		if (!model) return { level: "off", levels: ["off"] };
+		const levels = getSupportedThinkingLevels(model) as ThinkingLevel[];
+		const preferred = this._klermThinkingLevels[lane] ?? this.thinkingLevel;
+		return {
+			level: clampThinkingLevel(model, preferred) as ThinkingLevel,
+			levels,
+		};
+	}
+
+	async setKlermThinkingLevel(lane: KlermWorkerLane, level: ThinkingLevel): Promise<KlermLaneThinkingSetting> {
+		const model = this._getKlermLaneModel(lane);
+		if (!model) throw new Error(`No ${lane} model is configured.`);
+		const effectiveLevel = clampThinkingLevel(model, level) as ThinkingLevel;
+		this._klermThinkingLevels[lane] = effectiveLevel;
+		await this._klermRoutingController?.setThinkingLevel(lane, effectiveLevel);
+		if (this._klermRoutingController?.routingState.lane === lane) this.setThinkingLevel(effectiveLevel);
+		return {
+			level: effectiveLevel,
+			levels: getSupportedThinkingLevels(model) as ThinkingLevel[],
+		};
+	}
+
+	private _getKlermLaneModel(lane: KlermWorkerLane): Model<any> | undefined {
+		const reference =
+			lane === "local"
+				? this._klermRoutingController?.config.localModel
+				: this._klermRoutingController?.config.frontierModel;
+		if (!reference) return undefined;
+		const separator = reference.indexOf("/");
+		if (separator <= 0 || separator === reference.length - 1) return undefined;
+		return this._modelRuntime.getModel(reference.slice(0, separator), reference.slice(separator + 1));
 	}
 
 	/**

@@ -12,9 +12,9 @@ import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
-import type { KlermConfig, KlermRoutingMode } from "../../klerm/config.ts";
+import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
-import type { KlermRoutingState } from "../../klerm/router/types.ts";
+import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
 export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
 
@@ -40,8 +40,48 @@ export interface RpcDesktopSessionInfo {
 	firstMessage: string;
 }
 
+export interface RpcWorkspaceAttribution {
+	source: "local" | "frontier" | "direct" | "manual" | "external";
+	provider?: string;
+	model?: string;
+	lane?: "local" | "frontier" | "direct";
+	timestamp?: string;
+}
+
+export interface RpcWorkspaceFileStatus {
+	path: string;
+	oldPath?: string;
+	indexStatus: string;
+	worktreeStatus: string;
+	status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+	staged: boolean;
+	attribution: RpcWorkspaceAttribution;
+}
+
+export interface RpcWorkspaceStatus {
+	workspaceRoot: string;
+	projectRoot: string;
+	gitRoot?: string;
+	isGit: boolean;
+	files: RpcWorkspaceFileStatus[];
+}
+
+export interface RpcEditorInfo {
+	id: "zed" | "vscode" | "vim";
+	label: string;
+	available: boolean;
+}
+
+export interface RpcRunningService {
+	port: number;
+	url: string;
+	processName?: string;
+	pid?: number;
+}
+
 export interface RpcKlermConfigUpdate {
 	routing?: KlermRoutingMode;
+	activeStartLane?: KlermActiveStartLane;
 	localModel?: string | null;
 	frontierModel?: string | null;
 }
@@ -57,7 +97,16 @@ export type RpcCommand =
 	| { id?: string; type: "get_klerm_config" }
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
 	| { id?: string; type: "list_sessions" }
+	| { id?: string; type: "rename_session"; sessionToken: string; name: string }
 	| { id?: string; type: "delete_session"; sessionToken: string }
+	| { id?: string; type: "get_workspace_status" }
+	| { id?: string; type: "get_workspace_diff"; path: string }
+	| { id?: string; type: "read_workspace_file"; path: string }
+	| { id?: string; type: "write_workspace_file"; path: string; content: string }
+	| { id?: string; type: "get_available_editors" }
+	| { id?: string; type: "open_workspace_editor"; editor: RpcEditorInfo["id"] }
+	| { id?: string; type: "get_running_services" }
+	| { id?: string; type: "open_local_url"; url: string }
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -75,9 +124,9 @@ export type RpcCommand =
 	| { id?: string; type: "get_available_models" }
 
 	// Thinking
-	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
+	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel; lane?: KlermWorkerLane }
 	| { id?: string; type: "cycle_thinking_level" }
-	| { id?: string; type: "get_available_thinking_levels" }
+	| { id?: string; type: "get_available_thinking_levels"; lane?: KlermWorkerLane }
 
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
@@ -182,6 +231,57 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "rename_session";
+			success: true;
+			data: { sessionId: string };
+	  }
+	| { id?: string; type: "response"; command: "get_workspace_status"; success: true; data: RpcWorkspaceStatus }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_workspace_diff";
+			success: true;
+			data: { path: string; diff: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "read_workspace_file";
+			success: true;
+			data: { path: string; content: string; size: number };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "write_workspace_file";
+			success: true;
+			data: { path: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_available_editors";
+			success: true;
+			data: { editors: RpcEditorInfo[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "open_workspace_editor";
+			success: true;
+			data: { editor: RpcEditorInfo["id"] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_running_services";
+			success: true;
+			data: { services: RpcRunningService[] };
+	  }
+	| { id?: string; type: "response"; command: "open_local_url"; success: true; data: { url: string } }
+	| {
+			id?: string;
+			type: "response";
 			command: "delete_session";
 			success: true;
 			data: { sessionId: string };
@@ -221,7 +321,13 @@ export type RpcResponse =
 	  }
 
 	// Thinking
-	| { id?: string; type: "response"; command: "set_thinking_level"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_thinking_level";
+			success: true;
+			data?: { level: ThinkingLevel; levels: ThinkingLevel[] };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -234,7 +340,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_available_thinking_levels";
 			success: true;
-			data: { levels: ThinkingLevel[] };
+			data: { levels: ThinkingLevel[]; level?: ThinkingLevel };
 	  }
 
 	// Queue modes

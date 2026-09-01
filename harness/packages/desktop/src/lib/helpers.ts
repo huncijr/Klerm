@@ -31,48 +31,65 @@ export function resultErrorText(result: unknown): string | undefined {
 	const candidate = result as Record<string, unknown>;
 	const content = candidate.content;
 	if (!Array.isArray(content)) return undefined;
-	for (const part of content) {
-		if (part && typeof part === "object" && (part as { isError?: unknown }).isError) {
-			const parts = (part as { content?: unknown }).content;
-			if (Array.isArray(parts)) {
-				const text = parts
-					.filter((item) => item && typeof item === "object" && (item as { type?: string }).type === "text")
-					.map((item) => String((item as { text?: unknown }).text ?? ""))
-					.join("\n")
-					.trim();
-				if (text) return text;
-			}
-		}
-	}
-	return undefined;
+	const text = content
+		.filter((part) => part && typeof part === "object" && (part as { type?: unknown }).type === "text")
+		.map((part) => String((part as { text?: unknown }).text ?? ""))
+		.join("\n")
+		.trim();
+	return text || undefined;
 }
 
 export function describeToolCall(
 	toolName: string,
 	args: unknown,
-): { label: string; detail: string; tone: TimelineTone } {
+): { kind: string; label: string; detail: string; detailType?: "text" | "diff" | "code"; tone: TimelineTone } {
 	const record = (args && typeof args === "object" && !Array.isArray(args) ? args : {}) as Record<string, unknown>;
 	if (MCP_TOOL_PATTERN.test(toolName)) {
-		const [, rest] = toolName.split("__");
-		const slashIndex = (rest ?? "").indexOf("__");
-		const label =
-			rest !== undefined && slashIndex > 0
-				? `MCP ${rest.slice(0, slashIndex)}/${rest.slice(slashIndex + 2)}`
-				: `MCP ${toolName}`;
-		return { label, detail: "", tone: "blue" };
-	}
-	const path = typeof record.path === "string" ? record.path : undefined;
-	if (toolName === "edit" || toolName === "write") {
+		const [, server, ...toolParts] = toolName.split("__");
+		const tool = toolParts.join("__");
 		return {
-			label: `${toolName === "edit" ? "Edited" : "Wrote"} ${path ?? "file"}`,
-			detail: path ?? "",
-			tone: "green",
+			kind: "mcp",
+			label: server && tool ? `${server}/${tool}` : toolName,
+			detail: "",
+			tone: "blue",
 		};
 	}
-	if (toolName === "read") return { label: `Read ${path ?? "file"}`, detail: path ?? "", tone: "neutral" };
+	const path =
+		typeof record.path === "string"
+			? record.path
+			: typeof record.file_path === "string"
+				? record.file_path
+				: undefined;
+	if (toolName === "edit" || toolName === "write") {
+		const content = typeof record.content === "string" ? truncateText(record.content) : "";
+		const writeDiff = content
+			? content
+					.split("\n")
+					.map((line, index) => `+${index + 1} ${line}`)
+					.join("\n")
+			: "";
+		return {
+			kind: "modification",
+			label: `${toolName === "edit" ? "Modified" : "Wrote"} ${path ?? "file"}`,
+			detail: toolName === "write" ? writeDiff : "",
+			detailType: "diff",
+			tone: toolName === "write" ? "green" : "neutral",
+		};
+	}
+	if (toolName === "read") {
+		return { kind: "read", label: `Read ${path ?? "file"}`, detail: path ?? "", tone: "neutral" };
+	}
 	if (toolName === "bash") {
 		const command = typeof record.command === "string" ? truncateText(record.command, 4) : "";
-		return { label: command || "Ran command", detail: command, tone: "neutral" };
+		return { kind: "command", label: command || "Ran command", detail: command, detailType: "code", tone: "neutral" };
 	}
-	return { label: toolName, detail: "", tone: "neutral" };
+	return { kind: toolName, label: toolName, detail: "", tone: "neutral" };
+}
+
+export function toolResultDetails(result: unknown): Record<string, unknown> | undefined {
+	if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+	const details = (result as Record<string, unknown>).details;
+	return details && typeof details === "object" && !Array.isArray(details)
+		? (details as Record<string, unknown>)
+		: undefined;
 }

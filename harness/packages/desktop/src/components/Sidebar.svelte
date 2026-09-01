@@ -11,6 +11,7 @@
 		onnewsession,
 		onrefresh,
 		onswitch,
+		onrename,
 		ondelete,
 	}: {
 		sessions: DesktopSession[];
@@ -20,6 +21,7 @@
 		onnewsession: () => void;
 		onrefresh: () => void;
 		onswitch: (session: DesktopSession) => void;
+		onrename: (session: DesktopSession, name: string) => Promise<boolean>;
 		ondelete: (session: DesktopSession) => void;
 	} = $props();
 
@@ -74,6 +76,7 @@
 						{session}
 						active={session.id === activeSessionId}
 						onswitch={() => onswitch(session)}
+						onrename={(name) => onrename(session, name)}
 						ondelete={() => ondelete(session)}
 					/>
 				{/each}

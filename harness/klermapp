@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HARNESS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
+HARNESS="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 DESKTOP="$HARNESS/packages/desktop"
 BINARY="$DESKTOP/src-tauri/target/debug/klerm-desktop"
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/klerm"

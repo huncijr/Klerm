@@ -1,18 +1,29 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
 	import { open as openDialog } from "@tauri-apps/plugin-dialog";
+	import { PanelLeftClose, PanelLeftOpen } from "@lucide/svelte";
 	import { onMount } from "svelte";
-	import { describeToolCall, messageText, resultErrorText, toDisplayText, truncateText } from "./lib/helpers.ts";
+	import {
+		describeToolCall,
+		messageText,
+		resultErrorText,
+		toolResultDetails,
+		toDisplayText,
+		truncateText,
+	} from "./lib/helpers.ts";
 	import type {
 		AgentMessage,
 		ChatMessage,
 		DesktopHandshake,
 		DesktopSession,
+		EditorInfo,
+		FeedItem,
 		JsonObject,
 		KlermConfig,
 		LocalRuntime,
 		RoutingState,
 		RoutingTransition,
+		RunningService,
 		RuntimeStatus,
 		SelectOption,
 		SessionEntryRecord,
@@ -20,15 +31,19 @@
 		StatusInfo,
 		TimelineItem,
 		TimelineTone,
+		ThinkingLevel,
+		ThinkingSetting,
+		WorkspaceStatus,
 	} from "./lib/model.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
-	import ChatMessageView from "./components/ChatMessage.svelte";
 	import Composer from "./components/Composer.svelte";
+	import BottomPanel from "./components/BottomPanel.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
+	import Feed from "./components/Feed.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
 	import Splash from "./components/Splash.svelte";
-	import Timeline from "./components/Timeline.svelte";
 	import Topbar from "./components/Topbar.svelte";
+	import WorkspacePanel from "./components/WorkspacePanel.svelte";
 
 	const bridge = new RpcBridge();
 
@@ -36,17 +51,24 @@
 	let backendReady = $state(false);
 	let backendRestarting = false;
 	let taskActive = $state(false);
+	let taskStopping = false;
+	let taskHadErrors = false;
+	let taskSawAssistant = false;
+	let lastAssistantStopReason: string | undefined;
 	let sessionTransitionActive = $state(false);
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
+	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
-	let messages = $state<ChatMessage[]>([]);
-	let timeline = $state<TimelineItem[]>([]);
+	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
 	let draft = $state("");
 	let sidebarOpen = $state(false);
+	let sessionsVisible = $state(true);
+	let workspacePanelOpen = $state(true);
+	let bottomPanelOpen = $state(false);
 	let sessionTitle = $state("New local session");
 	let sessionCwd = $state("");
 	let status = $state<StatusInfo>({ state: "starting", label: "Starting backend", detail: "RPC handshake" });
@@ -56,16 +78,32 @@
 		detail: "Looking for installed local models",
 	});
 	let errorBanner = $state("");
+	let composerFocusRequest = $state(0);
+	let localThinking = $state<ThinkingSetting>({ level: "off", levels: ["off"] });
+	let frontierThinking = $state<ThinkingSetting>({ level: "off", levels: ["off"] });
+	let thinkingBusy = $state<"local" | "frontier" | undefined>(undefined);
+	let workspace = $state<WorkspaceStatus | undefined>(undefined);
+	let editors = $state<EditorInfo[]>([]);
+	let runningServices = $state<RunningService[]>([]);
+	let selectedFilePath = $state<string | undefined>(undefined);
+	let selectedFileDiff = $state("");
+	let selectedFileContent = $state<string | undefined>(undefined);
+	let fileLoading = $state(false);
+	let fileSaving = $state(false);
 
 	let currentLocalRuntimes: LocalRuntime[] = [];
-	let timelineDirty = false;
 	let lastFallbackReason = "";
+	let feedSeq = 0;
+	let taskSeq = 0;
+	let activeTaskKey = 0;
 	let timelineSeq = 0;
 	let messageSeq = 0;
 	let streamingMessageId: number | undefined;
 	const toolCards = new Map<string, number>();
 
-	const interactionActive = $derived(taskActive || configBusy !== undefined || sessionTransitionActive);
+	const interactionActive = $derived(
+		taskActive || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined,
+	);
 	const sendDisabled = $derived(!backendReady || interactionActive);
 	const localSelectDisabled = $derived(
 		!backendReady || interactionActive || !localOptions.some((option) => option.value.length > 0),
@@ -74,27 +112,69 @@
 		!backendReady || interactionActive || !frontierOptions.some((option) => option.value.length > 0),
 	);
 	const routingSelectDisabled = $derived(!backendReady || interactionActive);
-	const hasConversation = $derived(messages.length > 0);
-	const heroVisible = $derived(!hasConversation && draft.trim().length === 0);
+	const localThinkingDisabled = $derived(!backendReady || interactionActive || localThinking.levels.length < 2);
+	const frontierThinkingDisabled = $derived(!backendReady || interactionActive || frontierThinking.levels.length < 2);
+	const chatMessages = $derived.by(() =>
+		feed.flatMap((item) => (item.type === "message" ? [item.message] : [])),
+	);
+	const hasConversation = $derived(chatMessages.length > 0);
+	const promptHistory = $derived(chatMessages.filter((message) => message.role === "user").map((message) => message.text));
+	const routingControlValue = $derived(
+		currentConfig?.activeStartLane === "frontier-local"
+			? "frontier-local"
+			: currentConfig?.activeStartLane === "local" || currentConfig?.activeStartLane === "frontier"
+				? currentConfig.activeStartLane
+				: (currentConfig?.routing ?? "off"),
+	);
+	const heroVisible = $derived(!hasConversation);
 	const taskStateText = $derived(taskActive ? "Working" : backendReady ? "Ready" : "Backend unavailable");
+	const activityLogs = $derived(
+		feed
+			.filter((item) => item.type === "activity" && ["command", "error"].includes(item.activity.kind))
+			.slice(-12)
+			.flatMap((item) => (item.type === "activity" ? [`${item.activity.title}${item.activity.detail ? `\n${item.activity.detail}` : ""}`] : [])),
+	);
+	const shellColumns = $derived(
+		sessionsVisible
+			? workspacePanelOpen
+				? "grid-cols-[280px_minmax(0,1fr)_430px] narrow-1200:grid-cols-[230px_minmax(0,1fr)_380px] narrow-900:grid-cols-[230px_minmax(0,1fr)] narrow-720:grid-cols-1"
+				: "grid-cols-[280px_minmax(0,1fr)] narrow-900:grid-cols-[230px_minmax(0,1fr)] narrow-720:grid-cols-1"
+			: workspacePanelOpen
+				? "grid-cols-[minmax(0,1fr)_430px] narrow-900:grid-cols-1"
+				: "grid-cols-1",
+	);
 
 	const currentModel = $derived.by(() => {
 		const routing = currentConfig?.routing ?? "off";
-		let reference: string | undefined;
-		if (routing === "frontier") reference = currentConfig?.frontierModel;
-		else if (routing === "local" || routing === "auto") reference = currentConfig?.localModel;
-		else if (lastState?.model) reference = `${lastState.model.provider}/${lastState.model.id}`;
+		let reference = currentRoutingState?.selectedTarget;
+		if (!reference) {
+			if (routing === "frontier") reference = currentConfig?.frontierModel;
+			else if (routing === "local" || routing === "auto") reference = currentConfig?.localModel;
+			else if (lastState?.model) reference = `${lastState.model.provider}/${lastState.model.id}`;
+		}
+		const activeLane = currentRoutingState?.lane;
 		return {
 			reference: reference ?? "Not configured",
 			statusClass: backendReady && reference ? "online" : backendReady ? "starting" : "error",
-			badge: routing === "off" ? "Direct" : routing === "auto" ? "Auto" : routing === "local" ? "Local" : "Frontier",
+			badge:
+				activeLane && activeLane !== "direct"
+					? activeLane === "local"
+						? "Local"
+						: "Frontier"
+					: routing === "off"
+						? "Direct"
+						: routing === "auto"
+							? "Auto"
+							: routing === "local"
+								? "Local"
+								: "Frontier",
 		};
 	});
 
 	const workspaceRows = $derived(
 		hasConversation
-			? "grid-rows-[78px_minmax(0,1fr)_auto] narrow-720:grid-rows-[78px_minmax(180px,1fr)_auto] short-650:grid-rows-[62px_minmax(0,1fr)_auto] short-500:grid-rows-[54px_minmax(0,1fr)_auto]"
-			: "grid-rows-[78px_minmax(160px,1fr)_auto_minmax(20px,7vh)] short-650:grid-rows-[62px_minmax(0,1fr)_auto_minmax(10px,3vh)] short-500:grid-rows-[54px_minmax(0,1fr)_auto_minmax(8px,2vh)]",
+			? "grid-rows-[78px_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[78px_minmax(180px,1fr)_auto_auto] short-650:grid-rows-[62px_minmax(0,1fr)_auto_auto] short-500:grid-rows-[54px_minmax(0,1fr)_auto_auto]"
+			: "grid-rows-[78px_minmax(160px,1fr)_auto_auto] short-650:grid-rows-[62px_minmax(0,1fr)_auto_auto] short-500:grid-rows-[54px_minmax(0,1fr)_auto_auto]",
 	);
 
 	function setStatus(state: StatusInfo["state"], label: string, detail: string): void {
@@ -117,37 +197,55 @@
 		cardStatus: TimelineItem["status"] = "settled",
 		dedupeId?: string,
 	): TimelineItem {
-		timelineDirty = true;
 		const item: TimelineItem = { id: ++timelineSeq, kind, tone, title, detail, status: cardStatus, open: false, dedupeId };
-		timeline.push(item);
+		feed.push({ id: ++feedSeq, type: "activity", activity: item });
 		return item;
 	}
 
 	function findTimeline(dedupeId: string): TimelineItem | undefined {
-		return timeline.find((item) => item.dedupeId === dedupeId);
+		const entry = feed.find((item) => item.type === "activity" && item.activity.dedupeId === dedupeId);
+		return entry?.type === "activity" ? entry.activity : undefined;
 	}
 
-	function clearTimeline(): void {
-		timelineDirty = false;
+	function clearFeed(): void {
 		lastFallbackReason = "";
 		toolCards.clear();
-		timeline.length = 0;
+		feed.length = 0;
+		streamingMessageId = undefined;
 	}
 
 	function toggleTimeline(id: number): void {
-		const item = timeline.find((candidate) => candidate.id === id);
+		const entry = feed.find((candidate) => candidate.type === "activity" && candidate.activity.id === id);
+		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (item) item.open = !item.open;
 	}
 
+	function pushMessage(message: ChatMessage): ChatMessage {
+		feed.push({ id: ++feedSeq, type: "message", message });
+		return message;
+	}
+
+	function findMessage(id: number | undefined): ChatMessage | undefined {
+		if (id === undefined) return undefined;
+		const entry = feed.find((candidate) => candidate.type === "message" && candidate.message.id === id);
+		return entry?.type === "message" ? entry.message : undefined;
+	}
+
+	function removeMessage(id: number): void {
+		const index = feed.findIndex((candidate) => candidate.type === "message" && candidate.message.id === id);
+		if (index >= 0) feed.splice(index, 1);
+	}
+
 	function addRoutingTransitionCard(transition: RoutingTransition): void {
-		if (!transition || (transition.kind !== "delegate" && transition.kind !== "return")) return;
+		if (!transition || !["initial", "delegate", "return"].includes(transition.kind ?? "")) return;
 		const dedupeId = `transition-${transition.id ?? transition.sequence ?? "unknown"}`;
 		if (findTimeline(dedupeId)) return;
+		const initial = transition.kind === "initial";
 		const delegate = transition.kind === "delegate";
-		const from = transition.fromLane ?? "local";
+		const from = transition.fromLane ?? (initial ? "direct" : "local");
 		const to = transition.toLane ?? (delegate ? "frontier" : "local");
-		const arrow = delegate ? "\u2193" : "\u2191";
-		const model = delegate ? transition.toTarget : (transition.fromTarget ?? transition.toTarget);
+		const arrow = initial ? "\u2192" : delegate ? "\u2193" : "\u2191";
+		const model = initial || delegate ? transition.toTarget : (transition.fromTarget ?? transition.toTarget);
 		const title = `${arrow} ${from} \u2192 ${to}${model ? ` \u00b7 ${model}` : ""}`;
 		const meta: string[] = [];
 		if (transition.trigger) meta.push(`trigger: ${transition.trigger}`);
@@ -156,26 +254,34 @@
 		}
 		const detail = [transition.reason, ...meta].filter((line) => line).join("\n");
 		const failed = transition.trigger === "provider-failure";
-		pushTimeline("routing", failed ? "red" : "neutral", title, detail, failed ? "error" : "settled", dedupeId);
+		if (failed) taskHadErrors = true;
+		pushTimeline("routing", failed ? "red" : "amber", title, detail, failed ? "error" : "settled", dedupeId);
 	}
 
 	function renderFallbackReason(state: RoutingState | undefined): void {
 		const reason = state?.fallbackReason;
 		if (!reason || reason === lastFallbackReason) return;
 		lastFallbackReason = reason;
-		pushTimeline("routing", "red", "Frontier fallback", reason, "error", `fallback-${reason}`);
+		pushTimeline("routing", "red", "Frontier fallback", reason, "error", `fallback-${activeTaskKey}-${reason}`);
 	}
 
 	function handleRetryStart(event: JsonObject): void {
 		const attempt = Number(event.attempt ?? 0);
 		const maxAttempts = Number(event.maxAttempts ?? 0);
 		const errorMessage = typeof event.errorMessage === "string" ? event.errorMessage : "";
-		pushTimeline("retry", "amber", `Provider retry ${attempt}/${maxAttempts}`, errorMessage, "running", `retry-${attempt}`);
+		pushTimeline(
+			"retry",
+			"amber",
+			`Provider retry ${attempt}/${maxAttempts}`,
+			errorMessage,
+			"running",
+			`retry-${activeTaskKey}-${attempt}`,
+		);
 	}
 
 	function handleRetryEnd(event: JsonObject): void {
 		const attempt = Number(event.attempt ?? 0);
-		const item = findTimeline(`retry-${attempt}`);
+		const item = findTimeline(`retry-${activeTaskKey}-${attempt}`);
 		if (event.success === true) {
 			if (item) {
 				item.status = "settled";
@@ -195,6 +301,7 @@
 		} else {
 			pushTimeline("error", "red", "Provider request failed", finalError, "error");
 		}
+		taskHadErrors = true;
 	}
 
 	function handleToolStart(event: JsonObject): void {
@@ -203,11 +310,20 @@
 		const described = describeToolCall(toolName, event.args);
 		const existingId = toolCards.get(toolCallId);
 		if (existingId === undefined) {
-			const item = pushTimeline(toolName, described.tone, described.label, described.detail, "running", `tool-${toolCallId}`);
+			const item = pushTimeline(
+				described.kind,
+				described.tone,
+				described.label,
+				described.detail,
+				"running",
+				`tool-${toolCallId}`,
+			);
+			item.detailType = described.detailType;
 			toolCards.set(toolCallId, item.id);
 			return;
 		}
-		const item = timeline.find((candidate) => candidate.id === existingId);
+		const entry = feed.find((candidate) => candidate.type === "activity" && candidate.activity.id === existingId);
+		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (item) {
 			item.title = described.label;
 			item.status = "running";
@@ -218,76 +334,167 @@
 	function handleToolEnd(event: JsonObject): void {
 		const existingId = toolCards.get(String(event.toolCallId ?? ""));
 		if (existingId === undefined) return;
-		const item = timeline.find((candidate) => candidate.id === existingId);
+		const entry = feed.find((candidate) => candidate.type === "activity" && candidate.activity.id === existingId);
+		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (!item) return;
 		if (event.isError === true) {
+			taskHadErrors = true;
 			item.status = "error";
 			item.tone = "red";
-			item.detail = resultErrorText(event.result) ?? "Tool execution failed";
+			const errorText = resultErrorText(event.result) ?? "Tool execution failed";
+			item.detail = event.toolName === "bash" ? [item.detail, errorText].filter(Boolean).join("\n\n") : errorText;
+			item.detailType = event.toolName === "bash" ? "code" : "text";
 			return;
 		}
 		item.status = "settled";
+		if (event.toolName === "edit") {
+			const diff = toolResultDetails(event.result)?.diff;
+			if (typeof diff === "string" && diff.length > 0) {
+				item.detail = diff;
+				item.detailType = "diff";
+			}
+		}
+		if (event.toolName === "bash") {
+			const resultText = resultErrorText(event.result);
+			if (resultText) item.detail = [item.detail, resultText].filter(Boolean).join("\n\n");
+			item.detailType = "code";
+		}
 		if (!item.detail) {
 			const resultText = truncateText(toDisplayText(event.result));
 			if (resultText && resultText !== "{}") item.detail = resultText;
 		}
 	}
 
-	function appendAssistantMessage(model?: string): void {
-		const item: ChatMessage = { id: ++messageSeq, role: "assistant", text: "", model, streaming: true };
-		messages.push(item);
+	function modelLabel(message: AgentMessage | undefined): string | undefined {
+		const model = message?.responseModel ?? message?.model;
+		if (!model) return undefined;
+		return message?.provider ? `${message.provider}/${model}` : model;
+	}
+
+	function appendAssistantMessage(message?: AgentMessage): void {
+		const item: ChatMessage = {
+			id: ++messageSeq,
+			role: "assistant",
+			text: "",
+			model: modelLabel(message),
+			streaming: true,
+		};
+		pushMessage(item);
 		streamingMessageId = item.id;
 	}
 
 	function finalizeStreamingMessage(): void {
 		if (streamingMessageId === undefined) return;
-		const item = messages.find((candidate) => candidate.id === streamingMessageId);
+		const item = findMessage(streamingMessageId);
 		if (item) item.streaming = false;
 		streamingMessageId = undefined;
 	}
 
-	function renderMessages(list: AgentMessage[]): void {
-		for (const message of list) {
-			if (message.role !== "user" && message.role !== "assistant") continue;
-			const text = messageText(message);
-			if (!text) continue;
-			messages.push({
-				id: ++messageSeq,
-				role: message.role,
-				text,
-				model: message.role === "assistant" ? message.model : undefined,
-				streaming: false,
-			});
+	function renderSessionEntries(entries: SessionEntryRecord[], leafId: string | null): void {
+		const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+		const activeBranch: SessionEntryRecord[] = [];
+		let cursor = leafId ? entryById.get(leafId) : undefined;
+		while (cursor) {
+			activeBranch.push(cursor);
+			cursor = cursor.parentId ? entryById.get(cursor.parentId) : undefined;
+		}
+		activeBranch.reverse();
+		for (const entry of activeBranch) {
+			if (entry.type === "custom" && entry.customType === "klerm-transition") {
+				const data = entry.data as { transition?: RoutingTransition } | undefined;
+				if (data?.transition) addRoutingTransitionCard(data.transition);
+				continue;
+			}
+			if (entry.type !== "message" || !entry.message) continue;
+			const message = entry.message;
+			if (message.role === "user" || message.role === "assistant") {
+				const text = messageText(message);
+				if (text) {
+					pushMessage({
+						id: ++messageSeq,
+						role: message.role,
+						text,
+						model: message.role === "assistant" ? modelLabel(message) : undefined,
+						streaming: false,
+					});
+				}
+				if (message.role === "assistant" && Array.isArray(message.content)) {
+					for (const part of message.content) {
+						if (part.type === "toolCall" && part.id && part.name) {
+							handleToolStart({
+								type: "tool_execution_start",
+								toolCallId: part.id,
+								toolName: part.name,
+								args: part.arguments ?? {},
+							});
+						}
+					}
+				}
+				continue;
+			}
+			if (message.role === "toolResult" && message.toolCallId) {
+				handleToolEnd({
+					type: "tool_execution_end",
+					toolCallId: message.toolCallId,
+					toolName: message.toolName ?? "unknown",
+					result: { content: message.content ?? [], details: message.details },
+					isError: message.isError === true,
+				});
+			}
 		}
 	}
 
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
 			case "agent_start": {
+				if (!taskActive) {
+					activeTaskKey = ++taskSeq;
+					taskStopping = false;
+					taskHadErrors = false;
+					taskSawAssistant = false;
+					lastAssistantStopReason = undefined;
+				}
 				taskActive = true;
 				return;
 			}
 			case "agent_settled": {
 				finalizeStreamingMessage();
+				const failed = !taskStopping && (!taskSawAssistant || lastAssistantStopReason === "error");
 				taskActive = false;
-				if (timelineDirty) {
-					pushTimeline("task", "neutral", "Task completed");
-					timelineDirty = false;
-				}
+				pushTimeline(
+					"task",
+					failed ? "red" : taskHadErrors ? "amber" : "neutral",
+					failed
+						? "Task failed"
+						: taskStopping
+							? "Task stopped"
+							: taskHadErrors
+								? "Task completed with errors"
+								: "Task completed",
+					"",
+					failed ? "error" : "settled",
+				);
+				taskStopping = false;
+				taskHadErrors = false;
+				taskSawAssistant = false;
+				lastAssistantStopReason = undefined;
+				activeTaskKey = 0;
 				void refreshSessions();
 				void refreshStateAfterSettle();
+				void refreshWorkspace();
+				void refreshRunningServices();
 				return;
 			}
 			case "message_start": {
 				const startedMessage = event.message as AgentMessage | undefined;
-				if (startedMessage?.role === "assistant") appendAssistantMessage(startedMessage.model);
+				if (startedMessage?.role === "assistant") appendAssistantMessage(startedMessage);
 				return;
 			}
 			case "message_update": {
 				const update = event.assistantMessageEvent as JsonObject | undefined;
 				if (update?.type === "text_delta" && typeof update.delta === "string") {
 					if (streamingMessageId === undefined) appendAssistantMessage();
-					const item = messages.find((candidate) => candidate.id === streamingMessageId);
+					const item = findMessage(streamingMessageId);
 					if (item) item.text += update.delta;
 				}
 				return;
@@ -295,22 +502,35 @@
 			case "message_end": {
 				const completedMessage = event.message as AgentMessage | undefined;
 				if (completedMessage?.role !== "assistant") return;
+				taskSawAssistant = true;
+				lastAssistantStopReason = completedMessage.stopReason;
 				const finalText = messageText(completedMessage);
-				const item = messages.find((candidate) => candidate.id === streamingMessageId);
+				const item = findMessage(streamingMessageId);
 				if (item) {
 					item.text = finalText || item.text;
 					item.streaming = false;
-					if (completedMessage.model) item.model = completedMessage.model;
-				} else {
-					messages.push({
+					if (completedMessage.model) item.model = modelLabel(completedMessage);
+					if (!item.text) removeMessage(item.id);
+				} else if (finalText) {
+					pushMessage({
 						id: ++messageSeq,
 						role: "assistant",
 						text: finalText,
-						model: completedMessage.model,
+						model: modelLabel(completedMessage),
 						streaming: false,
 					});
 				}
 				streamingMessageId = undefined;
+				if (completedMessage.stopReason === "error") {
+					taskHadErrors = true;
+					pushTimeline(
+						"error",
+						"red",
+						"Model request failed",
+						completedMessage.errorMessage ?? "The model ended with an error.",
+						"error",
+					);
+				}
 				return;
 			}
 			case "tool_execution_start": {
@@ -323,16 +543,35 @@
 			}
 			case "routing_changed": {
 				const state = event.state as RoutingState | undefined;
+				currentRoutingState = state;
 				if (currentConfig && state) {
 					currentConfig = {
 						...currentConfig,
 						routing: state.mode,
+						activeStartLane: state.activeStartLane ?? currentConfig.activeStartLane,
 						localModel: state.localModel ?? currentConfig.localModel,
 						frontierModel: state.frontierModel ?? currentConfig.frontierModel,
 					};
 				}
 				if (state?.lastTransition) addRoutingTransitionCard(state.lastTransition);
 				renderFallbackReason(state);
+				void refreshThinkingLevels();
+				return;
+			}
+			case "thinking_level_changed": {
+				const level = event.level as ThinkingLevel | undefined;
+				if (level) {
+					if (lastState) lastState = { ...lastState, thinkingLevel: level };
+					if (currentRoutingState?.lane === "local") localThinking = { ...localThinking, level };
+					if (currentRoutingState?.lane === "frontier") frontierThinking = { ...frontierThinking, level };
+				}
+				return;
+			}
+			case "model_select": {
+				const model = event.model as { provider?: string; id?: string } | undefined;
+				if (model?.provider && model.id && lastState) {
+					lastState = { ...lastState, model: { provider: model.provider, id: model.id } };
+				}
 				return;
 			}
 			case "auto_retry_start": {
@@ -343,9 +582,14 @@
 				handleRetryEnd(event);
 				return;
 			}
+			case "workspace_files_changed": {
+				void refreshWorkspace();
+				return;
+			}
 			case "backend_error": {
 				const text = typeof event.message === "string" ? event.message : "Backend error";
-				if (/error|failed|invalid|limit/i.test(text)) pushTimeline("error", "red", text, "", "error");
+				if (taskActive) taskHadErrors = true;
+				pushTimeline("error", "red", text, "", "error");
 				return;
 			}
 			case "backend_exit": {
@@ -381,16 +625,94 @@
 		}
 	}
 
-	async function restoreSessionTimeline(): Promise<void> {
+	async function refreshWorkspace(): Promise<void> {
+		if (!backendReady) return;
 		try {
-			const result = await bridge.send<{ entries: SessionEntryRecord[] }>("get_entries");
-			for (const entry of result.entries ?? []) {
-				if (entry.type !== "custom" || entry.customType !== "klerm-transition") continue;
-				const data = entry.data as { transition?: RoutingTransition } | undefined;
-				if (data?.transition) addRoutingTransitionCard(data.transition);
+			const next = await bridge.send<WorkspaceStatus>("get_workspace_status");
+			workspace = next;
+			if (selectedFilePath && !next.files.some((file) => file.path === selectedFilePath)) {
+				selectedFilePath = undefined;
+				selectedFileDiff = "";
+				selectedFileContent = undefined;
 			}
-		} catch {
-			// Timeline history is best-effort; live events remain authoritative.
+			if (!selectedFilePath && next.files[0] && workspacePanelOpen) void selectWorkspaceFile(next.files[0].path);
+		} catch (error) {
+			workspace = undefined;
+			showError(toError(error).message);
+		}
+	}
+
+	async function selectWorkspaceFile(path: string): Promise<void> {
+		selectedFilePath = path;
+		selectedFileDiff = "";
+		selectedFileContent = undefined;
+		fileLoading = true;
+		try {
+			const [diffResult, contentResult] = await Promise.allSettled([
+				bridge.send<{ path: string; diff: string }>("get_workspace_diff", { path }),
+				bridge.send<{ path: string; content: string; size: number }>("read_workspace_file", { path }),
+			]);
+			if (selectedFilePath !== path) return;
+			if (diffResult.status === "fulfilled") selectedFileDiff = diffResult.value.diff;
+			else showError(toError(diffResult.reason).message);
+			if (contentResult.status === "fulfilled") selectedFileContent = contentResult.value.content;
+		} finally {
+			if (selectedFilePath === path) fileLoading = false;
+		}
+	}
+
+	async function saveWorkspaceFile(path: string, content: string): Promise<boolean> {
+		if (fileSaving || taskActive) return false;
+		fileSaving = true;
+		clearError();
+		try {
+			await bridge.send("write_workspace_file", { path, content });
+			selectedFileContent = content;
+			await refreshWorkspace();
+			await selectWorkspaceFile(path);
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			fileSaving = false;
+		}
+	}
+
+	async function refreshEditors(): Promise<void> {
+		try {
+			const result = await bridge.send<{ editors: EditorInfo[] }>("get_available_editors");
+			editors = result.editors;
+		} catch (error) {
+			editors = [];
+			showError(toError(error).message);
+		}
+	}
+
+	async function openWorkspaceEditor(editor: EditorInfo["id"]): Promise<void> {
+		try {
+			await bridge.send("open_workspace_editor", { editor });
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function refreshRunningServices(): Promise<void> {
+		if (!backendReady) return;
+		try {
+			const result = await bridge.send<{ services: RunningService[] }>("get_running_services");
+			runningServices = result.services;
+		} catch (error) {
+			runningServices = [];
+			showError(toError(error).message);
+		}
+	}
+
+	async function openLocalUrl(url: string): Promise<void> {
+		try {
+			await bridge.send("open_local_url", { url });
+		} catch (error) {
+			showError(toError(error).message);
 		}
 	}
 
@@ -398,20 +720,22 @@
 		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
 		sessionTransitionActive = true;
 		clearError();
-		clearTimeline();
 		try {
-			await bridge.send("switch_session", { sessionPath: session.sessionToken });
-			messages.length = 0;
-			streamingMessageId = undefined;
-			const [messageResult, state] = await Promise.all([
-				bridge.send<{ messages: AgentMessage[] }>("get_messages"),
+			const transition = await bridge.send<{ cancelled: boolean }>("switch_session", {
+				sessionPath: session.sessionToken,
+			});
+			if (transition.cancelled) return;
+			const [entries, state] = await Promise.all([
+				bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries"),
 				bridge.send<SessionState>("get_state"),
 			]);
 			lastState = state;
-			renderMessages(messageResult.messages);
-			await restoreSessionTimeline();
+			clearFeed();
+			renderSessionEntries(entries.entries ?? [], entries.leafId);
+			await refreshThinkingLevels();
 			sessionTitle = session.name ?? session.firstMessage;
 			sessionCwd = session.cwd;
+			await refreshWorkspace();
 			void refreshSessions();
 			sidebarOpen = false;
 		} catch (error) {
@@ -428,11 +752,15 @@
 		clearError();
 		try {
 			if (isActive) {
-				await bridge.send("new_session");
-				clearTimeline();
-				messages.length = 0;
-				streamingMessageId = undefined;
+				const transition = await bridge.send<{ cancelled: boolean }>("new_session");
+				if (transition.cancelled) return;
+				clearFeed();
 				sessionTitle = "New local session";
+				lastState = await bridge.send<SessionState>("get_state");
+				sessionCwd = lastState.cwd;
+				currentRoutingState = currentRoutingState
+					? { ...currentRoutingState, lane: "direct", selectedTarget: undefined, lastTransition: undefined }
+					: undefined;
 			}
 			await bridge.send("delete_session", { sessionToken: session.sessionToken });
 			await refreshSessions();
@@ -443,13 +771,50 @@
 		}
 	}
 
+	async function renameActiveSession(name: string): Promise<boolean> {
+		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return false;
+		sessionTransitionActive = true;
+		clearError();
+		try {
+			await bridge.send("set_session_name", { name });
+			sessionTitle = name;
+			if (lastState) lastState = { ...lastState, sessionName: name };
+			await refreshSessions();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			sessionTransitionActive = false;
+		}
+	}
+
+	async function renameSession(session: DesktopSession, name: string): Promise<boolean> {
+		if (session.id === lastState?.sessionId) return renameActiveSession(name);
+		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return false;
+		sessionTransitionActive = true;
+		clearError();
+		try {
+			await bridge.send("rename_session", { sessionToken: session.sessionToken, name });
+			await refreshSessions();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			sessionTransitionActive = false;
+		}
+	}
+
 	async function refreshLocalModels(): Promise<void> {
 		runtimeStatus = { state: "starting", title: "Checking local runtimes", detail: "Looking for installed models" };
 		try {
 			const result = await bridge.send<{ runtimes: LocalRuntime[] }>("get_local_runtimes");
-			const runtimes = [...result.runtimes].sort((left, right) =>
-				left.providerId === "ollama" ? -1 : right.providerId === "ollama" ? 1 : 0,
-			);
+			const runtimes = [...result.runtimes].sort((left, right) => {
+				const leftPriority = left.providerId === "ollama" ? 0 : 1;
+				const rightPriority = right.providerId === "ollama" ? 0 : 1;
+				return leftPriority - rightPriority || left.name.localeCompare(right.name);
+			});
 			currentLocalRuntimes = runtimes;
 			const modelOptions = runtimes.flatMap((runtime) =>
 				runtime.models.map((model) => ({
@@ -500,15 +865,47 @@
 		}
 	}
 
-	function refreshModels(): void {
-		void refreshLocalModels();
-		void refreshFrontierModels();
+	async function refreshModels(): Promise<void> {
+		await refreshLocalModels();
+		await refreshFrontierModels();
+	}
+
+	async function refreshThinkingLevels(): Promise<void> {
+		await Promise.all([refreshThinkingSetting("local"), refreshThinkingSetting("frontier")]);
+	}
+
+	async function refreshThinkingSetting(lane: "local" | "frontier"): Promise<void> {
+		try {
+			const result = await bridge.send<ThinkingSetting>("get_available_thinking_levels", { lane });
+			if (lane === "local") localThinking = result;
+			else frontierThinking = result;
+		} catch (error) {
+			if (lane === "local") localThinking = { level: "off", levels: ["off"] };
+			else frontierThinking = { level: "off", levels: ["off"] };
+			showError(toError(error).message);
+		}
+	}
+
+	async function applyThinkingLevel(lane: "local" | "frontier", level: ThinkingLevel): Promise<void> {
+		if (thinkingBusy !== undefined || interactionActive) return;
+		thinkingBusy = lane;
+		clearError();
+		try {
+			const result = await bridge.send<ThinkingSetting>("set_thinking_level", { lane, level });
+			if (lane === "local") localThinking = result;
+			else frontierThinking = result;
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			thinkingBusy = undefined;
+		}
 	}
 
 	function applyConfigUpdate(update: {
 		localModel?: string;
 		frontierModel?: string;
 		routing?: KlermConfig["routing"];
+		activeStartLane?: KlermConfig["activeStartLane"];
 	}): void {
 		if (configBusy) return;
 		const operation = (async () => {
@@ -518,9 +915,14 @@
 					update,
 				});
 				currentConfig = result.config;
+				currentRoutingState = result.routingState;
+				if (update.localModel !== undefined) await refreshThinkingSetting("local");
+				if (update.frontierModel !== undefined) await refreshThinkingSetting("frontier");
 				return true;
 			} catch (error) {
-				showError(toError(error).message);
+				const message = toError(error).message;
+				pushTimeline("error", "red", "Configuration update failed", message, "error");
+				showError(message);
 				return false;
 			}
 		})();
@@ -528,6 +930,16 @@
 		void operation.finally(() => {
 			if (configBusy === operation) configBusy = undefined;
 		});
+	}
+
+	function applyRoutingSelection(value: string): void {
+		if (value === "frontier-local") {
+			applyConfigUpdate({ routing: "frontier", activeStartLane: "frontier-local" });
+			return;
+		}
+		if (value === "off" || value === "local" || value === "frontier" || value === "auto") {
+			applyConfigUpdate({ routing: value, activeStartLane: "auto" });
+		}
 	}
 
 	async function connectBackend(): Promise<void> {
@@ -538,29 +950,52 @@
 		backendReady = true;
 		setStatus("online", "Backend connected", `Klerm ${handshake.klermVersion} / RPC v${handshake.protocolVersion}`);
 		lastState = handshake.state;
+		currentRoutingState = handshake.routingState;
 		sessionTitle = handshake.state.sessionName ?? "New local session";
 		sessionCwd = handshake.state.cwd;
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
-		const [messageResult] = await Promise.all([
-			bridge.send<{ messages: AgentMessage[] }>("get_messages"),
-			refreshLocalModels(),
-			refreshFrontierModels(),
-		]);
-		clearTimeline();
-		messages.length = 0;
-		streamingMessageId = undefined;
-		renderMessages(messageResult.messages);
+		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
+		await refreshLocalModels();
+		await Promise.all([refreshFrontierModels(), refreshThinkingLevels()]);
+		const entries = await entriesPromise;
+		clearFeed();
+		renderSessionEntries(entries.entries ?? [], entries.leafId);
 		taskActive = handshake.state.isStreaming;
+		await Promise.all([refreshWorkspace(), refreshEditors(), refreshRunningServices()]);
 	}
 
 	async function newSession(): Promise<void> {
+		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		sessionTransitionActive = true;
+		clearError();
+		try {
+			const transition = await bridge.send<{ cancelled: boolean }>("new_session");
+			if (transition.cancelled) return;
+			clearFeed();
+			lastState = await bridge.send<SessionState>("get_state");
+			sessionTitle = "New local session";
+			sessionCwd = lastState.cwd;
+			currentRoutingState = currentRoutingState
+				? { ...currentRoutingState, lane: "direct", selectedTarget: undefined, lastTransition: undefined }
+				: undefined;
+			await refreshWorkspace();
+			await refreshSessions();
+			sidebarOpen = false;
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			sessionTransitionActive = false;
+		}
+	}
+
+	async function changeRoot(): Promise<void> {
 		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
 		let selected: unknown;
 		try {
 			selected = await openDialog({
 				directory: true,
 				multiple: false,
-				title: "Choose a project folder for the new session",
+				title: "Choose a project root",
 			});
 		} catch (error) {
 			showError(toError(error).message);
@@ -590,23 +1025,42 @@
 	async function sendMessage(text: string): Promise<void> {
 		if (!text || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
 		clearError();
-		messages.push({ id: ++messageSeq, role: "user", text, streaming: false });
-		draft = "";
 		taskActive = true;
+		taskStopping = false;
+		taskHadErrors = false;
+		taskSawAssistant = false;
+		lastAssistantStopReason = undefined;
+		activeTaskKey = ++taskSeq;
+		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, streaming: false });
 		try {
 			await bridge.send("prompt", { message: text });
+			if (draft.trim() === text) draft = "";
 		} catch (error) {
 			taskActive = false;
+			activeTaskKey = 0;
+			removeMessage(userMessage.id);
 			const failure = toError(error).message;
 			pushTimeline("error", "red", failure, "", "error");
 			showError(failure);
 		}
 	}
 
+	function rerunPrompt(text: string): void {
+		if (taskActive) {
+			draft = text;
+			composerFocusRequest += 1;
+			showError("The corrected prompt is ready. Stop the active task before sending it.");
+			return;
+		}
+		void sendMessage(text);
+	}
+
 	async function stopTask(): Promise<void> {
 		try {
+			taskStopping = true;
 			await bridge.send("abort");
 		} catch (error) {
+			taskStopping = false;
 			showError(toError(error).message);
 		}
 	}
@@ -652,9 +1106,10 @@
 <Splash visible={splashVisible} />
 
 <div
-	class="grid h-full w-full grid-cols-[280px_minmax(0,1fr)] overflow-hidden bg-bg opacity-100 transition-opacity duration-300 narrow-900:grid-cols-[230px_minmax(0,1fr)] narrow-720:grid-cols-1"
+	class={`relative grid h-full w-full overflow-hidden bg-bg opacity-100 transition-opacity duration-300 ${shellColumns}`}
 	class:opacity-0={splashVisible}
 >
+	{#if sessionsVisible}
 	<Sidebar
 		{sessions}
 		activeSessionId={lastState?.sessionId ?? ""}
@@ -663,9 +1118,19 @@
 		onnewsession={newSession}
 		onrefresh={() => void refreshSessions()}
 		onswitch={(session) => void switchSession(session)}
+		onrename={renameSession}
 		ondelete={(session) => void deleteConversation(session)}
 	/>
-	{#if sidebarOpen}
+	{/if}
+	<button
+		type="button"
+		aria-label={sessionsVisible ? "Hide sessions" : "Show sessions"}
+		class={`absolute top-1/2 z-[17] flex h-20 w-5 -translate-y-1/2 items-center justify-center gap-1 rounded-r-md border border-l-0 border-[#303941] bg-[#0d1318] font-mono text-[7px] tracking-[.08em] text-[#78848c] uppercase shadow-[8px_0_22px_rgba(0,0,0,.3)] hover:bg-[#151c21] hover:text-[#d1d8dc] narrow-720:hidden ${sessionsVisible ? "left-[280px] narrow-900:left-[230px]" : "left-0"}`}
+		onclick={() => (sessionsVisible = !sessionsVisible)}
+	>
+		{#if sessionsVisible}<PanelLeftClose size={11} />{:else}<PanelLeftOpen size={11} />{/if}
+	</button>
+	{#if sessionsVisible && sidebarOpen}
 		<button
 			type="button"
 			aria-label="Close navigation"
@@ -675,12 +1140,18 @@
 	{/if}
 
 	<main class={`grid min-h-0 min-w-0 overflow-hidden bg-[radial-gradient(circle_at_50%_30%,rgba(44,57,63,.12),transparent_34%),var(--color-bg)] ${workspaceRows}`}>
-		<Topbar
-			title={sessionTitle}
-			cwd={sessionCwd}
+			<Topbar
+				title={sessionTitle}
+				cwd={sessionCwd}
+				projectRoot={workspace?.projectRoot ?? sessionCwd}
+				isGit={workspace?.isGit ?? false}
 			model={currentModel}
 			{sidebarOpen}
-			ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
+			ontogglesidebar={() => { sessionsVisible = true; sidebarOpen = !sidebarOpen; }}
+			onrename={renameActiveSession}
+			onchangeroot={() => void changeRoot()}
+			{workspacePanelOpen}
+			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
 		/>
 
 		<section class="relative min-h-0 overflow-y-auto">
@@ -688,14 +1159,21 @@
 				class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]"
 			>
 				{#if heroVisible}
-					<EmptyState {runtimeStatus} onrefresh={refreshModels} />
+					<EmptyState {runtimeStatus} onrefresh={() => void refreshModels()} />
 				{/if}
-				{#each messages as message (message.id)}
-					<ChatMessageView {message} />
-				{/each}
+				<Feed items={feed} {taskActive} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
 			</div>
-			<Timeline items={timeline} ontoggle={toggleTimeline} />
 		</section>
+
+		<BottomPanel
+			open={bottomPanelOpen}
+			services={runningServices}
+			logs={activityLogs}
+			{status}
+			ontoggle={() => (bottomPanelOpen = !bottomPanelOpen)}
+			onrefresh={() => void refreshRunningServices()}
+			onopenurl={(url) => void openLocalUrl(url)}
+		/>
 
 		<Composer
 			bind:draft
@@ -707,17 +1185,44 @@
 			frontierOptions={frontierOptions}
 			localValue={currentConfig?.localModel ?? ""}
 			frontierValue={currentConfig?.frontierModel ?? ""}
-			routingValue={currentConfig?.routing ?? "off"}
+			routingValue={routingControlValue}
 			localDisabled={localSelectDisabled}
 			frontierDisabled={frontierSelectDisabled}
 			routingDisabled={routingSelectDisabled}
 			{taskStateText}
 			{errorBanner}
+			history={promptHistory}
+			focusRequest={composerFocusRequest}
+			historyKey={lastState?.sessionId ?? ""}
+			localThinkingLevels={localThinking.levels}
+			localThinkingValue={localThinking.level}
+			{localThinkingDisabled}
+			frontierThinkingLevels={frontierThinking.levels}
+			frontierThinkingValue={frontierThinking.level}
+			{frontierThinkingDisabled}
 			onsend={(text) => void sendMessage(text)}
 			onstop={() => void stopTask()}
 			onlocalchange={(value) => applyConfigUpdate({ localModel: value })}
 			onfrontierchange={(value) => applyConfigUpdate({ frontierModel: value })}
-			onroutingchange={(value) => applyConfigUpdate({ routing: value as KlermConfig["routing"] })}
+			onroutingchange={applyRoutingSelection}
+			onlocalthinkingchange={(level) => void applyThinkingLevel("local", level)}
+			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
 		/>
 	</main>
+	{#if workspacePanelOpen}
+		<WorkspacePanel
+			{workspace}
+			{editors}
+			selectedPath={selectedFilePath}
+			diff={selectedFileDiff}
+			content={selectedFileContent}
+			loading={fileLoading}
+			saving={fileSaving}
+			onclose={() => (workspacePanelOpen = false)}
+			onrefresh={() => void refreshWorkspace()}
+			onselect={(path) => void selectWorkspaceFile(path)}
+			onsave={saveWorkspaceFile}
+			onopeneditor={(editor) => void openWorkspaceEditor(editor)}
+		/>
+	{/if}
 </div>

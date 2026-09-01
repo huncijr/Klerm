@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { Send, Square } from "@lucide/svelte";
-	import { onMount } from "svelte";
-	import type { SelectOption } from "../lib/model.ts";
+	import { onMount, tick } from "svelte";
+	import type { SelectOption, ThinkingLevel } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
+	import ThinkingSlider from "./ThinkingSlider.svelte";
 
 	let {
 		draft = $bindable(""),
@@ -20,11 +21,22 @@
 		routingDisabled,
 		taskStateText,
 		errorBanner,
+		history,
+		focusRequest,
+		historyKey,
+		localThinkingLevels,
+		localThinkingValue,
+		localThinkingDisabled,
+		frontierThinkingLevels,
+		frontierThinkingValue,
+		frontierThinkingDisabled,
 		onsend,
 		onstop,
 		onlocalchange,
 		onfrontierchange,
 		onroutingchange,
+		onlocalthinkingchange,
+		onfrontierthinkingchange,
 	}: {
 		draft: string;
 		sendDisabled: boolean;
@@ -41,21 +53,35 @@
 		routingDisabled: boolean;
 		taskStateText: string;
 		errorBanner: string;
+		history: string[];
+		focusRequest: number;
+		historyKey: string;
+		localThinkingLevels: ThinkingLevel[];
+		localThinkingValue: ThinkingLevel;
+		localThinkingDisabled: boolean;
+		frontierThinkingLevels: ThinkingLevel[];
+		frontierThinkingValue: ThinkingLevel;
+		frontierThinkingDisabled: boolean;
 		onsend: (text: string) => void;
 		onstop: () => void;
 		onlocalchange: (value: string) => void;
 		onfrontierchange: (value: string) => void;
 		onroutingchange: (value: string) => void;
+		onlocalthinkingchange: (level: ThinkingLevel) => void;
+		onfrontierthinkingchange: (level: ThinkingLevel) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
-		{ value: "off", label: "Off" },
+		{ value: "off", label: "Direct" },
 		{ value: "local", label: "Local" },
 		{ value: "frontier", label: "Frontier" },
-		{ value: "auto", label: "Auto" },
+		{ value: "frontier-local", label: "Frontier → Local" },
+		{ value: "auto", label: "Auto / local-first" },
 	];
 
 	let promptEl: HTMLTextAreaElement | undefined = $state();
+	let historyIndex = $state(-1);
+	let draftBeforeHistory = $state("");
 
 	function resizePrompt(): void {
 		if (!promptEl) return;
@@ -71,6 +97,24 @@
 		resizePrompt();
 	});
 
+	$effect(() => {
+		const request = focusRequest;
+		if (request === 0) return;
+		historyIndex = -1;
+		draftBeforeHistory = "";
+		void tick().then(() => {
+			if (focusRequest !== request || !promptEl) return;
+			promptEl.focus();
+			promptEl.setSelectionRange(draft.length, draft.length);
+		});
+	});
+
+	$effect(() => {
+		historyKey;
+		historyIndex = -1;
+		draftBeforeHistory = "";
+	});
+
 	onMount(() => {
 		window.addEventListener("resize", resizePrompt);
 		return () => window.removeEventListener("resize", resizePrompt);
@@ -79,14 +123,61 @@
 	function submit(): void {
 		const text = draft.trim();
 		if (!text || sendDisabled) return;
+		historyIndex = -1;
+		draftBeforeHistory = "";
 		onsend(text);
 	}
 
+	function navigateHistory(direction: -1 | 1): void {
+		if (history.length === 0) return;
+		if (direction === -1) {
+			if (historyIndex === -1) {
+				draftBeforeHistory = draft;
+				historyIndex = history.length - 1;
+			} else {
+				historyIndex = Math.max(0, historyIndex - 1);
+			}
+			draft = history[historyIndex] ?? draft;
+		} else if (historyIndex !== -1) {
+			if (historyIndex < history.length - 1) {
+				historyIndex += 1;
+				draft = history[historyIndex] ?? draft;
+			} else {
+				historyIndex = -1;
+				draft = draftBeforeHistory;
+				draftBeforeHistory = "";
+			}
+		}
+		void tick().then(() => promptEl?.setSelectionRange(draft.length, draft.length));
+	}
+
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === "Enter" && !event.shiftKey) {
+		if (event.isComposing) return;
+		if (event.key === "ArrowUp" && promptEl?.selectionStart === 0 && promptEl.selectionEnd === 0) {
+			event.preventDefault();
+			navigateHistory(-1);
+			return;
+		}
+		if (
+			event.key === "ArrowDown" &&
+			historyIndex !== -1 &&
+			promptEl?.selectionStart === draft.length &&
+			promptEl.selectionEnd === draft.length
+		) {
+			event.preventDefault();
+			navigateHistory(1);
+			return;
+		}
+		if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
 			event.preventDefault();
 			submit();
 		}
+	}
+
+	function handleInput(): void {
+		if (historyIndex === -1) return;
+		historyIndex = -1;
+		draftBeforeHistory = "";
 	}
 </script>
 
@@ -97,6 +188,7 @@
 >
 	{#if errorBanner}
 		<div
+			role="alert"
 			class="mx-auto mb-[7px] w-[min(820px,100%)] rounded-md border border-[rgba(255,111,97,.25)] bg-[rgba(255,111,97,.07)] px-3 py-2 text-[10px] text-[#e69a93]"
 		>
 			{errorBanner}
@@ -119,6 +211,7 @@
 				aria-label="Task prompt"
 				class="block max-h-[min(150px,22dvh)] w-full resize-none border-0 bg-transparent pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] text-white outline-0 [scrollbar-width:thin] placeholder:text-[#56616a] narrow-520:max-h-[min(120px,20dvh)] narrow-520:py-3 narrow-520:text-[12px] short-650:max-h-[min(110px,20dvh)] short-500:max-h-[min(82px,18dvh)]"
 				onkeydown={handleKeydown}
+				oninput={handleInput}
 			></textarea>
 			<div class="absolute right-[9px] bottom-2.5 h-[38px] w-[38px] narrow-520:right-[7px] narrow-520:bottom-[7px] narrow-520:h-9 narrow-520:w-9">
 				{#if taskActive}
@@ -144,23 +237,45 @@
 		</div>
 	</form>
 
-	<div class="mx-auto mt-2 grid w-[min(820px,100%)] grid-cols-3 gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px]">
-		<ModelSelect
-			label="Local model"
-			options={localOptions}
-			value={localValue}
-			disabled={localDisabled}
-			placeholder="Discovering models..."
-			onchange={onlocalchange}
-		/>
-		<ModelSelect
-			label="Frontier model"
-			options={frontierOptions}
-			value={frontierValue}
-			disabled={frontierDisabled}
-			placeholder="Discovering models..."
-			onchange={onfrontierchange}
-		/>
+	<div class="mx-auto mt-2 grid w-[min(820px,100%)] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_150px] gap-2 narrow-520:mt-[5px] narrow-520:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_112px] narrow-520:gap-[5px]">
+		<div class="min-w-0">
+			<ModelSelect
+				label="Local model"
+				options={localOptions}
+				value={localValue}
+				disabled={localDisabled}
+				placeholder="Discovering models..."
+				onchange={onlocalchange}
+			/>
+			{#if localThinkingLevels.length > 1}
+				<ThinkingSlider
+					label="Local effort"
+					levels={localThinkingLevels}
+					value={localThinkingValue}
+					disabled={localThinkingDisabled}
+					onchange={onlocalthinkingchange}
+				/>
+			{/if}
+		</div>
+		<div class="min-w-0">
+			<ModelSelect
+				label="Frontier model"
+				options={frontierOptions}
+				value={frontierValue}
+				disabled={frontierDisabled}
+				placeholder="Discovering models..."
+				onchange={onfrontierchange}
+			/>
+			{#if frontierThinkingLevels.length > 1}
+				<ThinkingSlider
+					label="Frontier effort"
+					levels={frontierThinkingLevels}
+					value={frontierThinkingValue}
+					disabled={frontierThinkingDisabled}
+					onchange={onfrontierthinkingchange}
+				/>
+			{/if}
+		</div>
 		<ModelSelect
 			label="Routing"
 			options={routingOptions}
@@ -175,7 +290,7 @@
 	<div
 		class={`mx-auto flex w-[min(820px,100%)] justify-between px-[3px] pt-2 font-mono text-[8px] text-dim ${showMeta ? "" : "invisible"}`}
 	>
-		<span class="narrow-720:hidden">Enter to send, Shift+Enter for a new line</span>
+		<span class="narrow-720:hidden">Ctrl/Cmd+Enter to send, Enter for a new line</span>
 		<span aria-live="polite" class="flex items-center gap-1.5">
 			{#if taskActive}
 				<span class="h-2 w-2 animate-spin rounded-full border border-[#4e5962] border-t-[#d7dde1]"></span>

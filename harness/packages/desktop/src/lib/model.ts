@@ -1,16 +1,25 @@
 export type JsonObject = Record<string, unknown>;
 
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ThinkingSetting {
+	level: ThinkingLevel;
+	levels: ThinkingLevel[];
+}
+
 export interface SessionState {
 	sessionId: string;
 	sessionName?: string;
 	cwd: string;
 	isStreaming: boolean;
 	messageCount: number;
+	thinkingLevel: ThinkingLevel;
 	model?: { provider: string; id: string };
 }
 
 export interface RoutingState {
 	mode: "off" | "local" | "frontier" | "auto";
+	activeStartLane?: "auto" | "local" | "frontier" | "frontier-local";
 	lane: "direct" | "local" | "frontier";
 	localModel?: string;
 	frontierModel?: string;
@@ -56,8 +65,11 @@ export interface AvailableModel {
 
 export interface KlermConfig {
 	routing: "off" | "local" | "frontier" | "auto";
+	activeStartLane: "auto" | "local" | "frontier" | "frontier-local";
 	localModel?: string;
 	frontierModel?: string;
+	localThinkingLevel?: ThinkingLevel;
+	frontierThinkingLevel?: ThinkingLevel;
 }
 
 export interface DesktopSession {
@@ -71,12 +83,67 @@ export interface DesktopSession {
 	firstMessage: string;
 }
 
-export interface AgentMessage {
-	role: string;
-	content?: string | Array<{ type: string; text?: string }>;
+export interface WorkspaceAttribution {
+	source: "local" | "frontier" | "direct" | "manual" | "external";
 	provider?: string;
 	model?: string;
+	lane?: "local" | "frontier" | "direct";
+	timestamp?: string;
+}
+
+export interface WorkspaceFileStatus {
+	path: string;
+	oldPath?: string;
+	indexStatus: string;
+	worktreeStatus: string;
+	status: "modified" | "added" | "deleted" | "renamed" | "untracked";
+	staged: boolean;
+	attribution: WorkspaceAttribution;
+}
+
+export interface WorkspaceStatus {
+	workspaceRoot: string;
+	projectRoot: string;
+	gitRoot?: string;
+	isGit: boolean;
+	files: WorkspaceFileStatus[];
+}
+
+export interface EditorInfo {
+	id: "zed" | "vscode" | "vim";
+	label: string;
+	available: boolean;
+}
+
+export interface RunningService {
+	port: number;
+	url: string;
+	processName?: string;
+	pid?: number;
+}
+
+export interface AgentMessage {
+	role: string;
+	content?: string | AgentContentPart[];
+	provider?: string;
+	model?: string;
+	responseModel?: string;
 	usage?: { totalTokens?: number; cost?: { total?: number } };
+	stopReason?: string;
+	errorMessage?: string;
+	toolCallId?: string;
+	toolName?: string;
+	details?: unknown;
+	isError?: boolean;
+	timestamp?: number;
+}
+
+export interface AgentContentPart {
+	type: string;
+	text?: string;
+	id?: string;
+	name?: string;
+	arguments?: Record<string, unknown>;
 }
 
 export interface ChatMessage {
@@ -103,14 +170,22 @@ export interface TimelineItem {
 	detail: string;
 	status: TimelineStatus;
 	open: boolean;
+	detailType?: "text" | "diff" | "code";
 	dedupeId?: string;
 }
 
 export interface SessionEntryRecord {
+	id: string;
+	parentId: string | null;
 	type: string;
+	message?: AgentMessage;
 	customType?: string;
 	data?: unknown;
 }
+
+export type FeedItem =
+	| { id: number; type: "message"; message: ChatMessage }
+	| { id: number; type: "activity"; activity: TimelineItem };
 
 export interface StatusInfo {
 	state: "starting" | "online" | "error";

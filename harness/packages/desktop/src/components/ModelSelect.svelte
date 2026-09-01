@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, tick } from "svelte";
 	import type { SelectOption } from "../lib/model.ts";
 
 	let {
@@ -22,9 +22,14 @@
 
 	let open = $state(false);
 	let rootEl: HTMLElement | undefined = $state();
+	let buttonEl: HTMLButtonElement | undefined = $state();
 
 	const selected = $derived(options.find((option) => option.value === value));
 	const displayLabel = $derived(selected?.label ?? options[0]?.label ?? placeholder);
+
+	$effect(() => {
+		if (disabled) open = false;
+	});
 
 	onMount(() => {
 		const onPointerDown = (event: PointerEvent) => {
@@ -40,15 +45,31 @@
 	}
 
 	function select(option: SelectOption): void {
-		if (!option.value) return;
+		if (disabled || !option.value) return;
 		open = false;
 		onchange(option.value);
+		buttonEl?.focus();
 	}
 
 	function handleButtonKeydown(event: KeyboardEvent): void {
-		if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			event.preventDefault();
+			if (disabled) return;
+			open = true;
+			void tick().then(() => {
+				const buttons = rootEl?.querySelectorAll<HTMLButtonElement>("[role=option]:not(:disabled)");
+				buttons?.[event.key === "ArrowDown" ? 0 : buttons.length - 1]?.focus();
+			});
+			return;
+		}
+		if (event.key === "Enter" || event.key === " ") {
 			event.preventDefault();
 			toggle();
+			return;
+		}
+		if (event.key === "Escape" && open) {
+			event.preventDefault();
+			open = false;
 		}
 	}
 
@@ -56,14 +77,21 @@
 		if (event.key === "Escape") {
 			event.preventDefault();
 			open = false;
+			buttonEl?.focus();
 			return;
 		}
-		if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+		if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") {
+			return;
+		}
 		event.preventDefault();
 		const menu = rootEl?.querySelector<HTMLDivElement>("[role=listbox]");
 		if (!menu) return;
 		const buttons = Array.from(menu.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
 		const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+		if (event.key === "Home" || event.key === "End") {
+			buttons[event.key === "Home" ? 0 : buttons.length - 1]?.focus();
+			return;
+		}
 		const offset = event.key === "ArrowDown" ? 1 : -1;
 		buttons[(currentIndex + offset + buttons.length) % buttons.length]?.focus();
 	}
@@ -73,8 +101,10 @@
 	<span class="block font-mono text-[8px] tracking-[.1em] text-[#59636b] uppercase narrow-520:text-[6px]">{label}</span>
 	<div bind:this={rootEl} class="relative mt-[3px] min-w-0">
 		<button
+			bind:this={buttonEl}
 			type="button"
 			{disabled}
+			aria-label={label}
 			aria-haspopup="listbox"
 			aria-expanded={open}
 			class={`flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-[3px] text-left text-[10px] outline-0 focus-visible:text-[#f1f4f5] enabled:hover:text-[#f1f4f5] disabled:cursor-not-allowed disabled:text-[#59635c] ${
@@ -93,6 +123,7 @@
 		{#if open}
 			<div
 				role="listbox"
+				aria-label={`${label} options`}
 				tabindex="-1"
 				class={`absolute bottom-[calc(100%+12px)] z-30 max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)] [scrollbar-width:thin] ${
 					alignRight
@@ -106,7 +137,7 @@
 						type="button"
 						role="option"
 						aria-selected={option.value === value}
-						disabled={!option.value}
+						disabled={disabled || !option.value}
 						class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#1a2026] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#1a2026] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
 							option.value === value ? "bg-[#171d22] text-[#f1f4f5]" : "bg-transparent text-[#aeb7bd]"
 						}`}

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage, PrepareNextTurnContext } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, PrepareNextTurnContext, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
@@ -594,6 +594,12 @@ export class KlermRoutingController {
 			lastTransition: undefined,
 			explicitFrontierRequestSatisfied: false,
 		};
+	}
+
+	async setThinkingLevel(lane: KlermWorkerLane, level: ThinkingLevel): Promise<void> {
+		await this.configStore.update(
+			lane === "local" ? { localThinkingLevel: level } : { frontierThinkingLevel: level },
+		);
 	}
 
 	getLocalModels(): Model<any>[] {
