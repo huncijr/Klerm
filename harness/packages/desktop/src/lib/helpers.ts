@@ -1,7 +1,7 @@
 import type { AgentMessage, TimelineTone } from "./model.ts";
 
 export const TIMELINE_PREVIEW_LINES = 24;
-const MCP_TOOL_PATTERN = /^mcp__/;
+const MCP_TOOL_PATTERN = /^mcp_/;
 
 export function messageText(message: AgentMessage): string {
 	if (typeof message.content === "string") return message.content;
@@ -45,11 +45,9 @@ export function describeToolCall(
 ): { kind: string; label: string; detail: string; detailType?: "text" | "diff" | "code"; tone: TimelineTone } {
 	const record = (args && typeof args === "object" && !Array.isArray(args) ? args : {}) as Record<string, unknown>;
 	if (MCP_TOOL_PATTERN.test(toolName)) {
-		const [, server, ...toolParts] = toolName.split("__");
-		const tool = toolParts.join("__");
 		return {
-			kind: "mcp",
-			label: server && tool ? `${server}/${tool}` : toolName,
+			kind: "MCP used",
+			label: toolName,
 			detail: "",
 			tone: "blue",
 		};

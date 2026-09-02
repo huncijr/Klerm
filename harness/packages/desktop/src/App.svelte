@@ -21,6 +21,9 @@
 		JsonObject,
 		KlermConfig,
 		LocalRuntime,
+		McpServerUpdate,
+		McpStatus,
+		McpToolOption,
 		RoutingState,
 		RoutingTransition,
 		RunningService,
@@ -71,16 +74,17 @@
 	let sessionWidth = $state(280);
 	let filesWidth = $state(430);
 	let pendingDelete = $state<DesktopSession | undefined>(undefined);
+	let pendingApproval = $state<{ id: string; title: string; message: string } | undefined>(undefined);
 	let workspacePanelOpen = $state(true);
 	let bottomPanelOpen = $state(false);
 	let bottomPanelRevealed = $state(false);
-	let sessionTitle = $state("New local session");
+	let sessionTitle = $state("New Agent 1 session");
 	let sessionCwd = $state("");
 	let status = $state<StatusInfo>({ state: "starting", label: "Starting backend", detail: "RPC handshake" });
 	let runtimeStatus = $state<RuntimeStatus>({
 		state: "starting",
 		title: "Checking Ollama",
-		detail: "Looking for installed local models",
+		detail: "Looking for installed Agent 1 models",
 	});
 	let errorBanner = $state("");
 	let composerFocusRequest = $state(0);
@@ -99,6 +103,8 @@
 	let terminalBusy = $state(false);
 	let terminalCurrentCommand = $state("");
 	let terminalStreamed = false;
+	let mcpStatus = $state<McpStatus | undefined>(undefined);
+	let mcpBusy = $state(false);
 
 	let currentLocalRuntimes: LocalRuntime[] = [];
 	let lastFallbackReason = "";
@@ -111,7 +117,7 @@
 	const toolCards = new Map<string, number>();
 
 	const interactionActive = $derived(
-		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined,
+		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
 	);
 	const sendDisabled = $derived(!backendReady || interactionActive);
 	const localSelectDisabled = $derived(
@@ -135,6 +141,11 @@
 				? currentConfig.activeStartLane
 				: (currentConfig?.routing ?? "off"),
 	);
+	const activeAgent = $derived.by(() => {
+		if (currentRoutingState?.lane === "frontier") return "agent2";
+		if (currentRoutingState?.lane === "local") return "agent1";
+		return routingControlValue === "frontier" || routingControlValue === "frontier-local" ? "agent2" : "agent1";
+	});
 	const heroVisible = $derived(!hasConversation);
 	const taskStateText = $derived(taskActive ? "Working" : backendReady ? "Ready" : "Backend unavailable");
 	const activityLogs = $derived(
@@ -148,6 +159,16 @@
 		terminalBusy || workspaceListeners.length > 0 || activityLogs.length > 0,
 	);
 	const bottomPanelVisible = $derived(hasConversation && bottomPanelRevealed);
+	const mcpToolOptions = $derived.by(() => {
+		const options: McpToolOption[] = [];
+		for (const server of mcpStatus?.servers ?? []) {
+			if (server.state !== "connected") continue;
+			for (const tool of server.tools) {
+				options.push({ ...tool, label: `${server.name} / ${tool.remoteName}` });
+			}
+		}
+		return options.sort((left, right) => left.label.localeCompare(right.label));
+	});
 	const MIN_MAIN_COL = 280;
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
@@ -169,15 +190,15 @@
 			badge:
 				activeLane && activeLane !== "direct"
 					? activeLane === "local"
-						? "Local"
-						: "Frontier"
+						? "Agent 1"
+						: "Agent 2"
 					: routing === "off"
 						? "Direct"
 						: routing === "auto"
 							? "Auto"
 							: routing === "local"
-								? "Local"
-								: "Frontier",
+								? "Agent 1"
+								: "Agent 2",
 		};
 	});
 
@@ -337,7 +358,9 @@
 		const to = transition.toLane ?? (delegate ? "frontier" : "local");
 		const arrow = initial ? "\u2192" : delegate ? "\u2193" : "\u2191";
 		const model = initial || delegate ? transition.toTarget : (transition.fromTarget ?? transition.toTarget);
-		const title = `${arrow} ${from} \u2192 ${to}${model ? ` \u00b7 ${model}` : ""}`;
+		const laneLabel = (lane: string) =>
+			lane === "local" ? "Agent 1" : lane === "frontier" ? "Agent 2" : lane === "direct" ? "Direct" : lane;
+		const title = `${arrow} ${laneLabel(from)} \u2192 ${laneLabel(to)}${model ? ` \u00b7 ${model}` : ""}`;
 		const meta: string[] = [];
 		if (transition.trigger) meta.push(`trigger: ${transition.trigger}`);
 		if (delegate && typeof transition.cycle === "number") {
@@ -353,7 +376,7 @@
 		const reason = state?.fallbackReason;
 		if (!reason || reason === lastFallbackReason) return;
 		lastFallbackReason = reason;
-		pushTimeline("routing", "red", "Frontier fallback", reason, "error", `fallback-${activeTaskKey}-${reason}`);
+		pushTimeline("routing", "red", "Agent 2 fallback", reason, "error", `fallback-${activeTaskKey}-${reason}`);
 	}
 
 	function handleRetryStart(event: JsonObject): void {
@@ -537,6 +560,20 @@
 
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
+			case "extension_ui_request": {
+				if (
+					event.method === "confirm" &&
+					typeof event.id === "string" &&
+					typeof event.title === "string" &&
+					typeof event.message === "string"
+				) {
+					if (pendingApproval) {
+						void bridge.respond({ type: "extension_ui_response", id: pendingApproval.id, confirmed: false });
+					}
+					pendingApproval = { id: event.id, title: event.title, message: event.message };
+				}
+				return;
+			}
 			case "agent_start": {
 				if (!taskActive) {
 					activeTaskKey = ++taskSeq;
@@ -549,6 +586,7 @@
 				return;
 			}
 			case "agent_settled": {
+				pendingApproval = undefined;
 				finalizeStreamingMessage();
 				const failed = !taskStopping && (!taskSawAssistant || lastAssistantStopReason === "error");
 				taskActive = false;
@@ -574,6 +612,7 @@
 				void refreshStateAfterSettle();
 				void refreshWorkspace();
 				void refreshRunningServices();
+				void refreshMcpStatus();
 				return;
 			}
 			case "message_start": {
@@ -629,6 +668,7 @@
 				return;
 			}
 			case "tool_execution_end": {
+				pendingApproval = undefined;
 				handleToolEnd(event);
 				return;
 			}
@@ -692,6 +732,7 @@
 			}
 			case "backend_exit": {
 				if (backendRestarting) return;
+				pendingApproval = undefined;
 				backendReady = false;
 				setStatus("error", "Backend stopped", "Restart Klerm to reconnect");
 				taskActive = false;
@@ -806,6 +847,36 @@
 		}
 	}
 
+	async function refreshMcpStatus(): Promise<void> {
+		if (!backendReady || mcpBusy) return;
+		mcpBusy = true;
+		try {
+			mcpStatus = await bridge.send<McpStatus>("get_mcp_status");
+		} catch (error) {
+			mcpStatus = undefined;
+			showError(toError(error).message);
+		} finally {
+			mcpBusy = false;
+		}
+	}
+
+	async function addMcpServer(server: McpServerUpdate): Promise<boolean> {
+		if (!backendReady || interactionActive || mcpBusy) return false;
+		mcpBusy = true;
+		clearError();
+		try {
+			const added = await bridge.send<{ status: McpStatus }>("add_mcp_server", { server });
+			mcpStatus = added.status;
+			mcpStatus = await bridge.send<McpStatus>("reload_mcp_servers", {}, 45_000);
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			mcpBusy = false;
+		}
+	}
+
 	async function openLocalUrl(url: string): Promise<void> {
 		try {
 			await bridge.send("open_local_url", { url });
@@ -891,7 +962,7 @@
 				const transition = await bridge.send<{ cancelled: boolean }>("new_session");
 				if (transition.cancelled) return;
 				clearFeed();
-				sessionTitle = "New local session";
+				sessionTitle = "New Agent 1 session";
 				lastState = await bridge.send<SessionState>("get_state");
 				sessionCwd = lastState.cwd;
 				resetTerminal(lastState.cwd);
@@ -944,7 +1015,7 @@
 	}
 
 	async function refreshLocalModels(): Promise<void> {
-		runtimeStatus = { state: "starting", title: "Checking local runtimes", detail: "Looking for installed models" };
+		runtimeStatus = { state: "starting", title: "Checking Agent 1 runtimes", detail: "Looking for installed models" };
 		try {
 			const result = await bridge.send<{ runtimes: LocalRuntime[] }>("get_local_runtimes");
 			const runtimes = [...result.runtimes].sort((left, right) => {
@@ -960,11 +1031,11 @@
 				})),
 			);
 			if (modelOptions.length === 0) {
-				localOptions = [{ value: "", label: "No local models found" }];
+				localOptions = [{ value: "", label: "No Agent 1 models found" }];
 				const availableRuntime = runtimes.find((runtime) => !runtime.error);
 				runtimeStatus = {
 					state: "error",
-					title: "No local model available",
+					title: "No Agent 1 model available",
 					detail: availableRuntime
 						? `${availableRuntime.name} is running without installed models`
 						: "Start Ollama and install a model, then refresh",
@@ -974,7 +1045,7 @@
 			localOptions = modelOptions;
 			runtimeStatus = {
 				state: "online",
-				title: `${modelOptions.length} local model${modelOptions.length === 1 ? "" : "s"} ready`,
+				title: `${modelOptions.length} Agent 1 model${modelOptions.length === 1 ? "" : "s"} ready`,
 				detail: runtimes
 					.filter((runtime) => !runtime.error)
 					.map((runtime) => runtime.name)
@@ -982,7 +1053,7 @@
 			};
 		} catch (error) {
 			currentLocalRuntimes = [];
-			localOptions = [{ value: "", label: "Local discovery failed" }];
+			localOptions = [{ value: "", label: "Agent 1 discovery failed" }];
 			runtimeStatus = { state: "error", title: "Runtime discovery failed", detail: toError(error).message };
 		}
 	}
@@ -995,9 +1066,9 @@
 				.filter((model) => !localProviders.has(model.provider))
 				.map((model) => ({ value: `${model.provider}/${model.id}`, label: `${model.provider} / ${model.id}` }));
 			frontierOptions =
-				options.length > 0 ? options : [{ value: "", label: "No frontier models found" }];
+				options.length > 0 ? options : [{ value: "", label: "No Agent 2 models found" }];
 		} catch (error) {
-			frontierOptions = [{ value: "", label: "Frontier discovery failed" }];
+			frontierOptions = [{ value: "", label: "Agent 2 discovery failed" }];
 			runtimeStatus = { ...runtimeStatus, detail: toError(error).message };
 		}
 	}
@@ -1090,7 +1161,7 @@
 		setStatus("online", "Backend connected", `Klerm ${handshake.klermVersion} / RPC v${handshake.protocolVersion}`);
 		lastState = handshake.state;
 		currentRoutingState = handshake.routingState;
-		sessionTitle = handshake.state.sessionName ?? "New local session";
+		sessionTitle = handshake.state.sessionName ?? "New Agent 1 session";
 		sessionCwd = handshake.state.cwd;
 		resetTerminal(handshake.state.cwd);
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
@@ -1101,7 +1172,7 @@
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
 		taskActive = handshake.state.isStreaming;
-		await Promise.all([refreshWorkspace(), refreshEditors(), refreshRunningServices()]);
+		await Promise.all([refreshWorkspace(), refreshEditors(), refreshRunningServices(), refreshMcpStatus()]);
 	}
 
 	async function newSession(): Promise<void> {
@@ -1113,7 +1184,7 @@
 			if (transition.cancelled) return;
 			clearFeed();
 			lastState = await bridge.send<SessionState>("get_state");
-			sessionTitle = "New local session";
+			sessionTitle = "New Agent 1 session";
 			sessionCwd = lastState.cwd;
 			resetTerminal(lastState.cwd);
 			currentRoutingState = currentRoutingState
@@ -1261,6 +1332,8 @@
 		{sessions}
 		activeSessionId={lastState?.sessionId ?? ""}
 		{status}
+		{mcpStatus}
+		{mcpBusy}
 		open={sidebarOpen}
 		collapsed={!sessionsExpanded}
 		onnewsession={newSession}
@@ -1270,6 +1343,8 @@
 		ondelete={(session) => (pendingDelete = session)}
 		onexpand={() => (sessionsExpanded = true)}
 		oncollapse={() => (sessionsExpanded = false)}
+		onrefreshmcp={() => void refreshMcpStatus()}
+		onaddmcpserver={addMcpServer}
 	/>
 	<button
 		type="button"
@@ -1362,8 +1437,10 @@
 			frontierThinkingLevels={frontierThinking.levels}
 			frontierThinkingValue={frontierThinking.level}
 			{frontierThinkingDisabled}
+			mcpTools={mcpToolOptions}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
+			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			onsend={(text) => void sendMessage(text)}
 			onstop={() => void stopTask()}
@@ -1421,6 +1498,24 @@
 			const session = pendingDelete;
 			pendingDelete = undefined;
 			if (session) void deleteConversation(session);
+		}}
+	/>
+{/if}
+{#if pendingApproval}
+	<ConfirmDialog
+		title={pendingApproval.title}
+		detail={pendingApproval.message}
+		confirmLabel="Approve"
+		tone="approval"
+		oncancel={() => {
+			const request = pendingApproval;
+			pendingApproval = undefined;
+			if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: false });
+		}}
+		onconfirm={() => {
+			const request = pendingApproval;
+			pendingApproval = undefined;
+			if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: true });
 		}}
 	/>
 {/if}

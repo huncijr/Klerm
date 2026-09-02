@@ -6,10 +6,34 @@
 		| { type: "heading"; level: number; text: string }
 		| { type: "paragraph"; text: string }
 		| { type: "list"; ordered: boolean; items: string[] }
+		| { type: "table"; headers: string[]; rows: string[][]; fileSummary: boolean }
 		| { type: "code"; language: string; text: string };
 
 	function isBlockStart(line: string): boolean {
-		return /^```/.test(line) || /^#{1,3}\s+/.test(line) || /^\s*(?:[-*]|\d+\.)\s+/.test(line);
+		return /^```/.test(line) || /^#{1,3}\s+/.test(line) || /^\s*(?:[-*]|\d+\.)\s+/.test(line) || isTableStart(line);
+	}
+
+	function splitTableRow(line: string): string[] {
+		return line
+			.trim()
+			.replace(/^\|/, "")
+			.replace(/\|$/, "")
+			.split("|")
+			.map((cell) => cell.trim());
+	}
+
+	function isTableSeparator(line: string): boolean {
+		return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+	}
+
+	function isTableStart(line: string, nextLine?: string): boolean {
+		return line.includes("|") && (nextLine === undefined || isTableSeparator(nextLine));
+	}
+
+	function isFilePath(value: string): boolean {
+		return /(?:^|[\s`])(?:[\w.-]+\/)*[\w.-]+\.(?:html|css|js|ts|tsx|jsx|json|md|svelte|rs|go|py|txt)(?:`|\s|$)/i.test(
+			value,
+		);
 	}
 
 	function parseMarkdown(source: string): MarkdownBlock[] {
@@ -38,6 +62,22 @@
 			if (heading) {
 				blocks.push({ type: "heading", level: heading[1]?.length ?? 1, text: heading[2] ?? "" });
 				index += 1;
+				continue;
+			}
+			if (isTableStart(line, lines[index + 1])) {
+				const headers = splitTableRow(line);
+				const rows: string[][] = [];
+				index += 2;
+				while (index < lines.length && (lines[index] ?? "").includes("|") && (lines[index] ?? "").trim()) {
+					rows.push(splitTableRow(lines[index] ?? ""));
+					index += 1;
+				}
+				blocks.push({
+					type: "table",
+					headers,
+					rows,
+					fileSummary: headers.some((header) => /file|path/i.test(header)) || rows.some((row) => row.some(isFilePath)),
+				});
 				continue;
 			}
 			const listItem = line.match(/^\s*([-*]|\d+\.)\s+(.+)$/);
@@ -80,6 +120,10 @@
 		return tokens;
 	}
 
+	function cellAt(row: string[], index: number): string {
+		return row[index] ?? "";
+	}
+
 	const blocks = $derived(parseMarkdown(text));
 </script>
 
@@ -112,6 +156,39 @@
 				<ul class="list-disc space-y-1 pl-5 marker:text-[#77838b]">
 					{#each block.items as item, itemIndex (itemIndex)}<li>{#each inlineTokens(item) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</li>{/each}
 				</ul>
+			{/if}
+		{:else if block.type === "table"}
+			{#if block.fileSummary}
+				<div class="grid gap-2">
+					{#each block.rows as row, rowIndex (rowIndex)}
+						<div class="rounded-lg border border-[#25313a] bg-[#0d1318] p-3 shadow-[0_8px_24px_rgba(0,0,0,.16)]">
+							<div class="mb-2 flex flex-wrap items-center gap-2">
+								<code class="rounded-md border border-[rgba(88,132,196,.38)] bg-[rgba(18,30,48,.5)] px-2 py-1 font-mono text-[10px] text-[#bcd6ff]">{cellAt(row, 0).replaceAll("`", "")}</code>
+								{#if block.headers[1]}<span class="font-mono text-[8px] tracking-[.12em] text-[#65717a] uppercase">{block.headers[1]}</span>{/if}
+							</div>
+							{#if row.length > 1}
+								<p class="m-0 text-[12px]/[1.55] text-[#aeb8be]">
+									{#each inlineTokens(row.slice(1).join(" / ")) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}
+								</p>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<div class="overflow-x-auto rounded-lg border border-[#29323a] bg-[#0b1015]">
+					<table class="w-full border-collapse text-left text-[11px]/[1.45]">
+						<thead class="bg-[#121920] font-mono text-[8px] tracking-[.1em] text-[#78858e] uppercase">
+							<tr>{#each block.headers as header, headerIndex (headerIndex)}<th class="border-b border-[#273039] px-3 py-2 font-medium">{header}</th>{/each}</tr>
+						</thead>
+						<tbody>
+							{#each block.rows as row, rowIndex (rowIndex)}
+								<tr class="border-b border-[#1d252c] last:border-b-0">
+									{#each block.headers as _header, cellIndex (cellIndex)}<td class="px-3 py-2 text-[#b4bec4]">{#each inlineTokens(cellAt(row, cellIndex)) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</td>{/each}
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			{/if}
 		{:else}
 			<div class="overflow-hidden rounded-lg border border-[#29323a] bg-[#090d11]">

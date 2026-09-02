@@ -11,9 +11,11 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
+import type { McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
+import type { McpServerState } from "../../klerm/mcp/runtime.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
 export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
@@ -82,6 +84,41 @@ export interface RpcRunningService {
 	url?: string;
 }
 
+export interface RpcMcpToolStatus {
+	name: string;
+	serverName: string;
+	remoteName: string;
+	title?: string;
+	description?: string;
+}
+
+export interface RpcMcpServerStatus {
+	name: string;
+	transport: McpServerTransport;
+	enabled: boolean;
+	state: McpServerState;
+	tools: RpcMcpToolStatus[];
+	skippedTools: string[];
+	error?: string;
+}
+
+export interface RpcMcpStatus {
+	servers: RpcMcpServerStatus[];
+	toolCount: number;
+	reloadRequired: boolean;
+}
+
+export interface RpcMcpServerUpdate {
+	name: string;
+	transport: McpServerTransport;
+	scope?: SettingsScope;
+	command?: string;
+	args?: string[];
+	url?: string;
+	headers?: Record<string, string>;
+	enabled?: boolean;
+}
+
 export interface RpcKlermConfigUpdate {
 	routing?: KlermRoutingMode;
 	activeStartLane?: KlermActiveStartLane;
@@ -112,6 +149,9 @@ export type RpcCommand =
 	| { id?: string; type: "open_workspace_editor"; editor: RpcEditorInfo["id"] }
 	| { id?: string; type: "get_running_services" }
 	| { id?: string; type: "open_local_url"; url: string }
+	| { id?: string; type: "get_mcp_status" }
+	| { id?: string; type: "add_mcp_server"; server: RpcMcpServerUpdate }
+	| { id?: string; type: "reload_mcp_servers" }
 
 	// Prompting
 	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
@@ -284,6 +324,15 @@ export type RpcResponse =
 			data: { services: RpcRunningService[] };
 	  }
 	| { id?: string; type: "response"; command: "open_local_url"; success: true; data: { url: string } }
+	| { id?: string; type: "response"; command: "get_mcp_status"; success: true; data: RpcMcpStatus }
+	| {
+			id?: string;
+			type: "response";
+			command: "add_mcp_server";
+			success: true;
+			data: { name: string; scope: SettingsScope; reloadRequired: boolean; status: RpcMcpStatus };
+	  }
+	| { id?: string; type: "response"; command: "reload_mcp_servers"; success: true; data: RpcMcpStatus }
 	| {
 			id?: string;
 			type: "response";
