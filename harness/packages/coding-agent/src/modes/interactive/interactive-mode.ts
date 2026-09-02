@@ -97,7 +97,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-import type { KlermActiveStartLane, KlermRoutingMode } from "../../klerm/config.ts";
+import type { KlermActiveStartLane, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
 import { isLocalProviderId } from "../../klerm/local-providers.ts";
 import {
 	discoverLocalRuntimes,
@@ -3134,6 +3134,11 @@ export class InteractiveMode {
 				await this.handleKlermActiveCommand(argument);
 				return;
 			}
+			if (text === "/mode" || text.startsWith("/mode ")) {
+				this.editor.setText("");
+				await this.handleKlermModeCommand(text.slice(5).trim());
+				return;
+			}
 			if (text === "/klerm") {
 				this.editor.setText("");
 				this.showKlermStatus();
@@ -5142,6 +5147,46 @@ export class InteractiveMode {
 		await routing.setActiveStartLane(argument as KlermActiveStartLane);
 		this.updateKlermRoutingStatus();
 		this.showStatus(`Start lane: ${argument}`);
+	}
+
+	private async handleKlermModeCommand(argument: string): Promise<void> {
+		const routing = this.session.klermRouting;
+		if (!routing) {
+			this.showError("Klerm routing is unavailable in this session.");
+			return;
+		}
+		if (!argument) {
+			const choices = ["Local: Plan", "Local: Build", "Frontier: Plan", "Frontier: Build"];
+			this.showSelector((done) => {
+				const selector = new ExtensionSelectorComponent(
+					"Klerm worker mode",
+					choices,
+					(choice) => {
+						done();
+						const lane = choice.startsWith("Local") ? "local" : "frontier";
+						const role = choice.endsWith("Plan") ? "planner" : "builder";
+						void routing.setWorkerRole(lane, role).then(() => {
+							this.updateKlermRoutingStatus();
+							this.showStatus(`${lane === "local" ? "Local" : "Frontier"} role: ${role}`);
+						});
+					},
+					() => done(),
+				);
+				return { component: selector, focus: selector };
+			});
+			return;
+		}
+		const [lane, role, extra] = argument.split(/\s+/);
+		if (
+			extra !== undefined ||
+			(lane !== "local" && lane !== "frontier") ||
+			(role !== "planner" && role !== "builder")
+		) {
+			this.showError("Usage: /mode <local|frontier> <planner|builder>");
+			return;
+		}
+		await routing.setWorkerRole(lane, role as KlermWorkerRole);
+		this.showStatus(`${lane === "local" ? "Local" : "Frontier"} role: ${role}`);
 	}
 
 	private handleTokenCommand(argument: string): void {

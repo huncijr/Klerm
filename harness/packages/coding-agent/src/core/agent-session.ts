@@ -389,6 +389,7 @@ export class AgentSession {
 	private _modelRuntime: ModelRuntime;
 	private readonly _klermRoutingController?: KlermRoutingController;
 	private readonly _klermThinkingLevels: Partial<Record<KlermWorkerLane, ThinkingLevel>> = {};
+	private _klermBuilderTools?: AgentTool[];
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -619,7 +620,9 @@ export class AgentSession {
 				context: {
 					...previousContext,
 					systemPrompt,
-					tools: this.agent.state.tools.slice(),
+					tools:
+						this._klermRoutingController?.filterToolsForActiveRole(this.agent.state.tools) ??
+						this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
 				thinkingLevel: this.agent.state.thinkingLevel,
@@ -642,6 +645,7 @@ export class AgentSession {
 		try {
 			await this._applyRoutedModel(transition.model, false, this._klermThinkingLevels[transition.state.toLane]);
 			await transition.commit();
+			this._applyKlermToolRole();
 			if (transition.state.kind !== "initial") {
 				const entryId = this.sessionManager.appendCustomEntry(KLERM_SESSION_TRANSITION_CUSTOM_TYPE, {
 					version: 1,
@@ -672,6 +676,7 @@ export class AgentSession {
 			} catch {
 				// Rejection clears the prepared state before writing its failure event.
 			}
+			this._applyKlermToolRole();
 			if (this._klermRoutingController) {
 				this.agent.state.systemPrompt = this._withKlermSystemPrompt(
 					this._systemPromptOverride ?? this._baseSystemPrompt,
@@ -680,6 +685,25 @@ export class AgentSession {
 			}
 			if (throwOnFailure) throw error;
 			return false;
+		}
+	}
+
+	private _applyKlermToolRole(): void {
+		const controller = this._klermRoutingController;
+		if (!controller) return;
+		if (controller.activeWorkerRole === "planner") {
+			this._klermBuilderTools ??= this.agent.state.tools.slice();
+			const tools = new Map(this._klermBuilderTools.map((tool) => [tool.name, tool]));
+			for (const name of ["read", "grep", "find", "ls"]) {
+				const tool = this._toolRegistry.get(name);
+				if (tool) tools.set(name, tool);
+			}
+			this.agent.state.tools = controller.filterToolsForActiveRole([...tools.values()]);
+			return;
+		}
+		if (this._klermBuilderTools) {
+			this.agent.state.tools = this._klermBuilderTools;
+			this._klermBuilderTools = undefined;
 		}
 	}
 
@@ -1243,6 +1267,7 @@ export class AgentSession {
 		} finally {
 			if (restoreModel) await this._applyRoutedModel(restoreModel, true, restoreThinkingLevel);
 			if (this._klermRoutingController) {
+				this._applyKlermToolRole();
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 				this._emit({ type: "routing_changed", state: { ...this._klermRoutingController.routingState } });
 			}

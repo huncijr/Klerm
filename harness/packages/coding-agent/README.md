@@ -53,8 +53,16 @@ Useful commands:
 /active local
 /active frontier
 /active frontier-local
+/mode
+/mode local planner
+/mode frontier builder
 /klerm
 ```
+
+`planner` is read-only and receives only built-in read/search tools plus Klerm
+delegation and return tools. `builder` receives the configured coding tools.
+Submitting `/mode` without arguments opens an interactive Local/Frontier
+Plan/Build selector.
 
 One-task route overrides do not change the persisted routing mode:
 

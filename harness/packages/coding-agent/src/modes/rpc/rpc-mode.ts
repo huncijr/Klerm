@@ -94,6 +94,8 @@ const DESKTOP_COMMANDS = [
 	"open_workspace_editor",
 	"get_running_services",
 	"open_local_url",
+	"bash",
+	"abort_bash",
 	"get_state",
 	"get_messages",
 	"get_entries",
@@ -123,6 +125,7 @@ const DESKTOP_EVENTS = [
 	"auto_retry_start",
 	"auto_retry_end",
 	"workspace_files_changed",
+	"bash_execution_update",
 ] as const;
 
 const WORKSPACE_ATTRIBUTION_CUSTOM_TYPE = "klerm-workspace-attribution";
@@ -621,13 +624,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					keys.length === 0 ||
 					keys.some(
 						(key) =>
-							key !== "routing" && key !== "activeStartLane" && key !== "localModel" && key !== "frontierModel",
+							key !== "routing" &&
+							key !== "activeStartLane" &&
+							key !== "localModel" &&
+							key !== "frontierModel" &&
+							key !== "localRole" &&
+							key !== "frontierRole",
 					)
 				) {
 					return error(
 						id,
 						"set_klerm_config",
-						"Only routing, activeStartLane, localModel, and frontierModel can be updated.",
+						"Only routing, activeStartLane, localModel, frontierModel, localRole, and frontierRole can be updated.",
 						"INVALID_CONFIG",
 					);
 				}
@@ -636,6 +644,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					activeStartLane?: unknown;
 					localModel?: unknown;
 					frontierModel?: unknown;
+					localRole?: unknown;
+					frontierRole?: unknown;
 				};
 				if (
 					typedUpdate.routing !== undefined &&
@@ -654,6 +664,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					typedUpdate.activeStartLane !== "frontier-local"
 				) {
 					return error(id, "set_klerm_config", "Invalid active start lane.", "INVALID_CONFIG");
+				}
+				if (
+					(typedUpdate.localRole !== undefined &&
+						typedUpdate.localRole !== "planner" &&
+						typedUpdate.localRole !== "builder") ||
+					(typedUpdate.frontierRole !== undefined &&
+						typedUpdate.frontierRole !== "planner" &&
+						typedUpdate.frontierRole !== "builder")
+				) {
+					return error(id, "set_klerm_config", "Invalid worker role.", "INVALID_CONFIG");
 				}
 				if (
 					"localModel" in typedUpdate &&
@@ -683,6 +703,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					if (typeof typedUpdate.routing === "string") await controller.setRoutingMode(typedUpdate.routing);
 					if (typeof typedUpdate.activeStartLane === "string") {
 						await controller.setActiveStartLane(typedUpdate.activeStartLane);
+					}
+					if (typedUpdate.localRole === "planner" || typedUpdate.localRole === "builder") {
+						await controller.setWorkerRole("local", typedUpdate.localRole);
+					}
+					if (typedUpdate.frontierRole === "planner" || typedUpdate.frontierRole === "builder") {
+						await controller.setWorkerRole("frontier", typedUpdate.frontierRole);
 					}
 				} catch (configError) {
 					return error(

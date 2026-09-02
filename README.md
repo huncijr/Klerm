@@ -119,6 +119,9 @@ Configure the local and frontier workers in the interactive CLI:
 | `/routing cycles <1-20>` | Set the maximum number of frontier visits in one task. |
 | `/local task <prompt>` | Force one task to start locally. |
 | `/frontier task <prompt>` | Force one task to start on the frontier worker. |
+| `/mode` | Open the Local and Frontier Plan/Build selector. |
+| `/mode local planner\|builder` | Set the Local lane role. |
+| `/mode frontier planner\|builder` | Set the Frontier lane role. |
 | `/klerm` or `/routing status` | Show the current routing configuration and state. |
 
 The persistent status block above the chat input shows the selected models,
@@ -317,7 +320,19 @@ when that model supports effort. Each slider exposes only supported levels, stor
 its value separately, and routing applies the matching value when changing
 lanes. Routing selection updates routing mode and active-start policy together
 so Frontier starts on the configured frontier model and Frontier -> Local
-preserves local handback. The Workspace title and sidebar sessions can be
+preserves local handback.
+
+Four starter-task chips on the empty workspace fill the composer without
+submitting. A compact control beside Send configures Local and Frontier as
+Plan or Build independently. Plan is enforced by the backend with a read-only
+tool allowlist (`read`, `grep`, `find`, `ls`, and Klerm handoff tools); Build
+retains the configured coding tools. Both role values persist in `klerm.json`.
+The same settings are available through `klerm mode`, TUI `/mode`, and typed
+`set_klerm_config` updates. The active lane's `Mode: Plan` or `Mode: Build`
+label stays visible above the prompt; entering `/mode` and pressing Enter opens
+the same role menu without sending the command to a model.
+
+The Workspace title and sidebar sessions can be
 renamed. Hovering a session reveals an ellipsis menu with Rename and an arrow
 submenu for delete confirmation; deleting the active conversation starts a fresh
 session first, then removes the old one. Assistant text and tool, MCP, routing,
@@ -342,8 +357,16 @@ staged/unstaged state, diffs, safe text preview/editing, and actor badges. Klerm
 tool writes persist lane and provider/model attribution in the session; unmatched
 Git changes are `external`, and desktop saves are `manual`. The panel can open
 installed Zed, VS Code, or Linux Vim without shell command construction. A
-collapsible read-only bottom panel shows recent command/error activity and Linux
-localhost listeners; writable PTY input is deferred.
+collapsible bottom panel provides a writable, streamable, stoppable workspace
+command console, recent command/error activity, the current Klerm backend, and
+only Linux localhost listeners belonging to processes whose cwd is inside the
+project. The bottom panel stays hidden on the empty first-prompt screen and
+appears after a workspace process exists. Each terminal command uses a fresh
+shell; full PTY behavior for interactive/full-screen programs remains deferred.
+File Changes is a compact chip under the topbar rule and overlays on compact
+windows. The desktop session list can be dragged or collapsed to a square logo
+rail; compact layouts retain the existing mobile drawer. Terminal, Running, and
+Logs sit below the model selectors and keep only the current session output.
 
 On Fedora, install the native build dependencies and Rust toolchain first:
 

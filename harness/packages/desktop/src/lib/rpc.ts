@@ -28,7 +28,7 @@ export class RpcBridge {
 	private requestId = 0;
 	private readonly pending = new Map<
 		string,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void; timer: number }
+		{ resolve: (value: unknown) => void; reject: (error: Error) => void; timer?: number }
 	>();
 	private readonly handlers = new Set<RpcEventHandler>();
 	private unlisten: UnlistenFn[] = [];
@@ -52,13 +52,16 @@ export class RpcBridge {
 		return () => this.handlers.delete(handler);
 	}
 
-	async send<T>(type: string, fields: JsonObject = {}): Promise<T> {
+	async send<T>(type: string, fields: JsonObject = {}, timeoutMs = 30_000): Promise<T> {
 		const id = `desktop_${++this.requestId}`;
 		const response = new Promise<T>((resolve, reject) => {
-			const timer = window.setTimeout(() => {
-				this.pending.delete(id);
-				reject(new Error(`Backend timed out while handling ${type}.`));
-			}, 30_000);
+			const timer =
+				timeoutMs > 0
+					? window.setTimeout(() => {
+							this.pending.delete(id);
+							reject(new Error(`Backend timed out while handling ${type}.`));
+						}, timeoutMs)
+					: undefined;
 			this.pending.set(id, { resolve: (value) => resolve(value as T), reject, timer });
 		});
 
@@ -67,7 +70,7 @@ export class RpcBridge {
 		} catch (error) {
 			const pending = this.pending.get(id);
 			if (pending) {
-				window.clearTimeout(pending.timer);
+				if (pending.timer !== undefined) window.clearTimeout(pending.timer);
 				this.pending.delete(id);
 				pending.reject(toError(error));
 			}
@@ -79,7 +82,7 @@ export class RpcBridge {
 		if (message.type === "response" && typeof message.id === "string") {
 			const pending = this.pending.get(message.id);
 			if (pending) {
-				window.clearTimeout(pending.timer);
+				if (pending.timer !== undefined) window.clearTimeout(pending.timer);
 				this.pending.delete(message.id);
 				const response = message as RpcResponse;
 				if (response.success) pending.resolve(response.data);
@@ -99,7 +102,7 @@ export class RpcBridge {
 
 	private rejectPending(error: Error): void {
 		for (const pending of this.pending.values()) {
-			window.clearTimeout(pending.timer);
+			if (pending.timer !== undefined) window.clearTimeout(pending.timer);
 			pending.reject(error);
 		}
 		this.pending.clear();

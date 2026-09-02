@@ -91,6 +91,8 @@ describe("Klerm desktop RPC contract", () => {
 			activeStartLane: "auto",
 			localModel: undefined,
 			frontierModel: undefined,
+			localRole: "builder",
+			frontierRole: "builder",
 			allowFrontierFallback: false,
 			handbackEnabled: true,
 			maxDelegationCycles: 3,
@@ -120,6 +122,10 @@ describe("Klerm desktop RPC contract", () => {
 			setActiveStartLane: vi.fn(async (lane: "auto" | "local" | "frontier" | "frontier-local") => {
 				config.activeStartLane = lane;
 				routingState.activeStartLane = lane;
+			}),
+			setWorkerRole: vi.fn(async (lane: "local" | "frontier", role: "planner" | "builder") => {
+				if (lane === "local") config.localRole = role;
+				else config.frontierRole = role;
 			}),
 		} as unknown as KlermRoutingController;
 		Object.defineProperty(harness.session, "_klermRoutingController", { value: controller });
@@ -187,12 +193,15 @@ describe("Klerm desktop RPC contract", () => {
 							"open_workspace_editor",
 							"get_running_services",
 							"open_local_url",
+							"bash",
+							"abort_bash",
 						]),
 						events: expect.arrayContaining([
 							"model_select",
 							"thinking_level_changed",
 							"auto_retry_end",
 							"workspace_files_changed",
+							"bash_execution_update",
 						]),
 					},
 					state: { cwd: expect.any(String) },
@@ -244,6 +253,19 @@ describe("Klerm desktop RPC contract", () => {
 					.filter((entry) => entry.type === "custom" && entry.customType === "klerm-workspace-attribution"),
 			).toHaveLength(2);
 
+			const terminal = await send({
+				id: "terminal-command",
+				type: "bash",
+				command: "printf terminal-ok",
+				excludeFromContext: true,
+			});
+			expect(terminal).toMatchObject({ success: true, data: { output: "terminal-ok", exitCode: 0 } });
+			expect(parseOutputLines()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ type: "bash_execution_update", id: "terminal-command", delta: "terminal-ok" }),
+				]),
+			);
+
 			const localThinking = await send({
 				id: "local-thinking",
 				type: "get_available_thinking_levels",
@@ -282,6 +304,24 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(updated).toMatchObject({ success: true, data: { config: { routing: "local" } } });
 			expect(controller.setRoutingMode).toHaveBeenCalledWith("local");
+
+			const roleUpdate = await send({
+				id: "roles",
+				type: "set_klerm_config",
+				update: { localRole: "planner", frontierRole: "builder" },
+			});
+			expect(roleUpdate).toMatchObject({
+				success: true,
+				data: { config: { localRole: "planner", frontierRole: "builder" } },
+			});
+			expect(controller.setWorkerRole).toHaveBeenCalledWith("local", "planner");
+
+			const invalidRole = await send({
+				id: "invalid-role",
+				type: "set_klerm_config",
+				update: { localRole: "writer" },
+			});
+			expect(invalidRole).toMatchObject({ success: false, code: "INVALID_CONFIG" });
 
 			const frontierRouting = await send({
 				id: "frontier-routing",

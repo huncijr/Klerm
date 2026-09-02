@@ -1,14 +1,23 @@
 import { APP_NAME, getAgentDir } from "../../config.ts";
-import { type KlermActiveStartLane, type KlermConfig, KlermConfigStore, type KlermRoutingMode } from "../config.ts";
+import {
+	type KlermActiveStartLane,
+	type KlermConfig,
+	KlermConfigStore,
+	type KlermRoutingMode,
+	type KlermWorkerRole,
+} from "../config.ts";
 
 const CONFIG_USAGE = `${APP_NAME} config get [key] [--json]\n  ${APP_NAME} config set <key> <value> [--json]`;
 const ROUTING_USAGE = `${APP_NAME} routing status [--json]`;
+const MODE_USAGE = `${APP_NAME} mode [--json]\n  ${APP_NAME} mode <local|frontier> <planner|builder> [--json]`;
 
 const configKeys = {
 	routing: "routing",
 	"active-start-lane": "activeStartLane",
 	"local-model": "localModel",
 	"frontier-model": "frontierModel",
+	"local-role": "localRole",
+	"frontier-role": "frontierRole",
 	"allow-frontier-fallback": "allowFrontierFallback",
 	"handback-enabled": "handbackEnabled",
 	"max-delegation-cycles": "maxDelegationCycles",
@@ -41,6 +50,11 @@ function parseConfigValue(key: ConfigCliKey, value: string): KlermConfig[keyof K
 			? (value as KlermActiveStartLane)
 			: undefined;
 	}
+	if (key === "local-role" || key === "frontier-role") {
+		return (["planner", "builder"] satisfies KlermWorkerRole[]).includes(value as KlermWorkerRole)
+			? (value as KlermWorkerRole)
+			: undefined;
+	}
 	if (key === "local-model" || key === "frontier-model") return value === "none" ? undefined : value || undefined;
 	if (key === "allow-frontier-fallback" || key === "handback-enabled") {
 		if (value === "true" || value === "on") return true;
@@ -62,10 +76,33 @@ export async function runKlermConfigCommand(
 	args: string[],
 	options: RunKlermConfigCommandOptions = {},
 ): Promise<boolean> {
-	if (args[0] !== "config" && args[0] !== "routing") return false;
+	if (args[0] !== "config" && args[0] !== "routing" && args[0] !== "mode") return false;
 	const stdout = options.stdout ?? console.log;
 	const stderr = options.stderr ?? console.error;
 	const json = args.includes("--json");
+	if (args[0] === "mode") {
+		const positional = args.slice(1).filter((arg) => arg !== "--json");
+		if (positional.length === 0) {
+			const config = (await KlermConfigStore.load(options.agentDir ?? getAgentDir())).get();
+			const roles = { local: config.localRole, frontier: config.frontierRole };
+			stdout(json ? JSON.stringify(roles, null, 2) : `Local role: ${roles.local}\nFrontier role: ${roles.frontier}`);
+			return true;
+		}
+		const [lane, role] = positional;
+		if (
+			positional.length !== 2 ||
+			(lane !== "local" && lane !== "frontier") ||
+			(role !== "planner" && role !== "builder")
+		) {
+			stderr(`Error: Invalid mode command.\nUsage:\n  ${MODE_USAGE}`);
+			process.exitCode = 1;
+			return true;
+		}
+		const store = await KlermConfigStore.load(options.agentDir ?? getAgentDir());
+		await store.update(lane === "local" ? { localRole: role } : { frontierRole: role });
+		stdout(json ? JSON.stringify({ lane, role, path: store.path }, null, 2) : `Updated ${lane} role=${role}`);
+		return true;
+	}
 
 	if (args[0] === "routing") {
 		if (args.length === 1 || args[1] === "--help" || args[1] === "-h") {

@@ -5,7 +5,13 @@ import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
-import type { KlermActiveStartLane, KlermConfig, KlermConfigStore, KlermRoutingMode } from "../config.ts";
+import type {
+	KlermActiveStartLane,
+	KlermConfig,
+	KlermConfigStore,
+	KlermRoutingMode,
+	KlermWorkerRole,
+} from "../config.ts";
 import { isLocalProviderId } from "../local-providers.ts";
 import { hasKlermResponseUsage } from "../response-usage.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
@@ -18,6 +24,17 @@ import type {
 	KlermTransitionState,
 	KlermWorkerLane,
 } from "./types.ts";
+
+const PLANNER_TOOL_NAMES = new Set([
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"delegate_frontier",
+	"delegate_local",
+	"return_to_local",
+	"return_to_frontier",
+]);
 
 const delegateSchema = Type.Object({
 	reason: Type.String({ maxLength: 2000, description: "Why the local worker needs the frontier worker" }),
@@ -373,6 +390,17 @@ export class KlermRoutingController {
 		return this.state;
 	}
 
+	get activeWorkerRole(): KlermWorkerRole {
+		if (this.state.lane === "local") return this.config.localRole;
+		if (this.state.lane === "frontier") return this.config.frontierRole;
+		return "builder";
+	}
+
+	filterToolsForActiveRole<T extends { name: string }>(tools: T[]): T[] {
+		if (this.activeWorkerRole === "builder") return tools.slice();
+		return tools.filter((tool) => PLANNER_TOOL_NAMES.has(tool.name));
+	}
+
 	private handbackRequired(toLane: KlermWorkerLane): boolean {
 		return (
 			this.state.lane !== toLane &&
@@ -401,6 +429,7 @@ export class KlermRoutingController {
 		const localModel = this.config.localModel ?? "not configured";
 		const frontierModel = this.config.frontierModel ?? "not configured";
 		if (this.state.lane === "local") {
+			const role = this.config.localRole;
 			const mustReturn = this.handbackRequired("frontier");
 			const returnedFromFrontier = this.state.lastTransition?.kind === "return";
 			const recommendedDelegation =
@@ -417,13 +446,25 @@ export class KlermRoutingController {
 						? "You are the Klerm local orchestrator resumed after frontier work. Verify the returned result, complete focused local work, and answer the user when the task is ready."
 						: "You are the Klerm local worker and may hand work to the configured frontier worker.",
 				`Current local model: ${localModel}`,
+				`Current local role: ${role}`,
 				`Configured frontier model: ${frontierModel}`,
+				...(role === "planner"
+					? [
+							"Planner mode is read-only: inspect and search the workspace, reason about the task, and produce a concrete plan or delegate when appropriate.",
+							"Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+						]
+					: ["Builder mode may inspect and modify the workspace to complete the task."]),
 				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
 				...(this.state.mode === "auto" && !returnedFromFrontier && !mustReturn
-					? [
-							"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
-							"Complete focused, low-risk work locally. For broad, risky, specialist, architecture, or multi-file work beyond your capability, inspect only enough context to create a precise handoff, then call delegate_frontier.",
-						]
+					? role === "planner"
+						? [
+								"Auto mode starts with you as the local planner. Assess the task's difficulty, risk, breadth, and required capabilities.",
+								"Inspect enough context to produce a concrete read-only plan. Delegate broad, risky, specialist, architecture, or multi-file work when frontier input is needed.",
+							]
+						: [
+								"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
+								"Complete focused, low-risk work locally. For broad, risky, specialist, architecture, or multi-file work beyond your capability, inspect only enough context to create a precise handoff, then call delegate_frontier.",
+							]
 					: []),
 				...(recommendedDelegation
 					? [
@@ -462,6 +503,7 @@ export class KlermRoutingController {
 		}
 
 		if (this.state.lane === "frontier") {
+			const role = this.config.frontierRole;
 			const mustReturn = this.handbackRequired("local");
 			const canDelegateLocal =
 				this.state.completionOwner === "frontier" &&
@@ -472,6 +514,13 @@ export class KlermRoutingController {
 				"You are the Klerm frontier worker. Continue the current task using the existing session and provider-neutral handoff context.",
 				`Local worker model: ${localModel}`,
 				`Current frontier model: ${frontierModel}`,
+				`Current frontier role: ${role}`,
+				...(role === "planner"
+					? [
+							"Planner mode is read-only: inspect and search the workspace, reason about the task, and produce a concrete plan or delegate when appropriate.",
+							"Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+						]
+					: ["Builder mode may inspect and modify the workspace to complete the task."]),
 				"Treat [Cross-model handoff] sections as instructions and context supplied by the local worker.",
 				`When the user asks which model you are, identify the current frontier model exactly as ${frontierModel}.`,
 				canDelegateLocal
@@ -522,6 +571,10 @@ export class KlermRoutingController {
 	async setActiveStartLane(activeStartLane: KlermActiveStartLane): Promise<void> {
 		await this.configStore.update({ activeStartLane });
 		if (!this.state.taskId) this.state = { ...this.state, activeStartLane };
+	}
+
+	async setWorkerRole(lane: KlermWorkerLane, role: KlermWorkerRole): Promise<void> {
+		await this.configStore.update(lane === "local" ? { localRole: role } : { frontierRole: role });
 	}
 
 	async setAllowFrontierFallback(enabled: boolean): Promise<void> {
@@ -2004,7 +2057,9 @@ export class KlermRoutingController {
 			`Start lane: ${this.config.activeStartLane}`,
 			`Active lane: ${this.state.lane}`,
 			`Local model: ${this.config.localModel ?? "not configured"}`,
+			`Local role: ${this.config.localRole}`,
 			`Frontier model: ${this.config.frontierModel ?? "not configured"}`,
+			`Frontier role: ${this.config.frontierRole}`,
 			`Frontier fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
 			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== this.config.handbackEnabled ? ` (configured ${this.config.handbackEnabled ? "on" : "off"})` : ""}`,
 			`Completion owner: ${this.state.completionOwner ?? "not assigned"}`,

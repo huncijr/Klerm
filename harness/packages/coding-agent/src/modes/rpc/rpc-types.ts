@@ -12,7 +12,7 @@ import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
-import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode } from "../../klerm/config.ts";
+import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
@@ -73,10 +73,13 @@ export interface RpcEditorInfo {
 }
 
 export interface RpcRunningService {
-	port: number;
-	url: string;
-	processName?: string;
-	pid?: number;
+	id: string;
+	kind: "backend" | "listener";
+	processName: string;
+	pid: number;
+	cwd: string;
+	port?: number;
+	url?: string;
 }
 
 export interface RpcKlermConfigUpdate {
@@ -84,6 +87,8 @@ export interface RpcKlermConfigUpdate {
 	activeStartLane?: KlermActiveStartLane;
 	localModel?: string | null;
 	frontierModel?: string | null;
+	localRole?: KlermWorkerRole;
+	frontierRole?: KlermWorkerRole;
 }
 
 // ============================================================================

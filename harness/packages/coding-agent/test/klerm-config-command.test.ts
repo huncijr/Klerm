@@ -56,6 +56,24 @@ describe("Klerm config commands", () => {
 		expect(JSON.parse(output[0])).toMatchObject({ mode: "off", localModel: "ollama/qwen3", handbackEnabled: true });
 	});
 
+	it("persists and reports per-lane worker roles", async () => {
+		const output: string[] = [];
+		await runKlermConfigCommand(["mode", "local", "planner"], {
+			agentDir,
+			stdout: (message) => output.push(message),
+		});
+		await runKlermConfigCommand(["mode", "--json"], {
+			agentDir,
+			stdout: (message) => output.push(message),
+		});
+
+		expect(JSON.parse(readFileSync(join(agentDir, "klerm.json"), "utf8"))).toMatchObject({
+			localRole: "planner",
+			frontierRole: "builder",
+		});
+		expect(JSON.parse(output[1])).toEqual({ local: "planner", frontier: "builder" });
+	});
+
 	it("rejects invalid values without modifying config", async () => {
 		const errors: string[] = [];
 		await runKlermConfigCommand(["config", "set", "local-max-turns", "0"], {

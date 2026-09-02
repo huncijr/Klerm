@@ -40,6 +40,11 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		argumentHint: "<auto|local|frontier|frontier-local|status>",
 	},
 	{
+		name: "mode",
+		description: "Select or configure local/frontier planner or builder roles",
+		argumentHint: "<[local|frontier] [planner|builder]>",
+	},
+	{
 		name: "activ",
 		description: "Alias for /active",
 		argumentHint: "<auto|local|frontier|frontier-local|status>",

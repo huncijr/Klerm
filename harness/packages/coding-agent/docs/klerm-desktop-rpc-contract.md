@@ -13,9 +13,10 @@ The existing protocol is a useful base for the workspace spike:
 | Read current session and backend state | `get_state`, `get_messages`, `get_entries`, `get_tree`, `get_session_stats` | Available |
 | Start, list, switch, delete, clone, fork, and rename sessions | `new_session`, `list_sessions`, `switch_session`, `rename_session`, `delete_session`, `clone`, `fork`, `set_session_name` | Available; direct active-session deletion and rename-by-token are rejected in favor of their active-session flows |
 | Negotiate the desktop boundary | `desktop_handshake` | Available with protocol version, Klerm version, command/event capabilities, session state, and initial routing state |
-| Discover local runtimes and update routing config | `get_local_runtimes`, `get_klerm_config`, `set_klerm_config` | Available for the current desktop controls |
+| Discover local runtimes and update routing config | `get_local_runtimes`, `get_klerm_config`, `set_klerm_config` | Available for model, routing, active-start, and per-lane `planner`/`builder` controls; planner tool access is enforced by the backend |
 | Read and safely edit the project workspace | `get_workspace_status`, `get_workspace_diff`, `read_workspace_file`, `write_workspace_file` | Available; paths are project-relative, existing text files are limited to 2 MiB, and binary/out-of-root writes are rejected |
-| Discover/open editors and localhost services | `get_available_editors`, `open_workspace_editor`, `get_running_services`, `open_local_url` | Available through allowlisted process arguments and localhost-only URL validation; current Vim/listener implementations are Linux-only |
+| Discover/open editors and workspace processes | `get_available_editors`, `open_workspace_editor`, `get_running_services`, `open_local_url` | Available through allowlisted process arguments and localhost-only URL validation; Running always includes the current backend and limits Linux listeners to process cwd values inside the project |
+| Run desktop terminal commands | `bash`, `abort_bash`, `bash_execution_update` | Available as a writable, streamable, stoppable fresh-shell command console in the selected workspace; full PTY semantics remain deferred |
 | Submit and stop work | `prompt`, `steer`, `follow_up`, `abort` | Available |
 | Stream responses and tool activity | `message_*`, `tool_execution_*`, `turn_*`, `agent_*` events | Available |
 | Observe live Klerm routing state | Handshake state and `routing_changed` event | Available initially and after routing changes; no standalone query |
@@ -28,6 +29,11 @@ The existing protocol is a useful base for the workspace spike:
 `get_entries` exposes persisted `klerm-transition` custom entries. This is
 enough to reconstruct an active session after reconnecting, but it is not a
 replacement for a typed routing-history query or a decision-event stream.
+
+`get_klerm_config` returns `localRole` and `frontierRole`. `set_klerm_config`
+accepts either field as `planner` or `builder` while no task is active. The
+desktop must treat these as backend policy, not reproduce tool filtering in the
+frontend.
 
 ## Remaining Desktop Operations
 

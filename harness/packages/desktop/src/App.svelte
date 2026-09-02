@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
 	import { open as openDialog } from "@tauri-apps/plugin-dialog";
-	import { PanelLeftClose, PanelLeftOpen } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import {
 		describeToolCall,
@@ -13,6 +12,7 @@
 	} from "./lib/helpers.ts";
 	import type {
 		AgentMessage,
+		BashResult,
 		ChatMessage,
 		DesktopHandshake,
 		DesktopSession,
@@ -38,6 +38,7 @@
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import Composer from "./components/Composer.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
+	import ConfirmDialog from "./components/ConfirmDialog.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
 	import Feed from "./components/Feed.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
@@ -66,9 +67,13 @@
 	let frontierOptions = $state<SelectOption[]>([]);
 	let draft = $state("");
 	let sidebarOpen = $state(false);
-	let sessionsVisible = $state(true);
+	let sessionsExpanded = $state(true);
+	let sessionWidth = $state(280);
+	let filesWidth = $state(430);
+	let pendingDelete = $state<DesktopSession | undefined>(undefined);
 	let workspacePanelOpen = $state(true);
 	let bottomPanelOpen = $state(false);
+	let bottomPanelRevealed = $state(false);
 	let sessionTitle = $state("New local session");
 	let sessionCwd = $state("");
 	let status = $state<StatusInfo>({ state: "starting", label: "Starting backend", detail: "RPC handshake" });
@@ -90,6 +95,10 @@
 	let selectedFileContent = $state<string | undefined>(undefined);
 	let fileLoading = $state(false);
 	let fileSaving = $state(false);
+	let terminalOutput = $state("");
+	let terminalBusy = $state(false);
+	let terminalCurrentCommand = $state("");
+	let terminalStreamed = false;
 
 	let currentLocalRuntimes: LocalRuntime[] = [];
 	let lastFallbackReason = "";
@@ -102,7 +111,7 @@
 	const toolCards = new Map<string, number>();
 
 	const interactionActive = $derived(
-		taskActive || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined,
+		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined,
 	);
 	const sendDisabled = $derived(!backendReady || interactionActive);
 	const localSelectDisabled = $derived(
@@ -134,15 +143,16 @@
 			.slice(-12)
 			.flatMap((item) => (item.type === "activity" ? [`${item.activity.title}${item.activity.detail ? `\n${item.activity.detail}` : ""}`] : [])),
 	);
-	const shellColumns = $derived(
-		sessionsVisible
-			? workspacePanelOpen
-				? "grid-cols-[280px_minmax(0,1fr)_430px] narrow-1200:grid-cols-[230px_minmax(0,1fr)_380px] narrow-900:grid-cols-[230px_minmax(0,1fr)] narrow-720:grid-cols-1"
-				: "grid-cols-[280px_minmax(0,1fr)] narrow-900:grid-cols-[230px_minmax(0,1fr)] narrow-720:grid-cols-1"
-			: workspacePanelOpen
-				? "grid-cols-[minmax(0,1fr)_430px] narrow-900:grid-cols-1"
-				: "grid-cols-1",
+	const workspaceListeners = $derived(runningServices.filter((service) => service.kind === "listener"));
+	const hasWorkspaceProcess = $derived(
+		terminalBusy || workspaceListeners.length > 0 || activityLogs.length > 0,
 	);
+	const bottomPanelVisible = $derived(hasConversation && bottomPanelRevealed);
+	const MIN_MAIN_COL = 280;
+	const SESSION_RAIL = 48;
+	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
+	const filesColPx = $derived(workspacePanelOpen ? filesWidth : 0);
+	const shellColumns = "grid-cols-[var(--session-col)_minmax(0,1fr)_var(--files-col)] narrow-900:grid-cols-[var(--session-col)_minmax(0,1fr)] narrow-720:grid-cols-1";
 
 	const currentModel = $derived.by(() => {
 		const routing = currentConfig?.routing ?? "off";
@@ -172,10 +182,22 @@
 	});
 
 	const workspaceRows = $derived(
-		hasConversation
-			? "grid-rows-[78px_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[78px_minmax(180px,1fr)_auto_auto] short-650:grid-rows-[62px_minmax(0,1fr)_auto_auto] short-500:grid-rows-[54px_minmax(0,1fr)_auto_auto]"
-			: "grid-rows-[78px_minmax(160px,1fr)_auto_auto] short-650:grid-rows-[62px_minmax(0,1fr)_auto_auto] short-500:grid-rows-[54px_minmax(0,1fr)_auto_auto]",
+		bottomPanelVisible
+			? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
+			: "grid-rows-[auto_minmax(0,1fr)_auto]",
 	);
+
+	$effect(() => {
+		if (!hasConversation) {
+			bottomPanelRevealed = false;
+			bottomPanelOpen = false;
+			return;
+		}
+		if (hasWorkspaceProcess && !bottomPanelRevealed) {
+			bottomPanelRevealed = true;
+			bottomPanelOpen = true;
+		}
+	});
 
 	function setStatus(state: StatusInfo["state"], label: string, detail: string): void {
 		status = { state, label, detail };
@@ -187,6 +209,75 @@
 
 	function clearError(): void {
 		errorBanner = "";
+	}
+
+	function appendTerminal(text: string): void {
+		terminalOutput = `${terminalOutput}${text}`.slice(-120_000);
+	}
+
+	function resetTerminal(cwd: string): void {
+		terminalOutput = cwd ? `Klerm workspace shell\n${cwd}\n` : "";
+		terminalBusy = false;
+		terminalCurrentCommand = "";
+		terminalStreamed = false;
+		bottomPanelRevealed = false;
+		bottomPanelOpen = false;
+	}
+
+	function maxFilesWidth(expanded: boolean): number {
+		const left = expanded ? sessionWidth : SESSION_RAIL;
+		return Math.max(280, window.innerWidth - left - MIN_MAIN_COL);
+	}
+
+	function applyFilesWidth(requested: number): void {
+		const roomWithSession = maxFilesWidth(true);
+		if (requested > roomWithSession) {
+			sessionsExpanded = false;
+			filesWidth = Math.min(requested, maxFilesWidth(false));
+			return;
+		}
+		sessionsExpanded = true;
+		filesWidth = Math.max(280, requested);
+	}
+
+	function startSessionResize(event: PointerEvent): void {
+		if (window.innerWidth <= 720) return;
+		event.preventDefault();
+		const origin = event.clientX;
+		const startWidth = sessionsExpanded ? sessionWidth : SESSION_RAIL;
+		const onMove = (move: PointerEvent) => {
+			const files = workspacePanelOpen ? filesWidth : 0;
+			const maxWidth = Math.min(420, window.innerWidth - files - MIN_MAIN_COL);
+			const next = Math.max(SESSION_RAIL, Math.min(maxWidth, startWidth + move.clientX - origin));
+			if (next < 88) {
+				sessionsExpanded = false;
+				return;
+			}
+			sessionsExpanded = true;
+			sessionWidth = next;
+		};
+		const onUp = () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+		};
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
+	}
+
+	function startFilesResize(event: PointerEvent): void {
+		if (window.innerWidth <= 900) return;
+		event.preventDefault();
+		const origin = event.clientX;
+		const startWidth = filesWidth;
+		const onMove = (move: PointerEvent) => {
+			applyFilesWidth(startWidth - (move.clientX - origin));
+		};
+		const onUp = () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+		};
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
 	}
 
 	function pushTimeline(
@@ -586,6 +677,13 @@
 				void refreshWorkspace();
 				return;
 			}
+			case "bash_execution_update": {
+				if (terminalBusy && typeof event.delta === "string") {
+					terminalStreamed = true;
+					appendTerminal(event.delta);
+				}
+				return;
+			}
 			case "backend_error": {
 				const text = typeof event.message === "string" ? event.message : "Backend error";
 				if (taskActive) taskHadErrors = true;
@@ -716,8 +814,45 @@
 		}
 	}
 
+	async function runTerminalCommand(command: string): Promise<void> {
+		const value = command.trim();
+		if (!value || terminalBusy || taskActive || !backendReady) return;
+		terminalBusy = true;
+		terminalCurrentCommand = value;
+		terminalStreamed = false;
+		clearError();
+		appendTerminal(`${terminalOutput && !terminalOutput.endsWith("\n") ? "\n" : ""}$ ${value}\n`);
+		try {
+			const result = await bridge.send<BashResult>("bash", { command: value, excludeFromContext: true }, 0);
+			if (!terminalStreamed && result.output) appendTerminal(result.output);
+			if (result.output && !result.output.endsWith("\n") && !terminalOutput.endsWith("\n")) appendTerminal("\n");
+			appendTerminal(
+				result.cancelled
+					? "[stopped]\n"
+					: `[exit ${result.exitCode ?? "unknown"}${result.truncated ? ", output truncated" : ""}]\n`,
+			);
+		} catch (error) {
+			const message = toError(error).message;
+			appendTerminal(`[error] ${message}\n`);
+			showError(message);
+		} finally {
+			terminalBusy = false;
+			terminalCurrentCommand = "";
+			void refreshRunningServices();
+		}
+	}
+
+	async function stopTerminalCommand(): Promise<void> {
+		if (!terminalBusy) return;
+		try {
+			await bridge.send("abort_bash");
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
 	async function switchSession(session: DesktopSession): Promise<void> {
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -735,6 +870,7 @@
 			await refreshThinkingLevels();
 			sessionTitle = session.name ?? session.firstMessage;
 			sessionCwd = session.cwd;
+			resetTerminal(session.cwd);
 			await refreshWorkspace();
 			void refreshSessions();
 			sidebarOpen = false;
@@ -746,7 +882,7 @@
 	}
 
 	async function deleteConversation(session: DesktopSession): Promise<void> {
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
 		const isActive = session.id === lastState?.sessionId;
 		sessionTransitionActive = true;
 		clearError();
@@ -758,6 +894,7 @@
 				sessionTitle = "New local session";
 				lastState = await bridge.send<SessionState>("get_state");
 				sessionCwd = lastState.cwd;
+				resetTerminal(lastState.cwd);
 				currentRoutingState = currentRoutingState
 					? { ...currentRoutingState, lane: "direct", selectedTarget: undefined, lastTransition: undefined }
 					: undefined;
@@ -772,7 +909,7 @@
 	}
 
 	async function renameActiveSession(name: string): Promise<boolean> {
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return false;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return false;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -791,7 +928,7 @@
 
 	async function renameSession(session: DesktopSession, name: string): Promise<boolean> {
 		if (session.id === lastState?.sessionId) return renameActiveSession(name);
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return false;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return false;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -906,6 +1043,8 @@
 		frontierModel?: string;
 		routing?: KlermConfig["routing"];
 		activeStartLane?: KlermConfig["activeStartLane"];
+		localRole?: KlermConfig["localRole"];
+		frontierRole?: KlermConfig["frontierRole"];
 	}): void {
 		if (configBusy) return;
 		const operation = (async () => {
@@ -953,6 +1092,7 @@
 		currentRoutingState = handshake.routingState;
 		sessionTitle = handshake.state.sessionName ?? "New local session";
 		sessionCwd = handshake.state.cwd;
+		resetTerminal(handshake.state.cwd);
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		await refreshLocalModels();
@@ -965,7 +1105,7 @@
 	}
 
 	async function newSession(): Promise<void> {
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -975,6 +1115,7 @@
 			lastState = await bridge.send<SessionState>("get_state");
 			sessionTitle = "New local session";
 			sessionCwd = lastState.cwd;
+			resetTerminal(lastState.cwd);
 			currentRoutingState = currentRoutingState
 				? { ...currentRoutingState, lane: "direct", selectedTarget: undefined, lastTransition: undefined }
 				: undefined;
@@ -989,7 +1130,7 @@
 	}
 
 	async function changeRoot(): Promise<void> {
-		if (taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
 		let selected: unknown;
 		try {
 			selected = await openDialog({
@@ -1087,11 +1228,17 @@
 	}
 
 	onMount(() => {
+		if (window.innerWidth <= 900) workspacePanelOpen = false;
 		const onResize = () => {
 			if (window.innerWidth > 720) sidebarOpen = false;
+			else sessionsExpanded = true;
+			if (workspacePanelOpen) applyFilesWidth(filesWidth);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape" && sidebarOpen) sidebarOpen = false;
+			if (event.key !== "Escape") return;
+			if (pendingDelete) pendingDelete = undefined;
+			else if (sidebarOpen) sidebarOpen = false;
+			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
 		};
 		window.addEventListener("resize", onResize);
 		document.addEventListener("keydown", onKeyDown);
@@ -1108,34 +1255,52 @@
 <div
 	class={`relative grid h-full w-full overflow-hidden bg-bg opacity-100 transition-opacity duration-300 ${shellColumns}`}
 	class:opacity-0={splashVisible}
+	style={`--session-col: ${sessionColPx}px; --files-col: ${filesColPx}px;`}
 >
-	{#if sessionsVisible}
 	<Sidebar
 		{sessions}
 		activeSessionId={lastState?.sessionId ?? ""}
 		{status}
 		open={sidebarOpen}
+		collapsed={!sessionsExpanded}
 		onnewsession={newSession}
 		onrefresh={() => void refreshSessions()}
 		onswitch={(session) => void switchSession(session)}
 		onrename={renameSession}
-		ondelete={(session) => void deleteConversation(session)}
+		ondelete={(session) => (pendingDelete = session)}
+		onexpand={() => (sessionsExpanded = true)}
+		oncollapse={() => (sessionsExpanded = false)}
 	/>
-	{/if}
 	<button
 		type="button"
-		aria-label={sessionsVisible ? "Hide sessions" : "Show sessions"}
-		class={`absolute top-1/2 z-[17] flex h-20 w-5 -translate-y-1/2 items-center justify-center gap-1 rounded-r-md border border-l-0 border-[#303941] bg-[#0d1318] font-mono text-[7px] tracking-[.08em] text-[#78848c] uppercase shadow-[8px_0_22px_rgba(0,0,0,.3)] hover:bg-[#151c21] hover:text-[#d1d8dc] narrow-720:hidden ${sessionsVisible ? "left-[280px] narrow-900:left-[230px]" : "left-0"}`}
-		onclick={() => (sessionsVisible = !sessionsVisible)}
-	>
-		{#if sessionsVisible}<PanelLeftClose size={11} />{:else}<PanelLeftOpen size={11} />{/if}
-	</button>
-	{#if sessionsVisible && sidebarOpen}
+		aria-label="Resize sessions"
+		class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-[rgba(143,163,176,.18)] min-[721px]:block"
+		style={`left: calc(${sessionColPx}px - 3px);`}
+		onpointerdown={startSessionResize}
+	></button>
+	{#if workspacePanelOpen}
+		<button
+			type="button"
+			aria-label="Resize file changes"
+			class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-[rgba(143,163,176,.18)] min-[901px]:block"
+			style={`right: calc(${filesColPx}px - 3px);`}
+			onpointerdown={startFilesResize}
+		></button>
+	{/if}
+	{#if sidebarOpen}
 		<button
 			type="button"
 			aria-label="Close navigation"
 			class="fixed inset-0 z-[19] hidden border-0 bg-black/60 backdrop-blur-[2px] narrow-720:block"
 			onclick={() => (sidebarOpen = false)}
+		></button>
+	{/if}
+	{#if workspacePanelOpen}
+		<button
+			type="button"
+			aria-label="Close file changes"
+			class="fixed inset-0 z-[17] hidden border-0 bg-black/50 backdrop-blur-[1px] narrow-900:block"
+			onclick={() => (workspacePanelOpen = false)}
 		></button>
 	{/if}
 
@@ -1147,7 +1312,7 @@
 				isGit={workspace?.isGit ?? false}
 			model={currentModel}
 			{sidebarOpen}
-			ontogglesidebar={() => { sessionsVisible = true; sidebarOpen = !sidebarOpen; }}
+			ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
 			onrename={renameActiveSession}
 			onchangeroot={() => void changeRoot()}
 			{workspacePanelOpen}
@@ -1159,21 +1324,18 @@
 				class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]"
 			>
 				{#if heroVisible}
-					<EmptyState {runtimeStatus} onrefresh={() => void refreshModels()} />
+					<EmptyState
+						{runtimeStatus}
+						onrefresh={() => void refreshModels()}
+						onprompt={(prompt) => {
+							draft = prompt;
+							composerFocusRequest += 1;
+						}}
+					/>
 				{/if}
 				<Feed items={feed} {taskActive} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
 			</div>
 		</section>
-
-		<BottomPanel
-			open={bottomPanelOpen}
-			services={runningServices}
-			logs={activityLogs}
-			{status}
-			ontoggle={() => (bottomPanelOpen = !bottomPanelOpen)}
-			onrefresh={() => void refreshRunningServices()}
-			onopenurl={(url) => void openLocalUrl(url)}
-		/>
 
 		<Composer
 			bind:draft
@@ -1200,6 +1362,9 @@
 			frontierThinkingLevels={frontierThinking.levels}
 			frontierThinkingValue={frontierThinking.level}
 			{frontierThinkingDisabled}
+			localRole={currentConfig?.localRole ?? "builder"}
+			frontierRole={currentConfig?.frontierRole ?? "builder"}
+			roleDisabled={!backendReady || interactionActive}
 			onsend={(text) => void sendMessage(text)}
 			onstop={() => void stopTask()}
 			onlocalchange={(value) => applyConfigUpdate({ localModel: value })}
@@ -1207,7 +1372,27 @@
 			onroutingchange={applyRoutingSelection}
 			onlocalthinkingchange={(level) => void applyThinkingLevel("local", level)}
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
+			onlocalrolechange={(role) => applyConfigUpdate({ localRole: role })}
+			onfrontierrolechange={(role) => applyConfigUpdate({ frontierRole: role })}
 		/>
+
+		{#if bottomPanelVisible}
+		<BottomPanel
+			open={bottomPanelOpen}
+			services={runningServices}
+			logs={activityLogs}
+			{status}
+			{terminalOutput}
+			{terminalBusy}
+			{terminalCurrentCommand}
+			ontoggle={() => (bottomPanelOpen = !bottomPanelOpen)}
+			onrefresh={() => void refreshRunningServices()}
+			onopenurl={(url) => void openLocalUrl(url)}
+			onruncommand={(command) => void runTerminalCommand(command)}
+			onstopcommand={() => void stopTerminalCommand()}
+			onclearterminal={() => (terminalOutput = "")}
+		/>
+		{/if}
 	</main>
 	{#if workspacePanelOpen}
 		<WorkspacePanel
@@ -1226,3 +1411,16 @@
 		/>
 	{/if}
 </div>
+{#if pendingDelete}
+	<ConfirmDialog
+		title="Delete session?"
+		detail={`This removes "${pendingDelete.name ?? pendingDelete.firstMessage}" from the session list.`}
+		confirmLabel="Delete"
+		oncancel={() => (pendingDelete = undefined)}
+		onconfirm={() => {
+			const session = pendingDelete;
+			pendingDelete = undefined;
+			if (session) void deleteConversation(session);
+		}}
+	/>
+{/if}

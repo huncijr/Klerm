@@ -4,12 +4,15 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 export type KlermRoutingMode = "off" | "local" | "frontier" | "auto";
 export type KlermActiveStartLane = "auto" | "local" | "frontier" | "frontier-local";
+export type KlermWorkerRole = "planner" | "builder";
 
 export interface KlermConfig {
 	routing: KlermRoutingMode;
 	activeStartLane: KlermActiveStartLane;
 	localModel?: string;
 	frontierModel?: string;
+	localRole: KlermWorkerRole;
+	frontierRole: KlermWorkerRole;
 	localThinkingLevel?: ThinkingLevel;
 	frontierThinkingLevel?: ThinkingLevel;
 	allowFrontierFallback: boolean;
@@ -22,6 +25,8 @@ export interface KlermConfig {
 export const DEFAULT_KLERM_CONFIG: KlermConfig = {
 	routing: "off",
 	activeStartLane: "auto",
+	localRole: "builder",
+	frontierRole: "builder",
 	allowFrontierFallback: false,
 	handbackEnabled: true,
 	maxDelegationCycles: 3,
@@ -39,6 +44,10 @@ function isRoutingMode(value: unknown): value is KlermRoutingMode {
 
 function isActiveStartLane(value: unknown): value is KlermActiveStartLane {
 	return value === "auto" || value === "local" || value === "frontier" || value === "frontier-local";
+}
+
+export function isKlermWorkerRole(value: unknown): value is KlermWorkerRole {
+	return value === "planner" || value === "builder";
 }
 
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
@@ -81,6 +90,12 @@ export class KlermConfigStore {
 				: DEFAULT_KLERM_CONFIG.activeStartLane,
 			localModel: overrides.localModel ?? stored.localModel,
 			frontierModel: overrides.frontierModel ?? stored.frontierModel,
+			localRole: isKlermWorkerRole(overrides.localRole ?? stored.localRole)
+				? (overrides.localRole ?? stored.localRole)!
+				: DEFAULT_KLERM_CONFIG.localRole,
+			frontierRole: isKlermWorkerRole(overrides.frontierRole ?? stored.frontierRole)
+				? (overrides.frontierRole ?? stored.frontierRole)!
+				: DEFAULT_KLERM_CONFIG.frontierRole,
 			localThinkingLevel: isThinkingLevel(overrides.localThinkingLevel ?? stored.localThinkingLevel)
 				? (overrides.localThinkingLevel ?? stored.localThinkingLevel)
 				: undefined,

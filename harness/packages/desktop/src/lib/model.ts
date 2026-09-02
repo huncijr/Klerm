@@ -1,6 +1,7 @@
 export type JsonObject = Record<string, unknown>;
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type WorkerRole = "planner" | "builder";
 
 export interface ThinkingSetting {
 	level: ThinkingLevel;
@@ -68,6 +69,8 @@ export interface KlermConfig {
 	activeStartLane: "auto" | "local" | "frontier" | "frontier-local";
 	localModel?: string;
 	frontierModel?: string;
+	localRole: WorkerRole;
+	frontierRole: WorkerRole;
 	localThinkingLevel?: ThinkingLevel;
 	frontierThinkingLevel?: ThinkingLevel;
 }
@@ -116,10 +119,20 @@ export interface EditorInfo {
 }
 
 export interface RunningService {
-	port: number;
-	url: string;
-	processName?: string;
-	pid?: number;
+	id: string;
+	kind: "backend" | "listener";
+	processName: string;
+	pid: number;
+	cwd: string;
+	port?: number;
+	url?: string;
+}
+
+export interface BashResult {
+	output: string;
+	exitCode?: number;
+	cancelled: boolean;
+	truncated: boolean;
 }
 
 export interface AgentMessage {

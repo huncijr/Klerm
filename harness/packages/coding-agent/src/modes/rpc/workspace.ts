@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, readlink, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { spawnProcess } from "../../utils/child-process.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
@@ -188,24 +188,51 @@ export async function openWorkspaceEditor(cwd: string, editor: RpcEditorInfo["id
 }
 
 export async function getRunningServices(cwd: string): Promise<RpcRunningService[]> {
-	if (process.platform !== "linux") return [];
+	const workspace = await getWorkspaceStatus(cwd);
+	const projectRoot = canonicalizePath(resolve(workspace.projectRoot));
+	const services: RpcRunningService[] = [
+		{
+			id: `backend-${process.pid}`,
+			kind: "backend",
+			processName: "Klerm backend",
+			pid: process.pid,
+			cwd: workspace.workspaceRoot,
+		},
+	];
+	if (process.platform !== "linux") return services;
 	const result = await runCommand("ss", ["-ltnpH"], cwd, true);
-	const services = new Map<number, RpcRunningService>();
+	const seenPorts = new Set<number>();
 	for (const line of result.stdout.split("\n")) {
 		const address = line.trim().split(/\s+/)[3];
 		const match = address?.match(/:(\d+)$/);
 		if (!match) continue;
 		const port = Number(match[1]);
-		if (!Number.isInteger(port) || port <= 0 || services.has(port)) continue;
+		if (!Number.isInteger(port) || port <= 0 || seenPorts.has(port)) continue;
 		const processMatch = line.match(/\(\("([^"]+)".*pid=(\d+)/);
-		services.set(port, {
+		const pid = processMatch?.[2] ? Number(processMatch[2]) : undefined;
+		if (!pid) continue;
+		let processCwd: string;
+		try {
+			processCwd = canonicalizePath(await readlink(`/proc/${pid}/cwd`));
+		} catch {
+			continue;
+		}
+		const relation = relative(projectRoot, processCwd);
+		if (relation.startsWith("..") || isAbsolute(relation)) continue;
+		seenPorts.add(port);
+		services.push({
+			id: `listener-${pid}-${port}`,
+			kind: "listener",
 			port,
 			url: `http://localhost:${port}`,
-			processName: processMatch?.[1],
-			pid: processMatch?.[2] ? Number(processMatch[2]) : undefined,
+			processName: processMatch?.[1] ?? "Workspace listener",
+			pid,
+			cwd: processCwd,
 		});
 	}
-	return [...services.values()].sort((left, right) => left.port - right.port);
+	return services.sort((left, right) =>
+		left.kind === "backend" ? -1 : right.kind === "backend" ? 1 : (left.port ?? 0) - (right.port ?? 0),
+	);
 }
 
 export function openLocalUrl(target: string): void {

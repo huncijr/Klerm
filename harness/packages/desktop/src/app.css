@@ -40,6 +40,24 @@
 	button {
 		color: inherit;
 	}
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: #3a454d transparent;
+	}
+	*::-webkit-scrollbar {
+		width: 7px;
+		height: 7px;
+	}
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	*::-webkit-scrollbar-thumb {
+		border-radius: 999px;
+		background: #3a454d;
+	}
+	*::-webkit-scrollbar-thumb:hover {
+		background: #536069;
+	}
 }
 
 @keyframes reveal {

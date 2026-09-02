@@ -8,7 +8,6 @@
 		value,
 		disabled,
 		placeholder,
-		alignRight = false,
 		onchange,
 	}: {
 		label: string;
@@ -16,7 +15,6 @@
 		value: string;
 		disabled: boolean;
 		placeholder: string;
-		alignRight?: boolean;
 		onchange: (value: string) => void;
 	} = $props();
 
@@ -125,11 +123,7 @@
 				role="listbox"
 				aria-label={`${label} options`}
 				tabindex="-1"
-				class={`absolute bottom-[calc(100%+12px)] z-30 max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)] [scrollbar-width:thin] ${
-					alignRight
-						? "left-auto right-[-6px] w-[max(100%,190px)] max-w-[calc(100vw-24px)]"
-						: "left-[-12px] right-[-12px]"
-				}`}
+				class="absolute right-0 bottom-[calc(100%+12px)] left-0 z-30 max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)]"
 				onkeydown={handleMenuKeydown}
 			>
 				{#each options as option (option.value || option.label)}

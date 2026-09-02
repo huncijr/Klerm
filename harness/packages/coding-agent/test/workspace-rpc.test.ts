@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	getRunningServices,
 	getWorkspaceDiff,
 	getWorkspaceStatus,
 	openLocalUrl,
@@ -73,5 +74,13 @@ describe("desktop workspace RPC helpers", () => {
 		);
 		await expect(readWorkspaceTextFile(nested, "../outside.txt")).rejects.toThrow("outside the workspace");
 		expect(() => openLocalUrl("https://example.com")).toThrow("Only local HTTP services");
+
+		const processes = await getRunningServices(nested);
+		expect(processes[0]).toMatchObject({ kind: "backend", processName: "Klerm backend", cwd: nested });
+		expect(
+			processes
+				.filter((process) => process.kind === "listener")
+				.every((process) => process.cwd.startsWith(tempDir!)),
+		).toBe(true);
 	});
 });

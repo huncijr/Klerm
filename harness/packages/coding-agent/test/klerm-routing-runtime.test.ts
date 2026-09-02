@@ -18,6 +18,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { createAllTools } from "../src/core/tools/index.ts";
 import { KlermConfigStore } from "../src/klerm/config.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
 import { KlermRoutingController, projectKlermHandoffContext } from "../src/klerm/router/runtime.ts";
@@ -128,6 +129,78 @@ describe("Klerm routing runtime", () => {
 			completionOwner: "local",
 			reason: "auto mode starts local orchestrator to assess the task and delegate when needed",
 		});
+	});
+
+	it("removes mutation tools from planner turns and restores them for builders", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			localRole: "planner",
+		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Plan this change"))?.commit();
+		const tools = ["read", "grep", "bash", "edit", "write", "mcp_mutate", "delegate_frontier"].map((name) => ({
+			name,
+		}));
+
+		expect(controller.activeWorkerRole).toBe("planner");
+		expect(controller.filterToolsForActiveRole(tools).map((tool) => tool.name)).toEqual([
+			"read",
+			"grep",
+			"delegate_frontier",
+		]);
+		expect(controller.getSystemPromptContribution()).toContain("Planner mode is read-only");
+
+		await controller.setWorkerRole("local", "builder");
+		expect(controller.filterToolsForActiveRole(tools)).toEqual(tools);
+		expect((await KlermConfigStore.load(tempDir)).get().localRole).toBe("builder");
+	});
+
+	it("applies planner tools to the first provider request and restores builder tools after completion", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:planner" }] });
+		const localModel = localFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:planner",
+			localRole: "planner",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		let requestToolNames: string[] = [];
+		const builderTools = Object.values(createAllTools(tempDir));
+		const agent = new Agent({
+			streamFn: (model, context, options) => {
+				requestToolNames = context.tools?.map((tool) => tool.name) ?? [];
+				return streamSimple(model, context, options);
+			},
+			initialState: { model: localModel, systemPrompt: "test", tools: builderTools, thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
+			await session.prompt("Plan the implementation");
+
+			expect(requestToolNames).toEqual(expect.arrayContaining(["read", "grep", "find", "ls"]));
+			expect(requestToolNames).not.toEqual(expect.arrayContaining(["bash", "edit", "write"]));
+			expect(agent.state.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["bash", "edit", "write"]));
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+		}
 	});
 
 	it("records the session id on decision log events", async () => {

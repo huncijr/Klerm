@@ -23,6 +23,7 @@
 - Added `klerm routing status` and typed `klerm config get`/`set` for the persisted Klerm routing configuration.
 - Added `klerm session list [--json] [--dir <dir>]` for listing stored sessions with metadata, and `--session`, `--provider`, `--model` filters plus `--export <file>` (with a sharing warning) for `klerm debug decisions`.
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
+- Added persistent per-lane planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, and backend-enforced read-only planner tools.
 
 ### Changed
 

@@ -284,6 +284,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} session list [--json]     List stored sessions with metadata
   ${APP_NAME} session timeline <id>     Print a structured session timeline
   ${APP_NAME} routing status [--json]   Show the persisted routing configuration
+	${APP_NAME} mode [lane role]           Show or update local/frontier planner or builder roles
   ${APP_NAME} config get [key]          Read the persisted Klerm routing configuration
   ${APP_NAME} config set <key> <value>  Update the persisted Klerm routing configuration
   ${APP_NAME} debug route <task>        Preview a mock routing decision

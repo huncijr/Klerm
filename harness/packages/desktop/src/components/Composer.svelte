@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Send, Square } from "@lucide/svelte";
+	import { ChevronDown, Hammer, ListTodo, Send, Square } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
-	import type { SelectOption, ThinkingLevel } from "../lib/model.ts";
+	import type { SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
@@ -30,6 +30,9 @@
 		frontierThinkingLevels,
 		frontierThinkingValue,
 		frontierThinkingDisabled,
+		localRole,
+		frontierRole,
+		roleDisabled,
 		onsend,
 		onstop,
 		onlocalchange,
@@ -37,6 +40,8 @@
 		onroutingchange,
 		onlocalthinkingchange,
 		onfrontierthinkingchange,
+		onlocalrolechange,
+		onfrontierrolechange,
 	}: {
 		draft: string;
 		sendDisabled: boolean;
@@ -62,6 +67,9 @@
 		frontierThinkingLevels: ThinkingLevel[];
 		frontierThinkingValue: ThinkingLevel;
 		frontierThinkingDisabled: boolean;
+		localRole: WorkerRole;
+		frontierRole: WorkerRole;
+		roleDisabled: boolean;
 		onsend: (text: string) => void;
 		onstop: () => void;
 		onlocalchange: (value: string) => void;
@@ -69,6 +77,8 @@
 		onroutingchange: (value: string) => void;
 		onlocalthinkingchange: (level: ThinkingLevel) => void;
 		onfrontierthinkingchange: (level: ThinkingLevel) => void;
+		onlocalrolechange: (role: WorkerRole) => void;
+		onfrontierrolechange: (role: WorkerRole) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -82,6 +92,10 @@
 	let promptEl: HTMLTextAreaElement | undefined = $state();
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
+	let roleMenuOpen = $state(false);
+	const activeRole = $derived(
+		routingValue === "frontier" || routingValue === "frontier-local" ? frontierRole : localRole,
+	);
 
 	function resizePrompt(): void {
 		if (!promptEl) return;
@@ -123,6 +137,11 @@
 	function submit(): void {
 		const text = draft.trim();
 		if (!text || sendDisabled) return;
+		if (text === "/mode") {
+			draft = "";
+			roleMenuOpen = true;
+			return;
+		}
 		historyIndex = -1;
 		draftBeforeHistory = "";
 		onsend(text);
@@ -153,6 +172,12 @@
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.isComposing) return;
+		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && draft.trim() === "/mode") {
+			event.preventDefault();
+			draft = "";
+			roleMenuOpen = true;
+			return;
+		}
 		if (event.key === "ArrowUp" && promptEl?.selectionStart === 0 && promptEl.selectionEnd === 0) {
 			event.preventDefault();
 			navigateHistory(-1);
@@ -194,6 +219,16 @@
 			{errorBanner}
 		</div>
 	{/if}
+	<div class="mx-auto mb-1 flex w-[min(820px,100%)] justify-end px-1">
+		<button
+			type="button"
+			disabled={roleDisabled}
+			class="border-0 bg-transparent p-0 font-mono text-[8px] uppercase tracking-[.1em] text-[#737f87] cursor-pointer hover:text-[#cbd2d6] disabled:cursor-not-allowed disabled:opacity-45"
+			onclick={() => (roleMenuOpen = !roleMenuOpen)}
+		>
+			Mode: {activeRole === "planner" ? "Plan" : "Build"}
+		</button>
+	</div>
 
 	<form
 		class="mx-auto w-[min(820px,100%)] overflow-visible rounded-xl border border-[#2a3239] bg-[#0d1116] shadow-[0_14px_40px_rgba(0,0,0,.24)] focus-within:border-[#46515a]"
@@ -202,7 +237,7 @@
 			submit();
 		}}
 	>
-		<div class="relative min-h-[58px] pt-1 pr-[60px] pb-1 pl-4 narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[49px] narrow-520:pb-[3px] narrow-520:pl-[13px]">
+		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-4 narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[13px]">
 			<textarea
 				bind:this={promptEl}
 				bind:value={draft}
@@ -213,6 +248,41 @@
 				onkeydown={handleKeydown}
 				oninput={handleInput}
 			></textarea>
+			<div class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
+				<button
+					type="button"
+					aria-label="Configure worker roles"
+					aria-expanded={roleMenuOpen}
+					disabled={roleDisabled}
+					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
+					onclick={() => (roleMenuOpen = !roleMenuOpen)}
+				>
+					{#if activeRole === "planner"}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
+					<ChevronDown size={11} />
+				</button>
+				{#if roleMenuOpen}
+					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
+						{#each [["local", localRole], ["frontier", frontierRole]] as [lane, role]}
+							<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
+								<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{lane}</span>
+								{#each ["planner", "builder"] as option}
+									<button
+										type="button"
+										class={`rounded-md border px-2 py-1.5 font-mono text-[8px] capitalize cursor-pointer ${role === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`}
+										onclick={() => {
+											if (lane === "local") onlocalrolechange(option as WorkerRole);
+											else onfrontierrolechange(option as WorkerRole);
+										}}
+									>
+										{option === "planner" ? "Plan" : "Build"}
+									</button>
+								{/each}
+							</div>
+						{/each}
+						<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build can edit files and run commands.</p>
+					</div>
+				{/if}
+			</div>
 			<div class="absolute right-[9px] bottom-2.5 h-[38px] w-[38px] narrow-520:right-[7px] narrow-520:bottom-[7px] narrow-520:h-9 narrow-520:w-9">
 				{#if taskActive}
 					<button
@@ -237,7 +307,7 @@
 		</div>
 	</form>
 
-	<div class="mx-auto mt-2 grid w-[min(820px,100%)] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_150px] gap-2 narrow-520:mt-[5px] narrow-520:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_112px] narrow-520:gap-[5px]">
+	<div class="mx-auto mt-2 grid w-[min(820px,100%)] grid-cols-3 gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px]">
 		<div class="min-w-0">
 			<ModelSelect
 				label="Local model"
@@ -282,7 +352,6 @@
 			value={routingValue}
 			disabled={routingDisabled}
 			placeholder="Choose routing"
-			alignRight
 			onchange={onroutingchange}
 		/>
 	</div>

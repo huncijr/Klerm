@@ -54,7 +54,7 @@ strings.
 | `write_workspace_file` | Save an existing text file and record `manual` attribution |
 | `get_available_editors` | Availability of allowlisted Zed, VS Code, and Vim launchers |
 | `open_workspace_editor` | Open the detected project root with one allowlisted editor |
-| `get_running_services` | Linux localhost listeners reported by `ss` |
+| `get_running_services` | Current Klerm backend plus Linux listeners whose process cwd is inside the project |
 | `open_local_url` | Open an `http` or `https` localhost URL |
 
 Example status request:
@@ -98,6 +98,13 @@ files and files larger than 2 MiB; writes only replace existing files. Editor
 commands use an allowlist and pass paths as process arguments. Vim and listener
 discovery are currently Linux-only. `open_local_url` accepts only `localhost`,
 `127.0.0.1`, or `::1` over HTTP(S).
+
+The desktop Terminal sends `bash` with `excludeFromContext: true`, consumes its
+correlated `bash_execution_update` stream, and uses `abort_bash` for Stop. Each
+command starts a fresh shell in the selected workspace, so shell state does not
+persist between commands and full PTY applications are not supported. The
+command and result remain auditable in session history but are excluded from LLM
+context.
 
 ### Prompting
 

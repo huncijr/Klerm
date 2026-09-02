@@ -1,7 +1,18 @@
 <script lang="ts">
 	import type { RuntimeStatus } from "../lib/model.ts";
 
-	let { runtimeStatus, onrefresh }: { runtimeStatus: RuntimeStatus; onrefresh: () => void } = $props();
+	let {
+		runtimeStatus,
+		onrefresh,
+		onprompt,
+	}: { runtimeStatus: RuntimeStatus; onrefresh: () => void; onprompt: (prompt: string) => void } = $props();
+
+	const suggestions = [
+		"Create a simple website in this folder",
+		"Inspect this workspace and summarize folder sizes",
+		"Review this repo and list the riskiest files to change",
+		"Scaffold a local-first todo CLI here",
+	];
 
 	const dotClass = $derived(
 		runtimeStatus.state === "online"
@@ -34,6 +45,17 @@
 	>
 		Choose an installed local model, then send a task. Klerm keeps the work and routing decisions on this machine.
 	</p>
+	<div class="mb-4 grid w-[min(560px,100%)] grid-cols-2 gap-2 text-left narrow-520:grid-cols-1 short-500:hidden">
+		{#each suggestions as suggestion}
+			<button
+				type="button"
+				class="rounded-lg border border-line bg-[rgba(14,19,24,.62)] px-3 py-2.5 text-[10px] leading-[1.4] text-[#8c979f] cursor-pointer transition-colors hover:border-[#3b464e] hover:bg-[#11171c] hover:text-[#d7dde1]"
+				onclick={() => onprompt(suggestion)}
+			>
+				{suggestion}
+			</button>
+		{/each}
+	</div>
 	<div
 		class="grid w-[min(470px,100%)] grid-cols-[8px_1fr_auto] items-center gap-3 rounded-lg border border-line bg-[rgba(14,19,24,.8)] px-[15px] py-3 text-left short-650:py-[9px] short-500:mt-3.5"
 	>
