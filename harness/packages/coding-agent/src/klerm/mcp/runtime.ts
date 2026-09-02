@@ -17,8 +17,11 @@ export type McpServerState = "disabled" | "connecting" | "connected" | "failed" 
 
 export interface McpServerStatus {
 	name: string;
+	transport: "stdio" | "http" | "sse";
+	enabled: boolean;
 	state: McpServerState;
 	tools: string[];
+	toolDetails: Array<{ name: string; remoteName: string; title?: string; description?: string }>;
 	skippedTools: string[];
 	error?: string;
 }
@@ -224,11 +227,15 @@ export class McpRuntime {
 		this.cwd = cwd;
 		this.configuredServers = structuredClone(configuredServers);
 		for (const name of Object.keys(this.configuredServers).sort()) {
-			const disabled = this.configuredServers[name]?.enabled === false;
+			const settings = this.configuredServers[name];
+			const disabled = settings?.enabled === false;
 			this.statuses.set(name, {
 				name,
+				transport: settings ? getTransport(settings) : "stdio",
+				enabled: !disabled,
 				state: disabled ? "disabled" : "connecting",
 				tools: [],
+				toolDetails: [],
 				skippedTools: [],
 			});
 		}
@@ -243,8 +250,11 @@ export class McpRuntime {
 			const status = this.statuses.get(name);
 			this.statuses.set(name, {
 				name,
+				transport: getTransport(settings),
+				enabled: settings.enabled !== false,
 				state: "failed",
 				tools: status?.tools ?? [],
+				toolDetails: status?.toolDetails ?? [],
 				skippedTools: status?.skippedTools ?? [],
 				error: "server transport disconnected",
 			});
@@ -286,10 +296,14 @@ export class McpRuntime {
 			if (!name) continue;
 			const result = results[index];
 			if (result?.status === "rejected") {
+				const settings = enabledServers[index]?.[1];
 				this.statuses.set(name, {
 					name,
+					transport: settings ? getTransport(settings) : "stdio",
+					enabled: true,
 					state: "failed",
 					tools: [],
+					toolDetails: [],
 					skippedTools: [],
 					error: result.reason instanceof Error ? result.reason.message : String(result.reason),
 				});
@@ -299,6 +313,7 @@ export class McpRuntime {
 			const { client, tools } = result.value.connection;
 			this.clients.set(name, client);
 			const registered: string[] = [];
+			const toolDetails: McpServerStatus["toolDetails"] = [];
 			const skipped: string[] = [];
 			for (const remoteTool of [...tools].sort((left, right) => left.name.localeCompare(right.name))) {
 				if (remoteTool.execution?.taskSupport === "required") {
@@ -330,8 +345,23 @@ export class McpRuntime {
 				};
 				registerTool(definition);
 				registered.push(toolName);
+				toolDetails.push({
+					name: toolName,
+					remoteName: remoteTool.name,
+					title: remoteTool.title,
+					description: remoteTool.description,
+				});
 			}
-			this.statuses.set(name, { name, state: "connected", tools: registered, skippedTools: skipped });
+			const settings = enabledServers[index]?.[1];
+			this.statuses.set(name, {
+				name,
+				transport: settings ? getTransport(settings) : "stdio",
+				enabled: true,
+				state: "connected",
+				tools: registered,
+				toolDetails,
+				skippedTools: skipped,
+			});
 		}
 	}
 

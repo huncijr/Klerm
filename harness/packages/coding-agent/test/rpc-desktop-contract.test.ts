@@ -127,6 +127,8 @@ describe("Klerm desktop RPC contract", () => {
 				if (lane === "local") config.localRole = role;
 				else config.frontierRole = role;
 			}),
+			filterToolsForActiveRole: vi.fn(<T>(tools: T[]) => tools),
+			getSystemPromptContribution: vi.fn(() => undefined),
 		} as unknown as KlermRoutingController;
 		Object.defineProperty(harness.session, "_klermRoutingController", { value: controller });
 		const renameSession = vi.fn(async () => {});
@@ -193,6 +195,9 @@ describe("Klerm desktop RPC contract", () => {
 							"open_workspace_editor",
 							"get_running_services",
 							"open_local_url",
+							"get_mcp_status",
+							"add_mcp_server",
+							"reload_mcp_servers",
 							"bash",
 							"abort_bash",
 						]),
@@ -214,6 +219,60 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: { runtimes: [{ providerId: "ollama", models: [{ id: "qwen3" }] }] },
 			});
+
+			const emptyMcpStatus = await send({ id: "mcp-status-empty", type: "get_mcp_status" });
+			expect(emptyMcpStatus).toMatchObject({
+				success: true,
+				data: { servers: [], toolCount: 0, reloadRequired: false },
+			});
+
+			const addedMcp = await send({
+				id: "mcp-add",
+				type: "add_mcp_server",
+				server: { name: "filesystem", transport: "stdio", command: "node", args: ["server.js"], enabled: false },
+			});
+			expect(addedMcp).toMatchObject({
+				success: true,
+				data: {
+					name: "filesystem",
+					scope: "global",
+					reloadRequired: true,
+					status: {
+						servers: [
+							{
+								name: "filesystem",
+								transport: "stdio",
+								enabled: false,
+								state: "disabled",
+								tools: [],
+							},
+						],
+					},
+				},
+			});
+			expect(harness.settingsManager.getMcpServersForScope("global").filesystem).toMatchObject({
+				transport: "stdio",
+				command: "node",
+				args: ["server.js"],
+				enabled: false,
+			});
+
+			const rejectedMcpSecret = await send({
+				id: "mcp-secret",
+				type: "add_mcp_server",
+				server: {
+					name: "remote",
+					transport: "http",
+					url: "https://example.com/mcp",
+					headers: { Authorization: "Bearer secret-token" },
+				},
+			});
+			expect(rejectedMcpSecret).toMatchObject({ success: false, code: "MCP_SECRET_REJECTED" });
+			expect(harness.settingsManager.getMcpServersForScope("global").remote).toBeUndefined();
+
+			const reloadedMcp = await send({ id: "mcp-reload", type: "reload_mcp_servers" });
+			if (!reloadedMcp.success) throw new Error(JSON.stringify(reloadedMcp));
+			expect(reloadedMcp).toMatchObject({ success: true, data: { toolCount: 0 } });
 
 			const workspace = await send({ id: "workspace", type: "get_workspace_status" });
 			expect(workspace).toMatchObject({

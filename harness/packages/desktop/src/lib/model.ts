@@ -128,6 +128,45 @@ export interface RunningService {
 	url?: string;
 }
 
+export interface McpToolStatus {
+	name: string;
+	serverName: string;
+	remoteName: string;
+	title?: string;
+	description?: string;
+}
+
+export interface McpServerStatus {
+	name: string;
+	transport: "stdio" | "http" | "sse";
+	enabled: boolean;
+	state: "disabled" | "connecting" | "connected" | "failed" | "closed";
+	tools: McpToolStatus[];
+	skippedTools: string[];
+	error?: string;
+}
+
+export interface McpStatus {
+	servers: McpServerStatus[];
+	toolCount: number;
+	reloadRequired: boolean;
+}
+
+export interface McpServerUpdate {
+	name: string;
+	transport: "stdio" | "http" | "sse";
+	scope?: "global" | "project";
+	command?: string;
+	args?: string[];
+	url?: string;
+	headers?: Record<string, string>;
+	enabled?: boolean;
+}
+
+export interface McpToolOption extends McpToolStatus {
+	label: string;
+}
+
 export interface BashResult {
 	output: string;
 	exitCode?: number;

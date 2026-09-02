@@ -8,6 +8,7 @@ import type {
 	SettingsManager,
 	SettingsScope,
 } from "../../core/settings-manager.ts";
+import type { McpServerStatus } from "./runtime.ts";
 import { McpRuntime } from "./runtime.ts";
 
 const USAGE = [
@@ -17,6 +18,13 @@ const USAGE = [
 	"/mcpset [--project] <name> sse <url> [Header=Value...]",
 	"/mcpset [--project] <name> remove|enable|disable|status",
 ].join("\n");
+
+const runtimeStatuses = new WeakMap<SettingsManager, McpServerStatus[]>();
+
+export function getMcpRuntimeStatus(settingsManager: SettingsManager): McpServerStatus[] | undefined {
+	const status = runtimeStatuses.get(settingsManager);
+	return status ? structuredClone(status) : undefined;
+}
 
 const configureMcpServerSchema = Type.Object({
 	name: Type.String({
@@ -572,6 +580,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 			await runtime.close();
 			unregisterSessionCleanup?.();
 			runtime = new McpRuntime(cwd, settingsManager.getMcpServers());
+			runtimeStatuses.set(settingsManager, runtime.getStatus());
 			const sessionId = ctx.sessionManager.getSessionId();
 			unregisterSessionCleanup = registerSessionResourceCleanup((disposedSessionId) => {
 				if (disposedSessionId !== sessionId) return;
@@ -583,6 +592,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 				(tool) => pi.registerTool(tool),
 				({ serverName, remoteToolName }) => ctx.ui.notify(`mcp: ${serverName}/${remoteToolName} used`),
 			);
+			runtimeStatuses.set(settingsManager, runtime.getStatus());
 			const failed = runtime.getStatus().filter((status) => status.state === "failed");
 			if (failed.length > 0) {
 				ctx.ui.notify(
@@ -596,6 +606,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 			unregisterSessionCleanup?.();
 			unregisterSessionCleanup = undefined;
 			await runtime.close();
+			runtimeStatuses.set(settingsManager, runtime.getStatus());
 		});
 
 		pi.registerCommand("mcp", {

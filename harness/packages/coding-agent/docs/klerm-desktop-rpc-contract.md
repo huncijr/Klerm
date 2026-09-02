@@ -17,12 +17,14 @@ The existing protocol is a useful base for the workspace spike:
 | Read and safely edit the project workspace | `get_workspace_status`, `get_workspace_diff`, `read_workspace_file`, `write_workspace_file` | Available; paths are project-relative, existing text files are limited to 2 MiB, and binary/out-of-root writes are rejected |
 | Discover/open editors and workspace processes | `get_available_editors`, `open_workspace_editor`, `get_running_services`, `open_local_url` | Available through allowlisted process arguments and localhost-only URL validation; Running always includes the current backend and limits Linux listeners to process cwd values inside the project |
 | Run desktop terminal commands | `bash`, `abort_bash`, `bash_execution_update` | Available as a writable, streamable, stoppable fresh-shell command console in the selected workspace; full PTY semantics remain deferred |
+| Show and configure MCP servers | `get_mcp_status`, `add_mcp_server`, `reload_mcp_servers` | Available for privacy-safe status, credential-free server writes, and explicit runtime reload; credential/header secrets are rejected or omitted |
 | Submit and stop work | `prompt`, `steer`, `follow_up`, `abort` | Available |
 | Stream responses and tool activity | `message_*`, `tool_execution_*`, `turn_*`, `agent_*` events | Available |
 | Observe live Klerm routing state | Handshake state and `routing_changed` event | Available initially and after routing changes; no standalone query |
 | Observe attributed file writes | `workspace_files_changed` event and `klerm-workspace-attribution` session entries | Available; observed Klerm writes include source, provider, model, lane, and timestamp, desktop saves are `manual`, and unmatched Git changes are `external` |
 | List and select configured models | `get_available_models`, `set_model` | Available |
 | Read and set thinking effort | `get_available_thinking_levels`, `set_thinking_level` | Available for the active model or an explicit `local`/`frontier` lane; lane values persist independently and are clamped to that model's supported levels |
+| Approve risky Builder actions | `extension_ui_request` confirmation and matching `extension_ui_response` | Available; the backend pauses before execution, the desktop shows a centered Approve/Cancel dialog, timeout/cancel defaults to denial, and arguments are not included in persisted approval entries |
 | Correlate requests and responses | Optional command `id`, echoed by responses | Available |
 | Detect completion | `agent_settled` | Available |
 
@@ -35,6 +37,13 @@ accepts either field as `planner` or `builder` while no task is active. The
 desktop must treat these as backend policy, not reproduce tool filtering in the
 frontend.
 
+Planner is a backend-enforced structure-only role: only `find`, `ls`, and Klerm
+handoff tools are exposed, and prior file/command results are redacted. Builder
+retains the configured tool set. Sensitive file access, a fifth changed file,
+potentially modifying shell commands, and unknown extension/MCP tools use the
+confirmation sub-protocol before execution. Approval decisions are persisted as
+credential-free `klerm-tool-approval` custom session entries.
+
 ## Remaining Desktop Operations
 
 The following operations need typed RPC commands before their corresponding UI
@@ -46,7 +55,13 @@ milestones. The CLI equivalents added for diagnostics are not desktop APIs.
 | Read/filter decision events | App 4 | Typed `KlermRouteDecision` records and deterministic filter fields |
 | Subscribe to decision events | App 4 | Append-only event with task/session correlation and no response body content |
 | Query provider authentication status | App 3 | Provider ID, configured boolean, auth method/source label; never credentials |
-| Query MCP server status | Later tooling milestone | Server ID, transport, connected/error state, tool count |
+
+MCP desktop status is intentionally not a credential surface. `get_mcp_status`
+returns server name, transport, enabled flag, lifecycle state, exposed tool names,
+skipped tools, and sanitized error text. `add_mcp_server` supports global/project
+stdio, Streamable HTTP, and SSE server definitions without secrets; the backend
+rejects credential-like URLs and headers. `reload_mcp_servers` reloads extension
+resources when no task is active and returns the same status snapshot.
 
 ## Protocol Requirements
 
@@ -86,9 +101,9 @@ capability negotiation, process shutdown, and incompatible protocol versions.
 ## Audit Conclusion
 
 The inherited RPC transport supports the Linux shell, core prompt lifecycle,
-session management, model controls, and project workspace through typed
-operations. Workspace attribution survives session rebinding without entering
-LLM context. The desktop backend remains incomplete: a standalone routing-state
-query, decision history/streaming, provider auth status, and MCP status still
-require explicit backend work. The Tauri frontend must not work around these
-gaps by invoking diagnostic CLI commands and parsing text.
+session management, model controls, project workspace, and MCP status/setup
+through typed operations. Workspace attribution survives session rebinding without
+entering LLM context. The desktop backend remains incomplete: a standalone
+routing-state query, decision history/streaming, and provider auth status still
+require explicit backend work. The Tauri frontend must not work around these gaps
+by invoking diagnostic CLI commands and parsing text.

@@ -30,7 +30,9 @@ import {
 	writeRawStdout,
 } from "../../core/output-guard.ts";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
+import type { McpServerSettings, McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
+import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -42,6 +44,8 @@ import type {
 	RpcEditorInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcMcpStatus,
+	RpcMcpToolStatus,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -94,6 +98,9 @@ const DESKTOP_COMMANDS = [
 	"open_workspace_editor",
 	"get_running_services",
 	"open_local_url",
+	"get_mcp_status",
+	"add_mcp_server",
+	"reload_mcp_servers",
 	"bash",
 	"abort_bash",
 	"get_state",
@@ -129,6 +136,26 @@ const DESKTOP_EVENTS = [
 ] as const;
 
 const WORKSPACE_ATTRIBUTION_CUSTOM_TYPE = "klerm-workspace-attribution";
+const MCP_SECRET_HEADER_NAME = /(?:authorization|cookie|token|key|secret|password|credential)/i;
+const MCP_SECRET_HEADER_VALUE = /(?:\bbearer\b|\bbasic\b|token|api[_-]?key|password|secret|[A-Za-z0-9_=-]{32,})/i;
+
+function getMcpTransport(settings: McpServerSettings): McpServerTransport {
+	return settings.transport ?? "stdio";
+}
+
+function sanitizeMcpError(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	return value
+		.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1********:********@")
+		.replace(/(authorization|token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=********")
+		.slice(0, 500);
+}
+
+function hasSecretHeader(headers: Record<string, string>): boolean {
+	return Object.entries(headers).some(
+		([name, value]) => MCP_SECRET_HEADER_NAME.test(name) || MCP_SECRET_HEADER_VALUE.test(value),
+	);
+}
 
 /**
  * Run in RPC mode.
@@ -189,6 +216,47 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		messageCount: session.messages.length,
 		pendingMessageCount: session.pendingMessageCount,
 	});
+
+	const getMcpStatusPayload = (): RpcMcpStatus => {
+		const configuredServers = session.settingsManager.getMcpServers();
+		const runtimeStatuses = new Map(
+			(getMcpRuntimeStatus(session.settingsManager) ?? []).map((status) => [status.name, status]),
+		);
+		const configuredNames = Object.keys(configuredServers).sort();
+		const servers = configuredNames.map((name) => {
+			const settings = configuredServers[name] ?? {};
+			const status = runtimeStatuses.get(name);
+			const toolDetails: RpcMcpToolStatus[] = (
+				status?.toolDetails ??
+				status?.tools.map((tool) => ({ name: tool })) ??
+				[]
+			).map((tool) => ({
+				name: tool.name,
+				serverName: name,
+				remoteName: "remoteName" in tool && typeof tool.remoteName === "string" ? tool.remoteName : tool.name,
+				title: "title" in tool && typeof tool.title === "string" ? tool.title : undefined,
+				description: "description" in tool && typeof tool.description === "string" ? tool.description : undefined,
+			}));
+			return {
+				name,
+				transport: status?.transport ?? getMcpTransport(settings),
+				enabled: status?.enabled ?? settings.enabled !== false,
+				state: status?.state ?? (settings.enabled === false ? "disabled" : "closed"),
+				tools: toolDetails,
+				skippedTools: status?.skippedTools ?? [],
+				error: sanitizeMcpError(status?.error),
+			};
+		});
+		const runtimeNames = [...runtimeStatuses.keys()].sort();
+		const reloadRequired =
+			configuredNames.join("\0") !== runtimeNames.join("\0") ||
+			servers.some((server) => server.enabled && (server.state === "closed" || server.state === "connecting"));
+		return {
+			servers,
+			toolCount: servers.reduce((count, server) => count + server.tools.length, 0),
+			reloadRequired,
+		};
+	};
 
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
@@ -890,6 +958,154 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				}
 				openLocalUrl(command.url);
 				return success(id, "open_local_url", { url: command.url });
+			}
+
+			case "get_mcp_status": {
+				return success(id, "get_mcp_status", getMcpStatusPayload());
+			}
+
+			case "add_mcp_server": {
+				if (session.isStreaming) {
+					return error(id, "add_mcp_server", "MCP servers cannot change during a task.", "TASK_ACTIVE");
+				}
+				const update = command.server;
+				if (!update || typeof update !== "object" || Array.isArray(update)) {
+					return error(id, "add_mcp_server", "An MCP server update object is required.", "INVALID_MCP_SERVER");
+				}
+				const scope: SettingsScope = update.scope === "project" ? "project" : "global";
+				if (update.scope !== undefined && update.scope !== "global" && update.scope !== "project") {
+					return error(id, "add_mcp_server", "MCP scope must be global or project.", "INVALID_MCP_SERVER");
+				}
+				if (scope === "project" && !session.settingsManager.isProjectTrusted()) {
+					return error(
+						id,
+						"add_mcp_server",
+						"Project is not trusted; refusing to write project MCP settings.",
+						"PROJECT_NOT_TRUSTED",
+					);
+				}
+				const name = typeof update.name === "string" ? update.name.trim() : "";
+				if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+					return error(
+						id,
+						"add_mcp_server",
+						"MCP server names may contain only letters, numbers, underscores, and hyphens.",
+						"INVALID_MCP_SERVER",
+					);
+				}
+				if (update.transport !== "stdio" && update.transport !== "http" && update.transport !== "sse") {
+					return error(id, "add_mcp_server", "MCP transport must be stdio, http, or sse.", "INVALID_MCP_SERVER");
+				}
+				let server: McpServerSettings;
+				const enabled = update.enabled ?? true;
+				if (typeof enabled !== "boolean") {
+					return error(id, "add_mcp_server", "MCP enabled must be a boolean.", "INVALID_MCP_SERVER");
+				}
+				if (update.transport === "stdio") {
+					const commandValue = typeof update.command === "string" ? update.command.trim() : "";
+					if (!commandValue) {
+						return error(id, "add_mcp_server", "A stdio MCP command is required.", "INVALID_MCP_SERVER");
+					}
+					if (update.url !== undefined || update.headers !== undefined) {
+						return error(
+							id,
+							"add_mcp_server",
+							"Stdio MCP servers cannot set URL or headers.",
+							"INVALID_MCP_SERVER",
+						);
+					}
+					if (
+						update.args !== undefined &&
+						(!Array.isArray(update.args) || !update.args.every((argument) => typeof argument === "string"))
+					) {
+						return error(id, "add_mcp_server", "MCP stdio args must be strings.", "INVALID_MCP_SERVER");
+					}
+					const existing = session.settingsManager.getMcpServersForScope(scope)[name];
+					server = {
+						transport: "stdio",
+						command: commandValue,
+						args: update.args ?? [],
+						...(existing?.transport !== "http" && existing?.transport !== "sse" && existing?.env
+							? { env: existing.env }
+							: {}),
+						enabled,
+					};
+				} else {
+					if (update.command !== undefined || update.args !== undefined) {
+						return error(
+							id,
+							"add_mcp_server",
+							"HTTP and SSE MCP servers cannot set command or args.",
+							"INVALID_MCP_SERVER",
+						);
+					}
+					let endpoint: URL;
+					try {
+						endpoint = new URL(typeof update.url === "string" ? update.url.trim() : "");
+						if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
+							throw new Error("unsupported protocol");
+					} catch {
+						return error(
+							id,
+							"add_mcp_server",
+							"MCP endpoint URL must be a valid http or https URL.",
+							"INVALID_MCP_SERVER",
+						);
+					}
+					if (endpoint.username || endpoint.password) {
+						return error(
+							id,
+							"add_mcp_server",
+							"MCP endpoint URL cannot contain credentials.",
+							"INVALID_MCP_SERVER",
+						);
+					}
+					if (
+						update.headers !== undefined &&
+						(update.headers === null ||
+							typeof update.headers !== "object" ||
+							Array.isArray(update.headers) ||
+							Object.values(update.headers).some((value) => typeof value !== "string"))
+					) {
+						return error(id, "add_mcp_server", "MCP headers must be string values.", "INVALID_MCP_SERVER");
+					}
+					const headers = update.headers ?? {};
+					if (hasSecretHeader(headers)) {
+						return error(
+							id,
+							"add_mcp_server",
+							"Desktop MCP setup cannot store credential-like headers.",
+							"MCP_SECRET_REJECTED",
+						);
+					}
+					const existing = session.settingsManager.getMcpServersForScope(scope)[name];
+					server = {
+						transport: update.transport,
+						url: endpoint.toString(),
+						...(Object.keys(headers).length > 0
+							? { headers }
+							: existing?.transport !== "stdio" && existing?.headers
+								? { headers: existing.headers }
+								: {}),
+						enabled,
+					};
+				}
+				session.settingsManager.setMcpServer(name, server, scope);
+				await session.settingsManager.flush();
+				return success(id, "add_mcp_server", {
+					name,
+					scope,
+					reloadRequired: true,
+					status: getMcpStatusPayload(),
+				});
+			}
+
+			case "reload_mcp_servers": {
+				if (session.isStreaming) {
+					return error(id, "reload_mcp_servers", "MCP servers cannot reload during a task.", "TASK_ACTIVE");
+				}
+				await session.reload();
+				return success(id, "reload_mcp_servers", getMcpStatusPayload());
 			}
 
 			// =================================================================

@@ -56,6 +56,9 @@ strings.
 | `open_workspace_editor` | Open the detected project root with one allowlisted editor |
 | `get_running_services` | Current Klerm backend plus Linux listeners whose process cwd is inside the project |
 | `open_local_url` | Open an `http` or `https` localhost URL |
+| `get_mcp_status` | Privacy-safe MCP server/tool status for desktop UI |
+| `add_mcp_server` | Add or update a credential-free MCP server definition |
+| `reload_mcp_servers` | Reload MCP extension resources and return the latest MCP status |
 
 Example status request:
 
@@ -105,6 +108,30 @@ command starts a fresh shell in the selected workspace, so shell state does not
 persist between commands and full PTY applications are not supported. The
 command and result remain auditable in session history but are excluded from LLM
 context.
+
+#### Desktop MCP
+
+`get_mcp_status` returns only display-safe MCP state: server name, transport,
+enabled flag, lifecycle state, exposed tool names, skipped tools, total tool
+count, reload-required state, and sanitized errors. It never returns environment
+values, request headers, API keys, or OAuth tokens.
+
+```json
+{"id":"mcp-1","type":"get_mcp_status"}
+```
+
+`add_mcp_server` writes a credential-free stdio, Streamable HTTP, or SSE server
+definition to global settings by default. Set `scope: "project"` only for trusted
+projects. Stdio servers use `command` and optional `args`; HTTP/SSE servers use
+`url` and optional non-secret `headers`. Credential-like URLs or headers are
+rejected with `MCP_SECRET_REJECTED` or `INVALID_MCP_SERVER`.
+
+```json
+{"id":"mcp-add","type":"add_mcp_server","server":{"name":"filesystem","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/project"]}}
+```
+
+After adding or updating a server, call `reload_mcp_servers` while no task is
+active. The response is the same status shape as `get_mcp_status`.
 
 ### Prompting
 
@@ -1309,6 +1336,11 @@ Emitted when an extension throws an error.
 ## Extension UI Protocol
 
 Extensions can request user interaction via `ctx.ui.select()`, `ctx.ui.confirm()`, etc. In RPC mode, these are translated into a request/response sub-protocol on top of the base command/event flow.
+
+Klerm also uses the same confirmation exchange to gate risky Builder tool calls.
+Clients must answer these confirmation requests; cancellation, timeout, or a
+missing interactive client denies the tool call. Persisted approval records
+contain only category, lane, role, tool name, and decision, never tool arguments.
 
 There are two categories of extension UI methods:
 
