@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Code2, FolderSearch, ShieldAlert, SquareTerminal } from "@lucide/svelte";
 	import type { RuntimeStatus } from "../lib/model.ts";
 
 	let {
@@ -8,10 +9,10 @@
 	}: { runtimeStatus: RuntimeStatus; onrefresh: () => void; onprompt: (prompt: string) => void } = $props();
 
 	const suggestions = [
-		"Create a simple website in this folder",
-		"Inspect this workspace and summarize folder sizes",
-		"Review this repo and list the riskiest files to change",
-		"Scaffold a local-first todo CLI here",
+		{ icon: "code", text: "Create a simple website in this folder" },
+		{ icon: "search", text: "Inspect this workspace and summarize folder sizes" },
+		{ icon: "risk", text: "Review this repo and list the riskiest files to change" },
+		{ icon: "terminal", text: "Scaffold an Agent 1-first todo CLI here" },
 	];
 
 	const dotClass = $derived(
@@ -43,16 +44,27 @@
 	<p
 		class="mx-auto mt-[18px] mb-[26px] max-w-[510px] text-[13px] leading-[1.7] text-muted narrow-520:my-3 narrow-520:text-[11px] short-650:mt-2.5 short-650:mb-4 short-650:leading-[1.45] short-500:hidden"
 	>
-		Choose an installed local model, then send a task. Klerm keeps the work and routing decisions on this machine.
+		Choose models for Agent 1 and Agent 2, then send a task. They can be local or cloud, but not the same model.
 	</p>
 	<div class="mb-4 grid w-[min(560px,100%)] grid-cols-2 gap-2 text-left narrow-520:grid-cols-1 short-500:hidden">
 		{#each suggestions as suggestion}
 			<button
 				type="button"
-				class="rounded-lg border border-line bg-[rgba(14,19,24,.62)] px-3 py-2.5 text-[10px] leading-[1.4] text-[#8c979f] cursor-pointer transition-colors hover:border-[#3b464e] hover:bg-[#11171c] hover:text-[#d7dde1]"
-				onclick={() => onprompt(suggestion)}
+				class="flex items-start gap-2 rounded-lg border border-line bg-[rgba(14,19,24,.62)] px-3 py-2.5 text-left text-[10px] leading-[1.4] text-[#8c979f] cursor-pointer transition-colors hover:border-[#3b464e] hover:bg-[#11171c] hover:text-[#d7dde1]"
+				onclick={() => onprompt(suggestion.text)}
 			>
-				{suggestion}
+				<span class="mt-0.5 shrink-0 text-[#78858d]">
+					{#if suggestion.icon === "code"}
+						<Code2 size={12} />
+					{:else if suggestion.icon === "search"}
+						<FolderSearch size={12} />
+					{:else if suggestion.icon === "risk"}
+						<ShieldAlert size={12} />
+					{:else}
+						<SquareTerminal size={12} />
+					{/if}
+				</span>
+				<span>{suggestion.text}</span>
 			</button>
 		{/each}
 	</div>

@@ -1363,7 +1363,7 @@ describe("InteractiveMode Klerm handoff status", () => {
 		};
 		(InteractiveMode as any).prototype.queueKlermHandoffCall.call(fakeThis, returnState);
 		(InteractiveMode as any).prototype.renderPendingKlermHandoffCall.call(fakeThis);
-		expect(stripAnsi(renderAll(fakeThis.chatContainer))).toContain("+ returned to local");
+		expect(stripAnsi(renderAll(fakeThis.chatContainer))).toContain("+ returned to Agent 1");
 		expect(fakeThis.chatContainer.children).toHaveLength(4);
 	});
 
@@ -1398,20 +1398,20 @@ describe("InteractiveMode Klerm handoff status", () => {
 
 		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
 		const compactOutput = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
-		expect(compactOutput).toContain("Local: ollama/qwen3.5:9b-q4_K_M");
-		expect(compactOutput).toContain("Frontier: openai-codex/gpt-5.5 (currently active)");
-		expect(compactOutput).toContain("Route: auto · frontier · openai-codex/gpt-5.5");
+		expect(compactOutput).toContain("Agent 1: ollama/qwen3.5:9b-q4_K_M");
+		expect(compactOutput).toContain("Agent 2: openai-codex/gpt-5.5 (currently active)");
+		expect(compactOutput).toContain("Route: Auto · Agent 2 · openai-codex/gpt-5.5");
 		expect(compactOutput).not.toContain("KLERM");
 		expect(compactOutput).not.toContain("Auto score:");
 
 		fakeThis.toolOutputExpanded = true;
 		(InteractiveMode as any).prototype.updateKlermRoutingStatus.call(fakeThis);
 		const output = stripAnsi(fakeThis.klermRoutingStatus.render(120).join("\n"));
-		expect(output).toContain("Last route: frontier · openai-codex/gpt-5.5");
-		expect(output).toContain("Auto score: frontier · capability 58% · confidence 62% · risk 71%");
+		expect(output).toContain("Last route: Agent 2 · openai-codex/gpt-5.5");
+		expect(output).toContain("Auto score: Agent 2 · capability 58% · confidence 62% · risk 71%");
 		expect(output).not.toContain("called other model");
 		expect(output).not.toContain("reason:");
-		expect(output).not.toContain("Delegation recommended: frontier");
+		expect(output).not.toContain("Delegation recommended: Agent 2");
 	});
 
 	test("hides the persistent panel when routing is unavailable", () => {

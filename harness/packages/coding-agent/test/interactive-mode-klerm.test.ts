@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import { OllamaClient } from "../src/extensions/ollama/client.ts";
+import { parseAgentSlashCommand } from "../src/klerm/agent-labels.ts";
 import { KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import {
@@ -50,6 +51,16 @@ type RoutingContext = {
 	updateKlermRoutingStatus: () => void;
 };
 
+type ModeContext = {
+	session: {
+		klermRouting: { setWorkerRole: (lane: "local" | "frontier", role: "planner" | "builder") => Promise<void> };
+	};
+	showError: (message: string) => void;
+	showStatus: (message: string) => void;
+	showSelector: () => void;
+	updateKlermRoutingStatus: () => void;
+};
+
 type SubmitContext = {
 	defaultEditor: { onSubmit?: (text: string) => Promise<void> };
 	editor: { setText: (text: string) => void };
@@ -61,6 +72,7 @@ type InteractiveModePrivate = {
 	handleKlermModelCommand(this: LaneContext, lane: "local" | "frontier", argument: string): Promise<void>;
 	handleKlermRoutingCommand(this: RoutingContext, argument: string): Promise<void>;
 	handleKlermActiveCommand(this: RoutingContext, argument: string): Promise<void>;
+	handleKlermModeCommand(this: ModeContext, argument: string): Promise<void>;
 	setupEditorSubmitHandler(this: SubmitContext): void;
 };
 
@@ -265,6 +277,21 @@ describe("interactive Klerm commands", () => {
 		expect(context.showError).toHaveBeenCalledWith("Usage: /token [on|off]");
 	});
 
+	it("parses /agent1, /agent 2, and hidden /local aliases", () => {
+		expect(parseAgentSlashCommand("/agent1")).toEqual({ lane: "local", argument: "" });
+		expect(parseAgentSlashCommand("/agent 1 model ollama/qwen:7b")).toEqual({
+			lane: "local",
+			argument: " model ollama/qwen:7b",
+		});
+		expect(parseAgentSlashCommand("/agent2 task hello")).toEqual({ lane: "frontier", argument: " task hello" });
+		expect(parseAgentSlashCommand("/agent 2")).toEqual({ lane: "frontier", argument: "" });
+		expect(parseAgentSlashCommand("/local model ollama/qwen:7b")).toEqual({
+			lane: "local",
+			argument: " model ollama/qwen:7b",
+		});
+		expect(parseAgentSlashCommand("/agent")).toBeUndefined();
+	});
+
 	it("parses selector, explicit model, legacy model, and full task remainder forms", () => {
 		expect(parseKlermLaneCommand("")).toEqual({ action: "selector" });
 		expect(parseKlermLaneCommand(" model ")).toEqual({ action: "selector" });
@@ -337,12 +364,12 @@ describe("interactive Klerm commands", () => {
 		});
 
 		await prototype.handleKlermModelCommand.call(context, "frontier", "task   ");
-		expect(context.showError).toHaveBeenCalledWith("Usage: /frontier task <prompt>");
+		expect(context.showError).toHaveBeenCalledWith("Usage: /agent2 task <prompt>");
 	});
 
 	it.each([
-		{ state: "isStreaming" as const, message: "Cannot run /local task while a response is in progress." },
-		{ state: "isCompacting" as const, message: "Cannot run /local task while compaction is in progress." },
+		{ state: "isStreaming" as const, message: "Cannot run /agent1 task while a response is in progress." },
+		{ state: "isCompacting" as const, message: "Cannot run /agent1 task while compaction is in progress." },
 	])("rejects a task while $state without queueing", async ({ state, message }) => {
 		const context = createLaneContext();
 		context.session[state] = true;
@@ -373,7 +400,7 @@ describe("interactive Klerm commands", () => {
 
 		await prototype.handleKlermModelCommand.call(context, "frontier", "status");
 
-		expect(context.showStatus).toHaveBeenCalledWith("Frontier model: google/gemini-3.5-flash-lite\nSelectable: yes");
+		expect(context.showStatus).toHaveBeenCalledWith("Agent 2 model: google/gemini-3.5-flash-lite\nSelectable: yes");
 	});
 
 	it("reports Ollama health, configured local model, and discovered models", async () => {
@@ -396,7 +423,7 @@ describe("interactive Klerm commands", () => {
 
 	it("updates fallback, handback, cycle budget, and includes controller status", async () => {
 		const routing = {
-			describe: vi.fn(() => "Routing: auto\nFrontier fallback: on"),
+			describe: vi.fn(() => "Routing: Auto\nAgent 2 fallback: on"),
 			setRoutingMode: vi.fn(async () => {}),
 			setAllowFrontierFallback: vi.fn(async () => {}),
 			setHandbackEnabled: vi.fn(async () => {}),
@@ -428,7 +455,59 @@ describe("interactive Klerm commands", () => {
 		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(1, 5);
 		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(2, 999);
 		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(3, 0);
-		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: auto\nFrontier fallback: on");
+		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: Auto\nAgent 2 fallback: on");
+	});
+
+	it("accepts Agent 1/2 aliases for routing and start lane", async () => {
+		const routing = {
+			describe: vi.fn(() => "Routing: Agent 1"),
+			setRoutingMode: vi.fn(async () => {}),
+			setAllowFrontierFallback: vi.fn(async () => {}),
+			setHandbackEnabled: vi.fn(async () => {}),
+			setMaxDelegationCycles: vi.fn(async () => {}),
+			setActiveStartLane: vi.fn(async () => {}),
+			config: { activeStartLane: "auto" as const },
+		};
+		const context: RoutingContext = {
+			session: { klermRouting: routing },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			showSelector: vi.fn(),
+			updateKlermRoutingStatus: vi.fn(),
+		};
+
+		await prototype.handleKlermRoutingCommand.call(context, "1");
+		await prototype.handleKlermRoutingCommand.call(context, "agent 2");
+		await prototype.handleKlermActiveCommand.call(context, "2");
+		await prototype.handleKlermActiveCommand.call(context, "frontier-local");
+
+		expect(routing.setRoutingMode).toHaveBeenNthCalledWith(1, "local");
+		expect(routing.setRoutingMode).toHaveBeenNthCalledWith(2, "frontier");
+		expect(routing.setActiveStartLane).toHaveBeenNthCalledWith(1, "frontier");
+		expect(routing.setActiveStartLane).toHaveBeenNthCalledWith(2, "frontier-local");
+		expect(context.showStatus).toHaveBeenCalledWith("Routing: Agent 1");
+		expect(context.showStatus).toHaveBeenCalledWith("Start lane: Agent 2 -> Agent 1");
+	});
+
+	it("sets Agent 1/2 role arguments and keeps legacy mode aliases", async () => {
+		const routing = { setWorkerRole: vi.fn(async () => {}) };
+		const context: ModeContext = {
+			session: { klermRouting: routing },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			showSelector: vi.fn(),
+			updateKlermRoutingStatus: vi.fn(),
+		};
+
+		await prototype.handleKlermModeCommand.call(context, "agent 1 planner");
+		await prototype.handleKlermModeCommand.call(context, "2 builder");
+		await prototype.handleKlermModeCommand.call(context, "frontier planner");
+
+		expect(routing.setWorkerRole).toHaveBeenNthCalledWith(1, "local", "planner");
+		expect(routing.setWorkerRole).toHaveBeenNthCalledWith(2, "frontier", "builder");
+		expect(routing.setWorkerRole).toHaveBeenNthCalledWith(3, "frontier", "planner");
+		expect(context.updateKlermRoutingStatus).toHaveBeenCalledTimes(3);
+		expect(context.showStatus).toHaveBeenLastCalledWith("Agent 2 role: planner");
 	});
 
 	it("shows and updates the active start lane", async () => {
@@ -453,10 +532,12 @@ describe("interactive Klerm commands", () => {
 		await prototype.handleKlermActiveCommand.call(context, "frontier-local");
 		await prototype.handleKlermActiveCommand.call(context, "invalid");
 
-		expect(context.showStatus).toHaveBeenNthCalledWith(1, "Start lane: auto");
+		expect(context.showStatus).toHaveBeenNthCalledWith(1, "Start lane: Auto");
 		expect(routing.setActiveStartLane).toHaveBeenCalledWith("frontier-local");
-		expect(context.showStatus).toHaveBeenNthCalledWith(2, "Start lane: frontier-local");
-		expect(context.showError).toHaveBeenCalledWith("Start lane must be auto, local, frontier, or frontier-local.");
+		expect(context.showStatus).toHaveBeenNthCalledWith(2, "Start lane: Agent 2 -> Agent 1");
+		expect(context.showError).toHaveBeenCalledWith(
+			"Start lane must be auto, Agent 1, Agent 2, or Agent 2 -> Agent 1.",
+		);
 	});
 
 	it("passes the untrimmed task command remainder through editor dispatch", async () => {

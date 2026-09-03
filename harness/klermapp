@@ -5,6 +5,8 @@ SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
 HARNESS="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 DESKTOP="$HARNESS/packages/desktop"
 BINARY="$DESKTOP/src-tauri/target/debug/klerm-desktop"
+RPC_ENTRY="$HARNESS/packages/coding-agent/dist/rpc-entry.js"
+RPC_SRC="$HARNESS/packages/coding-agent/src"
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/klerm"
 LAUNCH_CWD="$PWD"
 
@@ -13,6 +15,11 @@ mkdir -p "$LOG_DIR"
 if [[ ! -x "$BINARY" ]]; then
 	printf 'Klerm app is not built. Build it from %s first.\n' "$HARNESS" >&2
 	exit 1
+fi
+
+if [[ ! -f "$RPC_ENTRY" ]] || [[ -n "$(find "$RPC_SRC" -type f -newer "$RPC_ENTRY" -print -quit 2>/dev/null)" ]]; then
+	printf 'Rebuilding the Klerm desktop backend...\n'
+	npm --prefix "$HARNESS" run build:desktop-backend
 fi
 
 if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then

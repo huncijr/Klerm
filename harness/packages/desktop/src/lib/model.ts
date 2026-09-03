@@ -47,6 +47,10 @@ export interface RoutingTransition {
 export interface DesktopHandshake {
 	protocolVersion: number;
 	klermVersion: string;
+	capabilities?: {
+		commands: string[];
+		events: string[];
+	};
 	state: SessionState;
 	routingState?: RoutingState;
 }
@@ -136,6 +140,8 @@ export interface McpToolStatus {
 	description?: string;
 }
 
+export type McpColor = "green" | "blue" | "amber" | "red" | "purple" | "teal";
+
 export interface McpServerStatus {
 	name: string;
 	transport: "stdio" | "http" | "sse";
@@ -144,6 +150,8 @@ export interface McpServerStatus {
 	tools: McpToolStatus[];
 	skippedTools: string[];
 	error?: string;
+	label?: string;
+	color?: McpColor;
 }
 
 export interface McpStatus {
@@ -161,6 +169,8 @@ export interface McpServerUpdate {
 	url?: string;
 	headers?: Record<string, string>;
 	enabled?: boolean;
+	label?: string;
+	color?: McpColor;
 }
 
 export interface McpToolOption extends McpToolStatus {

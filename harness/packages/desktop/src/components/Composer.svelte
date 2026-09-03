@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { ChevronDown, Hammer, ListTodo, Send, Square } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
-	import type { McpToolOption, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
+	import {
+		filterMcpSuggestions,
+		findActiveMention,
+		MCP_COLOR_CSS,
+		type McpSuggestion,
+		splitMcpMentions,
+	} from "../lib/mcp-mentions.ts";
+	import type { McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
@@ -30,7 +37,7 @@
 		frontierThinkingLevels,
 		frontierThinkingValue,
 		frontierThinkingDisabled,
-		mcpTools,
+		mcpServers,
 		localRole,
 		frontierRole,
 		activeAgent,
@@ -69,7 +76,7 @@
 		frontierThinkingLevels: ThinkingLevel[];
 		frontierThinkingValue: ThinkingLevel;
 		frontierThinkingDisabled: boolean;
-		mcpTools: McpToolOption[];
+		mcpServers: McpServerStatus[];
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
 		activeAgent: "agent1" | "agent2";
@@ -97,19 +104,16 @@
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
 	let roleMenuOpen = $state(false);
+	let roleMenuRoot: HTMLElement | undefined = $state();
 	let mcpPickerOpen = $state(false);
 	let mcpQuery = $state("");
 	let mcpTokenStart = $state(-1);
 	let mcpSelectedIndex = $state(0);
 	const activeAgentLabel = $derived(activeAgent === "agent1" ? "Agent 1" : "Agent 2");
 	const activeRole = $derived(activeAgent === "agent1" ? localRole : frontierRole);
-	const filteredMcpTools = $derived.by(() => {
-		const query = mcpQuery.toLowerCase();
-		const matches = mcpTools.filter((tool) =>
-			`${tool.label} ${tool.name} ${tool.remoteName} ${tool.serverName}`.toLowerCase().includes(query),
-		);
-		return matches.slice(0, 7);
-	});
+	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
+	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
+	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
 
 	function resizePrompt(): void {
 		if (!promptEl) return;
@@ -153,11 +157,17 @@
 			event.preventDefault();
 			roleMenuOpen = false;
 		};
+		const closeRoleMenuOutside = (event: PointerEvent) => {
+			if (!roleMenuOpen || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
+			roleMenuOpen = false;
+		};
 		window.addEventListener("resize", resizePrompt);
 		window.addEventListener("keydown", closeRoleMenu);
+		document.addEventListener("pointerdown", closeRoleMenuOutside);
 		return () => {
 			window.removeEventListener("resize", resizePrompt);
 			window.removeEventListener("keydown", closeRoleMenu);
+			document.removeEventListener("pointerdown", closeRoleMenuOutside);
 		};
 	});
 
@@ -198,33 +208,30 @@
 	}
 
 	function updateMcpPicker(): void {
-		if (!promptEl || mcpTools.length === 0) {
+		if (!promptEl || mcpServers.length === 0) {
 			mcpPickerOpen = false;
 			return;
 		}
-		const cursor = promptEl.selectionStart;
-		const before = draft.slice(0, cursor);
-		const match = before.match(/(^|\s)@([A-Za-z0-9_-]*)$/);
-		if (!match || match.index === undefined) {
+		const mention = findActiveMention(draft, promptEl.selectionStart);
+		if (!mention) {
 			mcpPickerOpen = false;
 			return;
 		}
-		mcpTokenStart = match.index + (match[1]?.length ?? 0);
-		mcpQuery = match[2] ?? "";
+		mcpTokenStart = mention.start;
+		mcpQuery = mention.query;
 		mcpPickerOpen = true;
-		if (mcpSelectedIndex >= filteredMcpTools.length) mcpSelectedIndex = 0;
+		if (mcpSelectedIndex >= filteredMcpSuggestions.length) mcpSelectedIndex = 0;
 	}
 
-	function insertMcpTool(tool: McpToolOption | undefined): void {
-		if (!tool || !promptEl || mcpTokenStart < 0) return;
+	function insertMcpSuggestion(suggestion: McpSuggestion | undefined): void {
+		if (!suggestion || !promptEl || mcpTokenStart < 0) return;
 		const cursor = promptEl.selectionStart;
-		const insertion = `Use MCP tool ${tool.name}`;
-		draft = `${draft.slice(0, mcpTokenStart)}${insertion}${draft.slice(cursor)}`;
+		draft = `${draft.slice(0, mcpTokenStart)}${suggestion.insertText}${draft.slice(cursor)}`;
 		mcpPickerOpen = false;
 		mcpQuery = "";
 		mcpSelectedIndex = 0;
 		void tick().then(() => {
-			const position = mcpTokenStart + insertion.length;
+			const position = mcpTokenStart + suggestion.insertText.length;
 			promptEl?.focus();
 			promptEl?.setSelectionRange(position, position);
 		});
@@ -235,20 +242,21 @@
 		if (mcpPickerOpen) {
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
-				mcpSelectedIndex = filteredMcpTools.length === 0 ? 0 : (mcpSelectedIndex + 1) % filteredMcpTools.length;
+				mcpSelectedIndex =
+					filteredMcpSuggestions.length === 0 ? 0 : (mcpSelectedIndex + 1) % filteredMcpSuggestions.length;
 				return;
 			}
 			if (event.key === "ArrowUp") {
 				event.preventDefault();
 				mcpSelectedIndex =
-					filteredMcpTools.length === 0
+					filteredMcpSuggestions.length === 0
 						? 0
-						: (mcpSelectedIndex - 1 + filteredMcpTools.length) % filteredMcpTools.length;
+						: (mcpSelectedIndex - 1 + filteredMcpSuggestions.length) % filteredMcpSuggestions.length;
 				return;
 			}
 			if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey)) {
 				event.preventDefault();
-				insertMcpTool(filteredMcpTools[mcpSelectedIndex]);
+				insertMcpSuggestion(filteredMcpSuggestions[mcpSelectedIndex]);
 				return;
 			}
 			if (event.key === "Escape") {
@@ -327,37 +335,51 @@
 		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-4 narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[13px]">
 			{#if mcpPickerOpen}
 				<div class="absolute right-3 bottom-[56px] left-3 z-30 max-h-[220px] overflow-y-auto rounded-lg border border-[rgba(88,132,196,.45)] bg-[#0c131c] p-1.5 shadow-[0_18px_42px_rgba(0,0,0,.5)] narrow-520:bottom-[50px]">
-					{#if filteredMcpTools.length === 0}
-						<p class="m-0 px-2 py-2 font-mono text-[10px] text-[#71808a]">No MCP tools match @{mcpQuery}</p>
+					{#if filteredMcpSuggestions.length === 0}
+						<p class="m-0 px-2 py-2 font-mono text-[10px] text-[#71808a]">No MCP match @{mcpQuery}</p>
 					{:else}
-						{#each filteredMcpTools as tool, index (tool.name)}
+						{#each filteredMcpSuggestions as suggestion, index (`${suggestion.kind}-${suggestion.serverName}-${suggestion.remoteName ?? ""}`)}
 							<button
 								type="button"
 								class={`flex w-full cursor-pointer items-start gap-2 rounded-md border-0 px-2 py-2 text-left ${index === mcpSelectedIndex ? "bg-[rgba(88,132,196,.18)]" : "bg-transparent hover:bg-[#151e28]"}`}
 								onmousedown={(event) => event.preventDefault()}
-								onclick={() => insertMcpTool(tool)}
+								onclick={() => insertMcpSuggestion(suggestion)}
 							>
-								<span class="mt-1 h-1.75 w-1.75 shrink-0 rounded-full bg-[#6f96d4]"></span>
+								<span class="mt-1 h-1.75 w-1.75 shrink-0 rounded-full" style={`background: ${suggestion.color ? MCP_COLOR_CSS[suggestion.color] : "#6f96d4"}`}></span>
 								<span class="min-w-0 flex-1">
-									<strong class="block truncate font-mono text-[10px] text-[#d9e7ff]">{tool.serverName} / {tool.remoteName}</strong>
-									<small class="mt-0.5 block truncate font-mono text-[8px] text-[#758ca8]">{tool.name}</small>
+									<strong class="block truncate font-mono text-[10px] font-semibold" style={suggestion.color ? `color: ${MCP_COLOR_CSS[suggestion.color]}` : ""}>{suggestion.kind === "server" ? suggestion.displayName : `${suggestion.displayName} / ${suggestion.remoteName}`}</strong>
+									<small class="mt-0.5 block truncate font-mono text-[8px] text-[#758ca8]">{suggestion.kind === "server" ? suggestion.serverName : suggestion.toolName}</small>
 								</span>
 							</button>
 						{/each}
 					{/if}
 				</div>
 			{/if}
-			<textarea
-				bind:this={promptEl}
-				bind:value={draft}
-				rows="1"
-				placeholder="Describe a task for Klerm..."
-				aria-label="Task prompt"
-				class="block max-h-[min(150px,22dvh)] w-full resize-none border-0 bg-transparent pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] text-white outline-0 [scrollbar-width:thin] placeholder:text-[#56616a] narrow-520:max-h-[min(120px,20dvh)] narrow-520:py-3 narrow-520:text-[12px] short-650:max-h-[min(110px,20dvh)] short-500:max-h-[min(82px,18dvh)]"
-				onkeydown={handleKeydown}
-				oninput={handleInput}
-			></textarea>
-			<div class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
+			<div class="relative">
+				{#if hasMcpMentions}
+					<div
+						aria-hidden="true"
+						class="pointer-events-none absolute inset-0 overflow-hidden pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] whitespace-pre-wrap break-words narrow-520:py-3 narrow-520:text-[12px]"
+					>
+						{#each mentionSegments as segment, index (`${index}-${segment.text}`)}
+							{#if segment.mention}
+								<span class="font-semibold" style={`color: ${segment.mention.color ? MCP_COLOR_CSS[segment.mention.color] : "#8fb7e8"}`}>{segment.text}</span>
+							{:else}<span class="text-white">{segment.text}</span>{/if}
+						{/each}
+					</div>
+				{/if}
+				<textarea
+					bind:this={promptEl}
+					bind:value={draft}
+					rows="1"
+					placeholder="Describe a task for Klerm..."
+					aria-label="Task prompt"
+					class={`relative z-[1] block max-h-[min(150px,22dvh)] w-full resize-none border-0 bg-transparent pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] outline-0 [scrollbar-width:thin] placeholder:text-[#56616a] narrow-520:max-h-[min(120px,20dvh)] narrow-520:py-3 narrow-520:text-[12px] short-650:max-h-[min(110px,20dvh)] short-500:max-h-[min(82px,18dvh)] ${hasMcpMentions ? "text-transparent caret-white" : "text-white"}`}
+					onkeydown={handleKeydown}
+					oninput={handleInput}
+				></textarea>
+			</div>
+			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
 				<button
 					type="button"
 					aria-label="Configure worker roles"
@@ -379,7 +401,6 @@
 										type="button"
 										class={`rounded-md border px-2 py-1.5 font-mono text-[8px] capitalize cursor-pointer ${role === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`}
 										onclick={() => {
-											roleMenuOpen = false;
 											if (agent === "agent1") onlocalrolechange(option as WorkerRole);
 											else onfrontierrolechange(option as WorkerRole);
 										}}

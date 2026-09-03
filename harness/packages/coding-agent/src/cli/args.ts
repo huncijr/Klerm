@@ -284,7 +284,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} session list [--json]     List stored sessions with metadata
   ${APP_NAME} session timeline <id>     Print a structured session timeline
   ${APP_NAME} routing status [--json]   Show the persisted routing configuration
-	${APP_NAME} mode [lane role]           Show or update local/frontier planner or builder roles
+	${APP_NAME} mode [agent role]          Show or update Agent 1/2 planner or builder roles
   ${APP_NAME} config get [key]          Read the persisted Klerm routing configuration
   ${APP_NAME} config set <key> <value>  Update the persisted Klerm routing configuration
   ${APP_NAME} debug route <task>        Preview a mock routing decision
@@ -296,8 +296,8 @@ ${chalk.bold("Options:")}
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
   --routing <mode>               Klerm routing: off, local, frontier, or auto
-  --local-model <provider/model> Local router and worker model
-  --frontier-model <provider/model> Frontier worker model
+  --local-model <provider/model> Agent 1 model (any available model)
+  --frontier-model <provider/model> Agent 2 model (must differ from Agent 1)
   --allow-frontier-fallback      Allow explicit fallback when local routing is unavailable
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
@@ -376,7 +376,7 @@ ${chalk.bold("Examples:")}
   # Use model with provider prefix (no --provider needed)
   ${APP_NAME} --model openai/gpt-4o "Help me refactor this code"
 
-  # Use a local router/worker and frontier worker
+  # Use Agent 1 and Agent 2 workers
   ${APP_NAME} --routing auto --local-model ollama/qwen2.5-coder:7b --frontier-model openai-codex/gpt-5.5
 
   # Use model with thinking level shorthand

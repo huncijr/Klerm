@@ -1,4 +1,5 @@
 import { APP_NAME, getAgentDir } from "../../config.ts";
+import { agentLaneLabel, parseAgentLaneArgs, routingValueLabel } from "../agent-labels.ts";
 import {
 	type KlermActiveStartLane,
 	type KlermConfig,
@@ -9,7 +10,7 @@ import {
 
 const CONFIG_USAGE = `${APP_NAME} config get [key] [--json]\n  ${APP_NAME} config set <key> <value> [--json]`;
 const ROUTING_USAGE = `${APP_NAME} routing status [--json]`;
-const MODE_USAGE = `${APP_NAME} mode [--json]\n  ${APP_NAME} mode <local|frontier> <planner|builder> [--json]`;
+const MODE_USAGE = `${APP_NAME} mode [--json]\n  ${APP_NAME} mode <agent 1|agent 2|1|2> <planner|builder> [--json]`;
 
 const configKeys = {
 	routing: "routing",
@@ -84,23 +85,24 @@ export async function runKlermConfigCommand(
 		const positional = args.slice(1).filter((arg) => arg !== "--json");
 		if (positional.length === 0) {
 			const config = (await KlermConfigStore.load(options.agentDir ?? getAgentDir())).get();
-			const roles = { local: config.localRole, frontier: config.frontierRole };
-			stdout(json ? JSON.stringify(roles, null, 2) : `Local role: ${roles.local}\nFrontier role: ${roles.frontier}`);
+			const roles = { agent1: config.localRole, agent2: config.frontierRole };
+			stdout(json ? JSON.stringify(roles, null, 2) : `Agent 1 role: ${roles.agent1}\nAgent 2 role: ${roles.agent2}`);
 			return true;
 		}
-		const [lane, role] = positional;
-		if (
-			positional.length !== 2 ||
-			(lane !== "local" && lane !== "frontier") ||
-			(role !== "planner" && role !== "builder")
-		) {
+		const parsedLane = parseAgentLaneArgs(positional);
+		const role = parsedLane ? positional[parsedLane.roleIndex]?.toLowerCase() : undefined;
+		if (!parsedLane || positional.length !== parsedLane.roleIndex + 1 || (role !== "planner" && role !== "builder")) {
 			stderr(`Error: Invalid mode command.\nUsage:\n  ${MODE_USAGE}`);
 			process.exitCode = 1;
 			return true;
 		}
 		const store = await KlermConfigStore.load(options.agentDir ?? getAgentDir());
-		await store.update(lane === "local" ? { localRole: role } : { frontierRole: role });
-		stdout(json ? JSON.stringify({ lane, role, path: store.path }, null, 2) : `Updated ${lane} role=${role}`);
+		await store.update(parsedLane.lane === "local" ? { localRole: role } : { frontierRole: role });
+		stdout(
+			json
+				? JSON.stringify({ agent: parsedLane.lane === "local" ? 1 : 2, role, path: store.path }, null, 2)
+				: `Updated ${agentLaneLabel(parsedLane.lane)} role=${role}`,
+		);
 		return true;
 	}
 
@@ -129,11 +131,11 @@ export async function runKlermConfigCommand(
 			json
 				? JSON.stringify(status, null, 2)
 				: [
-						`Routing: ${status.mode}`,
-						`Active start lane: ${status.activeStartLane}`,
-						`Local model: ${status.localModel ?? "not set"}`,
-						`Frontier model: ${status.frontierModel ?? "not set"}`,
-						`Frontier fallback: ${status.allowFrontierFallback ? "enabled" : "disabled"}`,
+						`Routing: ${routingValueLabel(status.mode)}`,
+						`Active start lane: ${routingValueLabel(status.activeStartLane)}`,
+						`Agent 1 model: ${status.localModel ?? "not set"}`,
+						`Agent 2 model: ${status.frontierModel ?? "not set"}`,
+						`Agent 2 fallback: ${status.allowFrontierFallback ? "enabled" : "disabled"}`,
 						`Handback: ${status.handbackEnabled ? "enabled" : "disabled"}`,
 						`Maximum delegation cycles: ${status.maxDelegationCycles}`,
 					].join("\n"),

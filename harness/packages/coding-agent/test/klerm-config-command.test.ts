@@ -56,9 +56,13 @@ describe("Klerm config commands", () => {
 		expect(JSON.parse(output[0])).toMatchObject({ mode: "off", localModel: "ollama/qwen3", handbackEnabled: true });
 	});
 
-	it("persists and reports per-lane worker roles", async () => {
+	it("persists and reports Agent 1/2 worker roles", async () => {
 		const output: string[] = [];
-		await runKlermConfigCommand(["mode", "local", "planner"], {
+		await runKlermConfigCommand(["mode", "agent", "1", "planner"], {
+			agentDir,
+			stdout: (message) => output.push(message),
+		});
+		await runKlermConfigCommand(["mode", "2", "builder", "--json"], {
 			agentDir,
 			stdout: (message) => output.push(message),
 		});
@@ -71,7 +75,19 @@ describe("Klerm config commands", () => {
 			localRole: "planner",
 			frontierRole: "builder",
 		});
-		expect(JSON.parse(output[1])).toEqual({ local: "planner", frontier: "builder" });
+		expect(output[0]).toContain("Updated Agent 1 role=planner");
+		expect(JSON.parse(output[1])).toMatchObject({ agent: 2, role: "builder" });
+		expect(JSON.parse(output[2])).toEqual({ agent1: "planner", agent2: "builder" });
+	});
+
+	it("keeps legacy local/frontier mode aliases", async () => {
+		await runKlermConfigCommand(["mode", "local", "planner"], { agentDir, stdout: () => {} });
+		await runKlermConfigCommand(["mode", "frontier", "planner"], { agentDir, stdout: () => {} });
+
+		expect(JSON.parse(readFileSync(join(agentDir, "klerm.json"), "utf8"))).toMatchObject({
+			localRole: "planner",
+			frontierRole: "planner",
+		});
 	});
 
 	it("rejects invalid values without modifying config", async () => {

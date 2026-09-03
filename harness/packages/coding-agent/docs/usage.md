@@ -231,8 +231,9 @@ klerm doctor [--json]                # Health check: storage, config, decision l
 klerm session list [--json]          # List stored sessions with metadata
 klerm session timeline <session>     # Structured timeline of one session (id, prefix, or file path)
 klerm routing status [--json]        # Show the persisted routing configuration
-klerm mode [--json]                  # Show persisted local/frontier worker roles
-klerm mode <lane> <planner|builder>  # Update one worker role
+klerm mode [--json]                  # Show persisted Agent 1/2 worker roles
+klerm mode <agent 1|agent 2|1|2> <planner|builder>
+                                     # Update one worker role
 klerm config get [key] [--json]      # Read persisted Klerm routing config
 klerm config set <key> <value>       # Update persisted Klerm routing config
 klerm debug decisions [flags]        # Print, filter, summarize, or export routing decisions
@@ -245,10 +246,12 @@ servers are reported, and routing is not disabled. Exit codes: `0` all pass, `2`
 warnings only, `1` failure. It never calls models, providers, or prints
 credentials.
 
-Worker roles default to `builder`. In `planner`, Klerm exposes only `read`,
-`grep`, `find`, `ls`, and the applicable delegation/return tools to that lane.
-This blocks file mutation, shell execution, extension tools, and MCP tools at
-the backend tool boundary rather than relying only on model instructions.
+Worker roles default to `builder`. In `planner`, Klerm exposes only `find`,
+`ls`, and the applicable delegation/return tools to that lane. Prior file and
+command outputs are redacted from planner context. In `builder`, normal coding
+tools remain available, while sensitive file access, broad edits, modifying
+shell commands, and unknown extension/MCP tools require interactive approval.
+Non-interactive modes default to denial when approval cannot be requested.
 
 `klerm session list` lists stored sessions sorted by modification time with
 their id, message count, display name (or first message), and working

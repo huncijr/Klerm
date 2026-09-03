@@ -229,7 +229,15 @@ describe("Klerm desktop RPC contract", () => {
 			const addedMcp = await send({
 				id: "mcp-add",
 				type: "add_mcp_server",
-				server: { name: "filesystem", transport: "stdio", command: "node", args: ["server.js"], enabled: false },
+				server: {
+					name: "filesystem",
+					transport: "stdio",
+					command: "node",
+					args: ["server.js"],
+					enabled: false,
+					label: "Google Maps",
+					color: "green",
+				},
 			});
 			expect(addedMcp).toMatchObject({
 				success: true,
@@ -245,6 +253,8 @@ describe("Klerm desktop RPC contract", () => {
 								enabled: false,
 								state: "disabled",
 								tools: [],
+								label: "Google Maps",
+								color: "green",
 							},
 						],
 					},
@@ -255,7 +265,16 @@ describe("Klerm desktop RPC contract", () => {
 				command: "node",
 				args: ["server.js"],
 				enabled: false,
+				label: "Google Maps",
+				color: "green",
 			});
+
+			const rejectedMcpColor = await send({
+				id: "mcp-color",
+				type: "add_mcp_server",
+				server: { name: "filesystem", transport: "stdio", command: "node", color: "chartreuse" },
+			});
+			expect(rejectedMcpColor).toMatchObject({ success: false, code: "INVALID_MCP_SERVER" });
 
 			const rejectedMcpSecret = await send({
 				id: "mcp-secret",

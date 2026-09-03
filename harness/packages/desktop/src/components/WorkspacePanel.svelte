@@ -65,8 +65,10 @@
 	function actorLabel(file: WorkspaceFileStatus): string {
 		const actor = file.attribution;
 		if (actor.source === "manual" || actor.source === "external") return actor.source;
+		const lane = actor.lane === "local" ? "Agent 1" : actor.lane === "frontier" ? "Agent 2" : actor.lane;
+		const source = actor.source === "local" ? "Agent 1" : actor.source === "frontier" ? "Agent 2" : actor.source;
 		const model = actor.provider && actor.model ? `${actor.provider}/${actor.model}` : actor.model;
-		return [actor.lane ?? actor.source, model].filter(Boolean).join(" / ");
+		return [lane ?? source, model].filter(Boolean).join(" / ");
 	}
 
 	function actorClass(file: WorkspaceFileStatus): string {

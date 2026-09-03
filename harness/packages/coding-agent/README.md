@@ -31,44 +31,54 @@ Run directly from source in any project directory:
 Use `/model` for direct model selection or configure the two A2A lanes:
 
 ```text
-/local model ollama/qwen3.5:9b-q4_K_M
-/frontier model openai-codex/gpt-5.5
+/agent1 model ollama/qwen3.5:9b-q4_K_M
+/agent2 model openai-codex/gpt-5.5
 /routing auto
 ```
 
 Useful commands:
 
 ```text
-/local
-/frontier
+/agent1
+/agent2
+/agent 1
+/agent 2
 /routing off
-/routing local
-/routing frontier
+/routing 1
+/routing 2
 /routing auto
 /routing fallback on
 /routing handback on
 /routing cycles 3
 /routing status
 /active auto
-/active local
-/active frontier
+/active 1
+/active 2
 /active frontier-local
 /mode
-/mode local planner
-/mode frontier builder
+/mode agent 1 planner
+/mode agent 2 builder
+/mode 1 planner
+/mode 2 builder
 /klerm
 ```
 
-`planner` is read-only and receives only built-in read/search tools plus Klerm
-delegation and return tools. `builder` receives the configured coding tools.
-Submitting `/mode` without arguments opens an interactive Local/Frontier
-Plan/Build selector.
+`planner` is structure-only and receives only `find`, `ls`, and Klerm
+delegation/return tools. Prior file and command outputs are hidden from planner
+context. `builder` receives the configured coding tools and requests approval
+before sensitive, broad, potentially modifying, or unknown external actions.
+Submitting `/mode` without arguments opens an interactive Agent 1/Agent 2
+Plan/Build selector. `/agent1` and `/agent2` (also `/agent 1` and `/agent 2`)
+assign Agent 1 and Agent 2 to any available model, including two local or two
+cloud models, as long as they are not the same `provider/id`. Both agents
+receive a peer lookup of the other model's runtime, strength band, and relative
+capability.
 
 One-task route overrides do not change the persisted routing mode:
 
 ```text
-/local task <prompt>
-/frontier task <prompt>
+/agent1 task <prompt>
+/agent2 task <prompt>
 ```
 
 ## Delegation

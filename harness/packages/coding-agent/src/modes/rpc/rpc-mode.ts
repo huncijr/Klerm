@@ -30,7 +30,13 @@ import {
 	writeRawStdout,
 } from "../../core/output-guard.ts";
 import { type SessionInfo, SessionManager } from "../../core/session-manager.ts";
-import type { McpServerSettings, McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
+import {
+	MCP_SERVER_COLORS,
+	type McpServerColor,
+	type McpServerSettings,
+	type McpServerTransport,
+	type SettingsScope,
+} from "../../core/settings-manager.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
@@ -157,6 +163,27 @@ function hasSecretHeader(headers: Record<string, string>): boolean {
 	);
 }
 
+function parseMcpAppearance(
+	update: { label?: unknown; color?: unknown },
+	existing?: McpServerSettings,
+): { label?: string; color?: McpServerColor } | string {
+	let label = existing?.label;
+	if (update.label !== undefined) {
+		if (typeof update.label !== "string") return "MCP label must be a string.";
+		const trimmed = update.label.trim();
+		if (trimmed.length > 64) return "MCP label must be 64 characters or fewer.";
+		label = trimmed || undefined;
+	}
+	let color = existing?.color;
+	if (update.color !== undefined) {
+		if (typeof update.color !== "string" || !MCP_SERVER_COLORS.includes(update.color as McpServerColor)) {
+			return "MCP color must be green, blue, amber, red, purple, or teal.";
+		}
+		color = update.color as McpServerColor;
+	}
+	return { ...(label ? { label } : {}), ...(color ? { color } : {}) };
+}
+
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -245,6 +272,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				tools: toolDetails,
 				skippedTools: status?.skippedTools ?? [],
 				error: sanitizeMcpError(status?.error),
+				...(settings.label ? { label: settings.label } : {}),
+				...(settings.color ? { color: settings.color } : {}),
 			};
 		});
 		const runtimeNames = [...runtimeStatuses.keys()].sort();
@@ -1001,6 +1030,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				if (typeof enabled !== "boolean") {
 					return error(id, "add_mcp_server", "MCP enabled must be a boolean.", "INVALID_MCP_SERVER");
 				}
+				const existing = session.settingsManager.getMcpServersForScope(scope)[name];
+				const appearance = parseMcpAppearance(update, existing);
+				if (typeof appearance === "string") {
+					return error(id, "add_mcp_server", appearance, "INVALID_MCP_SERVER");
+				}
 				if (update.transport === "stdio") {
 					const commandValue = typeof update.command === "string" ? update.command.trim() : "";
 					if (!commandValue) {
@@ -1020,7 +1054,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					) {
 						return error(id, "add_mcp_server", "MCP stdio args must be strings.", "INVALID_MCP_SERVER");
 					}
-					const existing = session.settingsManager.getMcpServersForScope(scope)[name];
 					server = {
 						transport: "stdio",
 						command: commandValue,
@@ -1029,6 +1062,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 							? { env: existing.env }
 							: {}),
 						enabled,
+						...appearance,
 					};
 				} else {
 					if (update.command !== undefined || update.args !== undefined) {
@@ -1078,7 +1112,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 							"MCP_SECRET_REJECTED",
 						);
 					}
-					const existing = session.settingsManager.getMcpServersForScope(scope)[name];
 					server = {
 						transport: update.transport,
 						url: endpoint.toString(),
@@ -1088,6 +1121,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 								? { headers: existing.headers }
 								: {}),
 						enabled,
+						...appearance,
 					};
 				}
 				session.settingsManager.setMcpServer(name, server, scope);

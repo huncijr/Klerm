@@ -91,11 +91,11 @@ Unsloth prepares and exports models but does not run a distinct inference API.
 Klerm detects an Unsloth model through the server that hosts it, such as vLLM,
 LM Studio, or llama.cpp.
 
-Configure the local and frontier workers in the interactive CLI:
+Configure Agent 1 and Agent 2 in the interactive CLI:
 
 ```text
-/local model ollama/qwen3.5:9b-q4_K_M
-/frontier model openai-codex/gpt-5.5
+/agent1 model ollama/qwen3.5:9b-q4_K_M
+/agent2 model openai-codex/gpt-5.5
 /routing fallback on
 /routing handback on
 /routing cycles 3
@@ -105,36 +105,38 @@ Configure the local and frontier workers in the interactive CLI:
 
 | Command | Purpose |
 |---|---|
-| `/local` or `/local model` | Open the local model selector. |
-| `/local model <provider/model>` | Persist the local router/worker model. |
-| `/frontier` or `/frontier model` | Open the frontier model selector. |
-| `/frontier model <provider/model>` | Persist the frontier worker model. |
+| `/agent1` or `/agent 1` | Open the Agent 1 model selector (any available model). |
+| `/agent1 model <provider/model>` | Persist the Agent 1 model. |
+| `/agent2` or `/agent 2` | Open the Agent 2 model selector (any other available model). |
+| `/agent2 model <provider/model>` | Persist the Agent 2 model. Must differ from Agent 1. |
 | `/model <provider/model>` | Set the direct model used when routing is `off`. |
-| `/routing auto` | Start locally, then delegate complex or risky work to frontier. |
-| `/routing local` | Send normal prompts to the local worker. |
-| `/routing frontier` | Send normal prompts directly to the frontier worker. |
+| `/routing auto` | Start Agent 1, then delegate complex work to Agent 2 when it is stronger. |
+| `/routing local` or `/routing 1` | Send normal prompts to Agent 1. |
+| `/routing frontier` or `/routing 2` | Send normal prompts to Agent 2. |
 | `/routing off` | Disable A2A routing and use the direct model. |
-| `/routing fallback on\|off` | Control frontier fallback when automatic local routing cannot start. |
+| `/routing fallback on\|off` | Control Agent 2 fallback when Agent 1 routing cannot start. |
 | `/routing handback on\|off` | Control whether local-owned frontier work returns to local for verification. |
 | `/routing cycles <1-20>` | Set the maximum number of frontier visits in one task. |
-| `/local task <prompt>` | Force one task to start locally. |
-| `/frontier task <prompt>` | Force one task to start on the frontier worker. |
-| `/mode` | Open the Local and Frontier Plan/Build selector. |
-| `/mode local planner\|builder` | Set the Local lane role. |
-| `/mode frontier planner\|builder` | Set the Frontier lane role. |
+| `/agent1 task <prompt>` | Force one task to start on Agent 1. |
+| `/agent2 task <prompt>` | Force one task to start on Agent 2. |
+| `/mode` | Open the Agent 1/Agent 2 Plan/Build selector. |
+| `/mode agent 1 planner\|builder` | Set the Agent 1 role. |
+| `/mode agent 2 planner\|builder` | Set the Agent 2 role. |
+| `/mode 1 planner\|builder` | Shorthand for Agent 1 role. |
+| `/mode 2 planner\|builder` | Shorthand for Agent 2 role. |
 | `/klerm` or `/routing status` | Show the current routing configuration and state. |
 
 The persistent status block above the chat input shows the selected models,
 routing mode, active route, and handoff state:
 
 ```text
-Local model: ollama/qwen3.5:9b-q4_K_M (currently active)
-Frontier model: openai-codex/gpt-5.5
+Agent 1 model: ollama/qwen3.5:9b-q4_K_M (currently active)
+Agent 2 model: openai-codex/gpt-5.5
 Routing: auto
 Return to local: on
 Delegation cycles: 0/3
-Active route: local · ollama/qwen3.5:9b-q4_K_M
-Delegation recommended: frontier
+Active route: Agent 1 · ollama/qwen3.5:9b-q4_K_M
+Delegation recommended: Agent 2
 ```
 
 ## Automatic Delegation Recommendation
@@ -148,14 +150,14 @@ build/development setup, security-sensitive changes, architecture, and
 repository-scale work. This sets `delegationRecommended` but never changes the
 initial route away from local.
 
-For a recommended task, the local system prompt instructs the model to inspect
+For a recommended task, the Agent 1 system prompt instructs the model to inspect
 only enough context to prepare a handoff and call `delegate_frontier` before
 creating or modifying many files. If its first completed local response omits
 the native tool call, Klerm enforces the handoff with trigger
 `recommended-enforcement`. A successful frontier result returns to local for
 verification when handback is enabled.
 
-During a local-to-frontier handoff, Klerm inserts a yellow function-call style
+During an Agent 1-to-Agent 2 handoff, Klerm inserts a yellow function-call style
 notice directly before the frontier response:
 
 ```text
@@ -170,7 +172,7 @@ After the task completes, the persistent panel reports the completed route
 without implying that the handoff ran in direct mode:
 
 ```text
-Last route: frontier · openai-codex/gpt-5.5
+Last route: Agent 2 · openai-codex/gpt-5.5
 ```
 
 ## A2A Delegation
@@ -305,7 +307,7 @@ the RPC bridge and domain types stay as plain TypeScript under
 `packages/desktop/src/lib/`. It uses the versioned JSONL RPC backend, discovers
 installed local models, persists the selected local model, lists and resumes
 sessions, streams responses and tool activity, and can stop an active task. Its
-custom local and frontier selectors sit below the prompt with a smaller routing
+custom Agent 1 and Agent 2 selectors sit below the prompt with a smaller routing
 control; entering a draft keeps the empty-state introduction visible until the
 first prompt is accepted. Assistant responses identify the actual model directly
 above Markdown-lite headings, emphasis, lists, inline code, and fenced code
@@ -314,22 +316,25 @@ generation, a working spinner is visible and a square stop control replaces Send
 in the same position. Enter inserts a line break; Send or Ctrl/Cmd+Enter submits
 the prompt. ArrowUp/ArrowDown recall prior prompts at the beginning/end of the
 composer. Sent prompts expose `Edit`, `Save & rerun`, and `Cancel`; rerunning
-appends a corrected prompt without rewriting the persisted original. Local
-and Frontier each show a compact effort slider below their model selector only
+appends a corrected prompt without rewriting the persisted original. Agent 1
+and Agent 2 each show a compact effort slider below their model selector only
 when that model supports effort. Each slider exposes only supported levels, stores
 its value separately, and routing applies the matching value when changing
 lanes. Routing selection updates routing mode and active-start policy together
-so Frontier starts on the configured frontier model and Frontier -> Local
-preserves local handback.
+so Agent 2 starts on the configured frontier model and Agent 2 -> Agent 1
+preserves handback.
 
 Four starter-task chips on the empty workspace fill the composer without
-submitting. A compact control beside Send configures Local and Frontier as
-Plan or Build independently. Plan is enforced by the backend with a read-only
-tool allowlist (`read`, `grep`, `find`, `ls`, and Klerm handoff tools); Build
-retains the configured coding tools. Both role values persist in `klerm.json`.
+submitting. A compact control beside Send configures Agent 1 and Agent 2 as
+Plan or Build independently. Plan is enforced by the backend with a
+structure-only allowlist (`find`, `ls`, and Klerm handoff tools), and prior file
+or command output is hidden when entering that role. Build retains the full
+configured coding tools and asks for approval before sensitive file access,
+broad edits, modifying shell commands, or unknown external tools. Both role
+values persist in `klerm.json`.
 The same settings are available through `klerm mode`, TUI `/mode`, and typed
-`set_klerm_config` updates. The active lane's `Mode: Plan` or `Mode: Build`
-label stays visible above the prompt; entering `/mode` and pressing Enter opens
+`set_klerm_config` updates. The active agent's `Agent 1 Mode: Plan` or
+`Agent 2 Mode: Build` label stays visible above the prompt; entering `/mode` and pressing Enter opens
 the same role menu without sending the command to a model.
 
 The Workspace title and sidebar sessions can be
@@ -340,7 +345,7 @@ retry, and error activity render in one chronological feed: neutral edit cards
 with expandable red removed lines and green added lines, green write cards, blue
 cards for MCP calls, amber arrow cards for initial routing,
 delegation, and return transitions with reasons, amber cards for in-flight
-provider retries, red cards for provider failures, frontier fallback, and
+provider retries, red cards for provider failures, Agent 2 fallback, and
 errors, and an outcome card after each settled, failed, or stopped task. Every
 card shows its kind label
 above the summary line, with expandable details below. File cards are compressed

@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
+import { agentLaneLabel, routingValueLabel } from "../agent-labels.ts";
 import type {
 	KlermActiveStartLane,
 	KlermConfig,
@@ -12,7 +13,7 @@ import type {
 	KlermRoutingMode,
 	KlermWorkerRole,
 } from "../config.ts";
-import { isLocalProviderId } from "../local-providers.ts";
+import { compareStrength, describeModelProfile, formatPeerLookup } from "../model-profile.ts";
 import { hasKlermResponseUsage } from "../response-usage.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
@@ -26,8 +27,6 @@ import type {
 } from "./types.ts";
 
 const PLANNER_TOOL_NAMES = new Set([
-	"read",
-	"grep",
 	"find",
 	"ls",
 	"delegate_frontier",
@@ -37,15 +36,15 @@ const PLANNER_TOOL_NAMES = new Set([
 ]);
 
 const delegateSchema = Type.Object({
-	reason: Type.String({ maxLength: 2000, description: "Why the local worker needs the frontier worker" }),
+	reason: Type.String({ maxLength: 2000, description: "Why Agent 1 needs Agent 2" }),
 	summary: Type.String({ maxLength: 12000, description: "Work already completed and relevant findings" }),
-	remainingWork: Type.String({ maxLength: 12000, description: "What the frontier worker should do next" }),
+	remainingWork: Type.String({ maxLength: 12000, description: "What Agent 2 should do next" }),
 });
 
 const delegateLocalSchema = Type.Object({
-	reason: Type.String({ maxLength: 2000, description: "Why the frontier worker needs the local worker" }),
-	summary: Type.String({ maxLength: 12000, description: "Frontier work already completed and relevant findings" }),
-	remainingWork: Type.String({ maxLength: 12000, description: "The focused work the local worker should do next" }),
+	reason: Type.String({ maxLength: 2000, description: "Why Agent 2 needs Agent 1" }),
+	summary: Type.String({ maxLength: 12000, description: "Agent 2 work already completed and relevant findings" }),
+	remainingWork: Type.String({ maxLength: 12000, description: "The focused work Agent 1 should do next" }),
 });
 
 const returnToLocalSchema = Type.Object({
@@ -264,6 +263,30 @@ export function projectKlermHandoffContext(
 	return changed ? projected : messages;
 }
 
+const PLANNER_VISIBLE_TOOL_RESULTS = new Set([
+	"find",
+	"ls",
+	"delegate_frontier",
+	"delegate_local",
+	"return_to_local",
+	"return_to_frontier",
+]);
+
+/** Keep transcript structure valid while hiding file contents and command output from planners. */
+export function projectKlermPlannerContext(messages: AgentMessage[]): AgentMessage[] {
+	let changed = false;
+	const projected = messages.map((message): AgentMessage => {
+		if (message.role !== "toolResult" || PLANNER_VISIBLE_TOOL_RESULTS.has(message.toolName)) return message;
+		changed = true;
+		return {
+			...message,
+			content: [{ type: "text", text: `[${message.toolName} output omitted in structure-only Planner mode]` }],
+			details: undefined,
+		};
+	});
+	return changed ? projected : messages;
+}
+
 function explicitlyRequestsFrontier(task: string): boolean {
 	if (/\bdelegate_frontier\b|\bdelegate\s+task\b/iu.test(task)) return true;
 	const target = /\b(frontier|codex|claude|gemini)\b|(?:másik|masik)\s+modell?/iu;
@@ -272,7 +295,10 @@ function explicitlyRequestsFrontier(task: string): boolean {
 	return target.test(task) && action.test(task);
 }
 
-function assessDelegationRecommendation(task: string): {
+function assessDelegationRecommendation(
+	task: string,
+	peerIsStronger: boolean,
+): {
 	delegationRecommended: boolean;
 	complexity: number;
 	risk: number;
@@ -328,13 +354,18 @@ function assessDelegationRecommendation(task: string): {
 		complexity = Math.max(complexity, 7);
 		factors.push("long multi-part task description");
 	}
-	const delegationRecommended = complexity >= 7 || risk >= 0.65;
+	const complex = complexity >= 7 || risk >= 0.65;
+	const delegationRecommended = complex && peerIsStronger;
 	return {
 		delegationRecommended,
 		complexity,
 		risk,
 		factors,
-		policyTriggers: delegationRecommended ? ["deterministic complexity policy recommends frontier"] : [],
+		policyTriggers: delegationRecommended
+			? ["deterministic complexity policy recommends stronger Agent 2"]
+			: complex
+				? ["deterministic complexity policy skipped because Agent 2 is not stronger"]
+				: [],
 	};
 }
 
@@ -418,11 +449,35 @@ export class KlermRoutingController {
 		return this.config.maxDelegationCycles > 0 && cycle >= this.config.maxDelegationCycles;
 	}
 
-	private hasAvailableFrontierModel(): boolean {
-		const reference = this.config.frontierModel;
+	private hasAvailablePeerModel(lane: "local" | "frontier"): boolean {
+		const reference = lane === "local" ? this.config.localModel : this.config.frontierModel;
 		if (!reference) return false;
-		const model = findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]);
-		return model !== undefined && !isLocalProviderId(model.provider);
+		return findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]) !== undefined;
+	}
+
+	private peerIsStronger(): boolean {
+		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
+		const self = describeModelProfile(
+			this.config.localModel,
+			this.config.localModel ? findExactModelReferenceMatch(this.config.localModel, snapshot) : undefined,
+		);
+		const other = describeModelProfile(
+			this.config.frontierModel,
+			this.config.frontierModel ? findExactModelReferenceMatch(this.config.frontierModel, snapshot) : undefined,
+		);
+		return compareStrength(self, other) === "stronger";
+	}
+
+	private identityBlock(lane: "local" | "frontier"): string {
+		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
+		const selfRef = lane === "local" ? this.config.localModel : this.config.frontierModel;
+		const otherRef = lane === "local" ? this.config.frontierModel : this.config.localModel;
+		return formatPeerLookup(
+			lane === "local" ? "Agent 1" : "Agent 2",
+			describeModelProfile(selfRef, selfRef ? findExactModelReferenceMatch(selfRef, snapshot) : undefined),
+			lane === "local" ? "Agent 2" : "Agent 1",
+			describeModelProfile(otherRef, otherRef ? findExactModelReferenceMatch(otherRef, snapshot) : undefined),
+		);
 	}
 
 	getSystemPromptContribution(): string | undefined {
@@ -437,66 +492,69 @@ export class KlermRoutingController {
 				this.state.delegationRecommended === true &&
 				!returnedFromFrontier &&
 				(this.state.delegationCycle ?? 0) === 0 &&
-				this.hasAvailableFrontierModel();
+				this.hasAvailablePeerModel("frontier");
 			return [
+				this.identityBlock("local"),
 				"<klerm_a2a>",
 				mustReturn
-					? "You are the Klerm local worker handling a focused assignment from the frontier orchestrator."
+					? "You are Klerm Agent 1 handling a focused assignment from the Agent 2 orchestrator."
 					: returnedFromFrontier
-						? "You are the Klerm local orchestrator resumed after frontier work. Verify the returned result, complete focused local work, and answer the user when the task is ready."
-						: "You are the Klerm local worker and may hand work to the configured frontier worker.",
-				`Current local model: ${localModel}`,
-				`Current local role: ${role}`,
-				`Configured frontier model: ${frontierModel}`,
+						? "You are Klerm Agent 1 resumed after Agent 2 work. Verify the returned result, complete focused work that fits your strength band, and answer the user when the task is ready."
+						: "You are Klerm Agent 1 and may hand work to Agent 2.",
+				`Current Agent 1 model: ${localModel}`,
+				`Current Agent 1 role: ${role}`,
+				`Configured Agent 2 model: ${frontierModel}`,
 				...(role === "planner"
 					? [
-							"Planner mode is read-only: inspect and search the workspace, reason about the task, and produce a concrete plan or delegate when appropriate.",
-							"Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+							"Planner mode is structure-only: list file and directory names, reason from that inventory, and produce a high-level plan or delegate when appropriate.",
+							"Do not read or search file contents. Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
 						]
-					: ["Builder mode may inspect and modify the workspace to complete the task."]),
-				`Frontier delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
+					: [
+							"Builder mode may inspect and modify the workspace to complete the task. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
+						]),
+				`Agent 2 delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
 				...(this.state.mode === "auto" && !returnedFromFrontier && !mustReturn
 					? role === "planner"
 						? [
-								"Auto mode starts with you as the local planner. Assess the task's difficulty, risk, breadth, and required capabilities.",
-								"Inspect enough context to produce a concrete read-only plan. Delegate broad, risky, specialist, architecture, or multi-file work when frontier input is needed.",
+								"Auto mode starts with you as the Agent 1 planner. Assess the task's difficulty, risk, breadth, and required capabilities against the peer lookup.",
+								"List enough workspace structure to produce a high-level plan. Delegate work that requires file-content inspection or specialist input.",
 							]
 						: [
-								"Auto mode starts with you as the local orchestrator. Assess the task's difficulty, risk, breadth, and your ability before committing to the full implementation.",
-								"Complete focused, low-risk work locally. For broad, risky, specialist, architecture, or multi-file work beyond your capability, inspect only enough context to create a precise handoff, then call delegate_frontier.",
+								"Auto mode starts with you as the Agent 1 orchestrator. Assess the task against the peer lookup before committing to the full implementation.",
+								"Complete focused work that fits your strength band. For work beyond your band or listed Agent 2 strengths, inspect only enough context to create a precise handoff, then call delegate_frontier.",
 							]
 					: []),
 				...(recommendedDelegation
 					? [
-							"Klerm recommends frontier delegation for this task.",
+							"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
 							"Inspect only enough context to summarize the handoff.",
 							"Call delegate_frontier before creating or modifying many files.",
 						]
 					: []),
 				...(returnedFromFrontier && this.state.lastTransition?.transcriptHash
-					? [`Frontier transcript hash: ${this.state.lastTransition.transcriptHash}`]
+					? [`Agent 2 transcript hash: ${this.state.lastTransition.transcriptHash}`]
 					: []),
 				...(mustReturn
 					? [
-							"Treat [Cross-model handoff] sections as instructions and context supplied by the frontier worker.",
-							"This task is owned by the frontier orchestrator. Complete only the focused assignment, then call return_to_frontier alone with a structured summary, draft result, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer.",
+							"Treat [Cross-model handoff] sections as instructions and context supplied by Agent 2.",
+							"This task is owned by the Agent 2 orchestrator. Complete only the focused assignment, then call return_to_frontier alone with a structured summary, draft result, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer.",
 						]
 					: [
-							"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to the frontier model, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
-							"Also call delegate_frontier when the task exceeds your capability, is unusually risky, or repeated tool attempts fail.",
+							"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to Agent 2, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
+							"Also call delegate_frontier when the task exceeds your strength band, is unusually risky, or repeated tool attempts fail.",
 						]),
 				...(mustReturn
 					? [
 							"Never print return_to_frontier as JSON, XML, Markdown, or a code block. Invoke it through the native tool interface.",
 						]
 					: [
-							'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}.',
+							'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why Agent 2 is needed","summary":"completed Agent 1 work and findings","remainingWork":"what Agent 2 must do next"}.',
 							"Never print delegate_frontier as TypeScript, JSON, XML, Markdown, or a code block. Text that resembles a tool call does not execute the tool.",
-							"Before delegating, complete any specifically requested local-only observation. Put completed work and findings in summary, and give the frontier worker a precise remainingWork instruction. Call delegate_frontier alone, without other tool calls in the same turn.",
-							"After a frontier return, finalize locally when possible. Delegate again only for a concrete unresolved issue that still exceeds local capability.",
+							"Before delegating, complete any specifically requested Agent 1-only observation. Put completed work and findings in summary, and give Agent 2 a precise remainingWork instruction. Call delegate_frontier alone, without other tool calls in the same turn.",
+							"After an Agent 2 return, finalize on Agent 1 when possible. Delegate again only for a concrete unresolved issue that still exceeds your strength band.",
 							"Do not merely say that delegation is unnecessary or describe how to delegate. Invoke delegate_frontier and let Klerm perform the handoff.",
-							"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested frontier handoff.",
-							"Do not claim that the frontier worker answered unless the handoff occurred and the frontier worker actually responded.",
+							"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested Agent 2 handoff.",
+							"Do not claim that Agent 2 answered unless the handoff occurred and Agent 2 actually responded.",
 						]),
 				"</klerm_a2a>",
 			].join("\n");
@@ -510,28 +568,31 @@ export class KlermRoutingController {
 				this.handbackEnabledForCurrentTask() &&
 				this.config.localModel !== undefined;
 			return [
+				this.identityBlock("frontier"),
 				"<klerm_a2a>",
-				"You are the Klerm frontier worker. Continue the current task using the existing session and provider-neutral handoff context.",
-				`Local worker model: ${localModel}`,
-				`Current frontier model: ${frontierModel}`,
-				`Current frontier role: ${role}`,
+				"You are Klerm Agent 2. Continue the current task using the existing session and provider-neutral handoff context.",
+				`Agent 1 model: ${localModel}`,
+				`Current Agent 2 model: ${frontierModel}`,
+				`Current Agent 2 role: ${role}`,
 				...(role === "planner"
 					? [
-							"Planner mode is read-only: inspect and search the workspace, reason about the task, and produce a concrete plan or delegate when appropriate.",
-							"Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+							"Planner mode is structure-only: list file and directory names, reason from that inventory, and produce a high-level plan or delegate when appropriate.",
+							"Do not read or search file contents. Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
 						]
-					: ["Builder mode may inspect and modify the workspace to complete the task."]),
-				"Treat [Cross-model handoff] sections as instructions and context supplied by the local worker.",
-				`When the user asks which model you are, identify the current frontier model exactly as ${frontierModel}.`,
+					: [
+							"Builder mode may inspect and modify the workspace to complete the task. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
+						]),
+				"Treat [Cross-model handoff] sections as instructions and context supplied by Agent 1.",
+				`When the user asks which model you are, identify the current Agent 2 model exactly as ${frontierModel}.`,
 				canDelegateLocal
-					? "You own the final answer. Call delegate_local alone when a focused task is better suited to the configured local worker, then review its return and finish the task."
-					: "Do not call delegate_frontier because you are already the frontier worker.",
-				"Do not restart completed local work unless verification is required; continue from the stated summary and remaining work.",
+					? "You own the final answer. Call delegate_local alone when a focused task is better suited to Agent 1, then review its return and finish the task."
+					: "Do not call delegate_frontier because you are already Agent 2.",
+				"Do not restart completed Agent 1 work unless verification is required; continue from the stated summary and remaining work.",
 				mustReturn
-					? "This task is owned by the local orchestrator. When your assignment is complete, call return_to_local alone with a structured summary, draft answer, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer."
+					? "This task is owned by the Agent 1 orchestrator. When your assignment is complete, call return_to_local alone with a structured summary, draft answer, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer."
 					: canDelegateLocal
-						? "Answer the user directly unless you delegate focused work to local. A delegated local worker must return to you before completion."
-						: "This is a direct frontier task. Answer the user directly and do not call return_to_local.",
+						? "Answer the user directly unless you delegate focused work to Agent 1. A delegated Agent 1 worker must return to you before completion."
+						: "This is a direct Agent 2 task. Answer the user directly and do not call return_to_local.",
 				"</klerm_a2a>",
 			].join("\n");
 		}
@@ -656,21 +717,30 @@ export class KlermRoutingController {
 	}
 
 	getLocalModels(): Model<any>[] {
-		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => isLocalProviderId(model.provider));
+		return this.getSelectableModels("local");
 	}
 
 	getFrontierModels(): Model<any>[] {
-		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => !isLocalProviderId(model.provider));
+		return this.getSelectableModels("frontier");
+	}
+
+	getSelectableModels(lane: "local" | "frontier"): Model<any>[] {
+		const other = lane === "local" ? this.config.frontierModel : this.config.localModel;
+		return [...this.modelRuntime.getAvailableSnapshot()].filter((model) => modelReference(model) !== other);
 	}
 
 	private resolveModel(reference: string, lane: "local" | "frontier"): Model<any> {
 		const model = findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]);
-		if (!model) throw new Error(`Model "${reference}" is unavailable. Use /${lane} to select an available model.`);
-		if (lane === "local" && !isLocalProviderId(model.provider)) {
-			throw new Error(`Model "${reference}" is not a local model.`);
+		if (!model) {
+			throw new Error(
+				`Model "${reference}" is unavailable. Use /${lane === "local" ? "agent1" : "agent2"} to select an available model.`,
+			);
 		}
-		if (lane === "frontier" && isLocalProviderId(model.provider)) {
-			throw new Error(`Model "${reference}" is local; select it with /local.`);
+		const other = lane === "local" ? this.config.frontierModel : this.config.localModel;
+		if (other && modelReference(model) === other) {
+			throw new Error(
+				`${agentLaneLabel(lane)} cannot use the same model as ${agentLaneLabel(lane === "local" ? "frontier" : "local")} (${other}).`,
+			);
 		}
 		return model;
 	}
@@ -959,7 +1029,9 @@ export class KlermRoutingController {
 			route = "LOCAL";
 			reason = "active start lane forced local";
 			completionOwner = "local";
-			if (config.routing === "auto") delegationAssessment = assessDelegationRecommendation(task);
+			if (config.routing === "auto") {
+				delegationAssessment = assessDelegationRecommendation(task, this.peerIsStronger());
+			}
 		} else if (config.activeStartLane === "frontier") {
 			route = "FRONTIER";
 			completionOwner = config.handbackEnabled && config.localModel ? "local" : "frontier";
@@ -969,7 +1041,7 @@ export class KlermRoutingController {
 					? "active start lane begins with frontier and handback requires local completion"
 					: "active start lane forced frontier";
 		} else if (config.activeStartLane === "frontier-local") {
-			if (!config.localModel) throw new Error("Frontier-local start requires a configured local model.");
+			if (!config.localModel) throw new Error("Agent 2 -> Agent 1 start requires a configured Agent 1 model.");
 			this.resolveModel(config.localModel, "local");
 			route = "FRONTIER";
 			reason = "active start lane begins with frontier and requires local completion";
@@ -993,12 +1065,12 @@ export class KlermRoutingController {
 					reason = "local router is not configured and explicit frontier fallback is enabled";
 					completionOwner = "frontier";
 				} else {
-					throw new Error("Auto routing requires a local model. Use /local or --local-model.");
+					throw new Error("Auto routing requires an Agent 1 model. Use /agent1 or --local-model.");
 				}
 			} else {
 				const localModel = this.resolveModel(config.localModel, "local");
 				routerModel = modelReference(localModel);
-				delegationAssessment = assessDelegationRecommendation(task);
+				delegationAssessment = assessDelegationRecommendation(task, this.peerIsStronger());
 				route = "LOCAL";
 				reason = "auto mode starts local orchestrator to assess the task and delegate when needed";
 				completionOwner = "local";
@@ -1007,7 +1079,7 @@ export class KlermRoutingController {
 
 		const reference = route === "LOCAL" ? config.localModel : config.frontierModel;
 		if (!reference)
-			throw new Error(`${route === "LOCAL" ? "Local" : "Frontier"} routing requires a configured model.`);
+			throw new Error(`${route === "LOCAL" ? "Agent 1" : "Agent 2"} routing requires a configured model.`);
 		const model = this.resolveModel(reference, route === "LOCAL" ? "local" : "frontier");
 		const selectedTarget = modelReference(model);
 		const initialCycle = 0;
@@ -1106,24 +1178,21 @@ export class KlermRoutingController {
 	createDelegationTool(): ToolDefinition {
 		return defineTool({
 			name: "delegate_frontier",
-			label: "Delegate to frontier",
+			label: "Delegate to Agent 2",
 			description:
-				"Hand the current task to the configured frontier model. The local worker must use this when the user explicitly asks to consult Codex, a frontier model, or the other configured model, and may use it for complex, risky, or blocked work.",
-			promptSnippet:
-				"Hand the task to the configured frontier worker, including completed work and precise remaining instructions.",
+				"Hand the current task to Agent 2. Agent 1 must use this when the user explicitly asks to consult Codex, Agent 2, or the other configured model, and may use it for work beyond Agent 1's strength band.",
+			promptSnippet: "Hand the task to Agent 2, including completed work and precise remaining instructions.",
 			promptGuidelines: [
-				"When acting as the Klerm local worker, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Codex, the frontier model, or the other configured model.",
-				"When acting as the Klerm local worker, use delegate_frontier when the task exceeds your capability or repeated tool attempts fail.",
-				"As the local worker, do not replace a requested frontier handoff with a textual explanation; invoke delegate_frontier.",
+				"When acting as Klerm Agent 1, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Codex, Agent 2, or the other configured model.",
+				"When acting as Klerm Agent 1, use delegate_frontier when the task exceeds your strength band or repeated tool attempts fail.",
+				"As Agent 1, do not replace a requested Agent 2 handoff with a textual explanation; invoke delegate_frontier.",
 				"Call delegate_frontier through the native tool interface with reason, summary, and remainingWork string arguments. Never print a code example that imitates the call.",
 			],
 			parameters: delegateSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
 				if (this.state.lane !== "local" || this.state.completionOwner !== "local") {
-					throw new Error(
-						"delegate_frontier is only available while the local worker is active and owns the task.",
-					);
+					throw new Error("delegate_frontier is only available while Agent 1 is active and owns the task.");
 				}
 				if (
 					this.pendingDelegation ||
@@ -1142,7 +1211,7 @@ export class KlermRoutingController {
 						`frontier delegation cycle limit ${this.config.maxDelegationCycles} reached`,
 					);
 					throw new Error(
-						`Frontier delegation cycle limit ${this.config.maxDelegationCycles} reached. Finish with the available results.`,
+						`Agent 2 delegation cycle limit ${this.config.maxDelegationCycles} reached. Finish with the available results.`,
 					);
 				}
 				this.requestFrontierDelegation(params);
@@ -1150,7 +1219,7 @@ export class KlermRoutingController {
 					content: [
 						{
 							type: "text",
-							text: `Delegation recorded. Klerm will attempt to start the frontier worker.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
+							text: `Delegation recorded. Klerm will attempt to start Agent 2.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
 						},
 					],
 					details: params,
@@ -1162,23 +1231,21 @@ export class KlermRoutingController {
 	createLocalDelegationTool(): ToolDefinition {
 		return defineTool({
 			name: "delegate_local",
-			label: "Delegate to local",
-			description:
-				"Hand focused work to the configured local model while the frontier worker retains ownership of the final answer.",
-			promptSnippet:
-				"Hand a focused task to the local worker with completed work and precise remaining instructions.",
+			label: "Delegate to Agent 1",
+			description: "Hand focused work to Agent 1 while Agent 2 retains ownership of the final answer.",
+			promptSnippet: "Hand a focused task to Agent 1 with completed work and precise remaining instructions.",
 			promptGuidelines: [
-				"Use delegate_local only as the frontier owner when focused work is better suited to the configured local worker.",
+				"Use delegate_local only as the Agent 2 owner when focused work is better suited to Agent 1.",
 				"Call delegate_local alone with reason, summary, and remainingWork string arguments.",
 			],
 			parameters: delegateLocalSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
 				if (this.state.lane !== "frontier" || this.state.completionOwner !== "frontier") {
-					throw new Error("delegate_local is only available while the frontier owner is active.");
+					throw new Error("delegate_local is only available while the Agent 2 owner is active.");
 				}
 				if (!this.handbackEnabledForCurrentTask()) {
-					throw new Error("Enable Klerm handback before delegating local work that must return to frontier.");
+					throw new Error("Enable Klerm handback before delegating Agent 1 work that must return to Agent 2.");
 				}
 				if (
 					this.pendingDelegation ||
@@ -1205,7 +1272,7 @@ export class KlermRoutingController {
 					content: [
 						{
 							type: "text",
-							text: `Local delegation recorded. Klerm will attempt to start the local worker.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
+							text: `Agent 1 delegation recorded. Klerm will attempt to start Agent 1.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
 						},
 					],
 					details: params,
@@ -1217,24 +1284,24 @@ export class KlermRoutingController {
 	createReturnToLocalTool(): ToolDefinition {
 		return defineTool({
 			name: "return_to_local",
-			label: "Return to local",
+			label: "Return to Agent 1",
 			description:
-				"Return completed frontier work to the local orchestrator for verification, additional work, or the final user answer.",
-			promptSnippet: "Return frontier results to the local orchestrator as a structured handback packet.",
+				"Return completed Agent 2 work to the Agent 1 orchestrator for verification, additional work, or the final user answer.",
+			promptSnippet: "Return Agent 2 results to the Agent 1 orchestrator as a structured handback packet.",
 			promptGuidelines: [
-				"Use return_to_local only when acting as the frontier worker on a task owned by the local orchestrator.",
-				"Call return_to_local alone after completing the frontier assignment. Include changed files, verification, open issues, and a draft answer.",
-				"Do not print a pseudo tool call or answer the user directly when the system prompt requires a local handback.",
+				"Use return_to_local only when acting as Agent 2 on a task owned by the Agent 1 orchestrator.",
+				"Call return_to_local alone after completing the Agent 2 assignment. Include changed files, verification, open issues, and a draft answer.",
+				"Do not print a pseudo tool call or answer the user directly when the system prompt requires an Agent 1 handback.",
 			],
 			parameters: returnToLocalSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
 				if (this.state.lane !== "frontier") {
-					throw new Error("return_to_local is only available while the frontier worker is active.");
+					throw new Error("return_to_local is only available while Agent 2 is active.");
 				}
 				if (!this.handbackRequired("local")) {
 					throw new Error(
-						"This is a direct frontier task. Answer the user directly instead of returning to local.",
+						"This is a direct Agent 2 task. Answer the user directly instead of returning to Agent 1.",
 					);
 				}
 				if (
@@ -1251,7 +1318,7 @@ export class KlermRoutingController {
 					content: [
 						{
 							type: "text",
-							text: `Frontier return recorded. Klerm will attempt to resume the local orchestrator.\nSummary: ${params.frontierSummary}\nRecommended next action: ${params.recommendedNextAction}`,
+							text: `Agent 2 return recorded. Klerm will attempt to resume the Agent 1 orchestrator.\nSummary: ${params.frontierSummary}\nRecommended next action: ${params.recommendedNextAction}`,
 						},
 					],
 					details: params,
@@ -1263,23 +1330,21 @@ export class KlermRoutingController {
 	createReturnToFrontierTool(): ToolDefinition {
 		return defineTool({
 			name: "return_to_frontier",
-			label: "Return to frontier",
-			description: "Return completed local work to the frontier orchestrator for review and final completion.",
-			promptSnippet: "Return local results to the frontier orchestrator as a structured handback packet.",
+			label: "Return to Agent 2",
+			description: "Return completed Agent 1 work to the Agent 2 orchestrator for review and final completion.",
+			promptSnippet: "Return Agent 1 results to the Agent 2 orchestrator as a structured handback packet.",
 			promptGuidelines: [
-				"Use return_to_frontier only when acting as the local worker on a task owned by the frontier orchestrator.",
-				"Call return_to_frontier alone after completing the focused local assignment.",
+				"Use return_to_frontier only when acting as Agent 1 on a task owned by the Agent 2 orchestrator.",
+				"Call return_to_frontier alone after completing the focused Agent 1 assignment.",
 			],
 			parameters: returnToFrontierSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
 				if (this.state.lane !== "local") {
-					throw new Error("return_to_frontier is only available while the local worker is active.");
+					throw new Error("return_to_frontier is only available while Agent 1 is active.");
 				}
 				if (!this.handbackRequired("frontier")) {
-					throw new Error(
-						"This task is owned by the local worker. Answer the user directly instead of returning.",
-					);
+					throw new Error("This task is owned by Agent 1. Answer the user directly instead of returning.");
 				}
 				if (
 					this.pendingDelegation ||
@@ -1295,7 +1360,7 @@ export class KlermRoutingController {
 					content: [
 						{
 							type: "text",
-							text: `Local return recorded. Klerm will attempt to resume the frontier orchestrator.\nSummary: ${params.localSummary}\nRecommended next action: ${params.recommendedNextAction}`,
+							text: `Agent 1 return recorded. Klerm will attempt to resume the Agent 2 orchestrator.\nSummary: ${params.localSummary}\nRecommended next action: ${params.recommendedNextAction}`,
 						},
 					],
 					details: params,
@@ -1326,7 +1391,7 @@ export class KlermRoutingController {
 			this.pendingDelegation
 		)
 			return undefined;
-		if (recommendedEnforcement && !this.hasAvailableFrontierModel()) {
+		if (recommendedEnforcement && !this.hasAvailablePeerModel("frontier")) {
 			await this.logLifecycle(
 				"HANDOFF_REJECTED",
 				"LOCAL",
@@ -1342,7 +1407,7 @@ export class KlermRoutingController {
 		const trigger: KlermHandoffTrigger = this.explicitFrontierRequest
 			? "explicit-enforcement"
 			: "recommended-enforcement";
-		const summary = localResponse.trim() || "The local worker returned without a native delegation tool call.";
+		const summary = localResponse.trim() || "Agent 1 returned without a native delegation tool call.";
 		this.requestFrontierDelegation(
 			{
 				reason,
@@ -1384,7 +1449,7 @@ export class KlermRoutingController {
 				`Reason: ${reason}`,
 				`Local worker response: ${summary}`,
 				`Original task: ${this.task}`,
-				"Continue the original task as the configured frontier worker. Return the completed assignment to the local orchestrator when required by the Klerm system prompt.",
+				"Continue the original task as Agent 2. Return the completed assignment to the Agent 1 orchestrator when required by the Klerm system prompt.",
 			].join("\n"),
 		};
 	}
@@ -1393,7 +1458,7 @@ export class KlermRoutingController {
 		if (this.state.lane !== "frontier" || !this.handbackRequired("local") || this.pendingReturnToLocal)
 			return undefined;
 		const reason = "frontier completed without a native return_to_local call; Klerm enforced the handback";
-		const summary = frontierResponse.trim() || "The frontier worker completed without a textual response.";
+		const summary = frontierResponse.trim() || "Agent 2 completed without a textual response.";
 		this.requestReturnToLocal(
 			{
 				reason,
@@ -1448,7 +1513,7 @@ export class KlermRoutingController {
 		if (this.state.lane !== "local" || !this.handbackRequired("frontier") || this.pendingReturnToFrontier)
 			return undefined;
 		const reason = "local completed without a native return_to_frontier call; Klerm enforced the handback";
-		const summary = localResponse.trim() || "The local worker completed without a textual response.";
+		const summary = localResponse.trim() || "Agent 1 completed without a textual response.";
 		this.requestReturnToFrontier(
 			{
 				reason,
@@ -1707,7 +1772,7 @@ export class KlermRoutingController {
 			reason = "local turn limit reached";
 			trigger = "turn-limit";
 		} else if (this.repeatedToolCalls >= 2) {
-			reason = "local worker repeated the same tool call";
+			reason = "Agent 1 repeated the same tool call";
 			trigger = "repeated-tool-call";
 		}
 		if (!reason) return undefined;
@@ -1859,7 +1924,7 @@ export class KlermRoutingController {
 				handoffPrompt: [
 					"[Klerm frontier failure delegation]",
 					`Reason: frontier provider failed${errorMessage ? `: ${errorMessage}` : ""}`,
-					"Continue the original task as the local worker using the existing repository context.",
+					"Continue the original task as Agent 1 using the existing repository context.",
 				].join("\n"),
 			};
 		}
@@ -2053,16 +2118,16 @@ export class KlermRoutingController {
 	describe(): string {
 		const effectiveHandback = this.handbackEnabledForCurrentTask();
 		return [
-			`Routing: ${this.state.mode}`,
-			`Start lane: ${this.config.activeStartLane}`,
-			`Active lane: ${this.state.lane}`,
-			`Local model: ${this.config.localModel ?? "not configured"}`,
-			`Local role: ${this.config.localRole}`,
-			`Frontier model: ${this.config.frontierModel ?? "not configured"}`,
-			`Frontier role: ${this.config.frontierRole}`,
-			`Frontier fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
+			`Routing: ${routingValueLabel(this.state.mode)}`,
+			`Start lane: ${routingValueLabel(this.config.activeStartLane)}`,
+			`Active lane: ${agentLaneLabel(this.state.lane)}`,
+			`Agent 1 model: ${this.config.localModel ?? "not configured"}`,
+			`Agent 1 role: ${this.config.localRole}`,
+			`Agent 2 model: ${this.config.frontierModel ?? "not configured"}`,
+			`Agent 2 role: ${this.config.frontierRole}`,
+			`Agent 2 fallback: ${this.config.allowFrontierFallback ? "on" : "off"}`,
 			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== this.config.handbackEnabled ? ` (configured ${this.config.handbackEnabled ? "on" : "off"})` : ""}`,
-			`Completion owner: ${this.state.completionOwner ?? "not assigned"}`,
+			`Completion owner: ${this.state.completionOwner ? agentLaneLabel(this.state.completionOwner) : "not assigned"}`,
 			this.config.maxDelegationCycles === 0
 				? `A2A cycles started: ${this.state.delegationCycle ?? 0}/unlimited (no cycle limit)`
 				: `A2A cycles started: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles} (per-task safety limit)`,

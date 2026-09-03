@@ -97,8 +97,15 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
-import type { KlermActiveStartLane, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
-import { isLocalProviderId } from "../../klerm/local-providers.ts";
+import {
+	agentLaneLabel,
+	agentSlashName,
+	parseActiveStartLaneInput,
+	parseAgentSlashCommand,
+	parseRoutingModeInput,
+	routingValueLabel,
+} from "../../klerm/agent-labels.ts";
+import type { KlermWorkerRole } from "../../klerm/config.ts";
 import {
 	discoverLocalRuntimes,
 	formatLocalRuntimeModels,
@@ -266,16 +273,16 @@ export function parseKlermLaneCommand(argument: string): KlermLaneCommand {
 
 export function formatKlermStartupGuide(expanded: boolean, toggleKey: string): string {
 	const commands = [
-		"  /local model <model>     set a detected local router/worker",
-		"  /frontier model <model>  set the frontier worker, for example Codex",
-		"  /routing auto            local decides: small tasks local, hard tasks frontier",
+		"  /agent1 model <model>    set Agent 1 to any available model",
+		"  /agent2 model <model>    set Agent 2 to a different available model",
+		"  /routing auto            Agent 1 starts; hard tasks can delegate to Agent 2",
 		...(expanded
 			? [
-					"  /routing local           force normal prompts to local",
-					"  /routing frontier        force normal prompts to frontier",
+					"  /routing 1               force normal prompts to Agent 1",
+					"  /routing 2               force normal prompts to Agent 2",
 					"  /routing handback on     return delegated work to the task owner",
 					"  /routing cycles <count|unlimited>  set or remove the per-task A2A cycle limit",
-					"  /active <lane>            override the initial worker; auto follows /routing",
+					"  /active <lane>            override the initial agent; auto follows /routing",
 					"  /routing off             use /model directly when /active is auto",
 					"  /model <model>            set the direct model used when routing is off",
 				]
@@ -803,48 +810,84 @@ export class InteractiveMode {
 			};
 		}
 
-		for (const lane of ["local", "frontier"] as const) {
-			const command = slashCommands.find((candidate) => candidate.name === lane);
+		const laneCompletions = (lane: "local" | "frontier", prefix: string): AutocompleteItem[] | null => {
+			const actions =
+				lane === "local" ? ["model", "status", "models", "off", "task"] : ["model", "status", "off", "task"];
+			if (!prefix.startsWith("model ")) {
+				return createFuzzyAutocompleteItems(
+					actions,
+					prefix,
+					(action) => action,
+					(action) => ({
+						value: action,
+						label: action,
+					}),
+				);
+			}
+			const modelPrefix = prefix.slice(6);
+			const other =
+				lane === "local"
+					? this.session.klermRouting?.config.frontierModel
+					: this.session.klermRouting?.config.localModel;
+			const models = this.session.modelRuntime
+				.getAvailableSnapshot()
+				.filter((model) => `${model.provider}/${model.id}` !== other);
+			return createFuzzyAutocompleteItems(models, modelPrefix, getModelSearchText, (model) => ({
+				value: `model ${model.provider}/${model.id}`,
+				label: model.id,
+				description: model.provider,
+			}));
+		};
+		for (const [name, lane] of [
+			["agent1", "local"],
+			["agent2", "frontier"],
+		] as const) {
+			const command = slashCommands.find((candidate) => candidate.name === name);
 			if (!command) continue;
-			command.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const actions =
-					lane === "local" ? ["model", "status", "models", "off", "task"] : ["model", "status", "off", "task"];
-				if (!prefix.startsWith("model ")) {
-					return createFuzzyAutocompleteItems(
-						actions,
-						prefix,
-						(action) => action,
-						(action) => ({
-							value: action,
-							label: action,
-						}),
+			command.getArgumentCompletions = (prefix: string) => laneCompletions(lane, prefix);
+		}
+		const agentCommand = slashCommands.find((command) => command.name === "agent");
+		if (agentCommand) {
+			agentCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const lower = prefix.toLowerCase();
+				if (lower.startsWith("1 ") || lower.startsWith("2 ")) {
+					const lane = lower.startsWith("1 ") ? "local" : "frontier";
+					const items = laneCompletions(lane, prefix.slice(2));
+					return (
+						items?.map((item) => ({
+							...item,
+							value: `${lower.slice(0, 1)} ${item.value}`,
+						})) ?? null
 					);
 				}
-				const modelPrefix = prefix.slice(6);
-				const models = this.session.modelRuntime
-					.getAvailableSnapshot()
-					.filter((model) =>
-						lane === "local" ? isLocalProviderId(model.provider) : !isLocalProviderId(model.provider),
-					);
-				return createFuzzyAutocompleteItems(models, modelPrefix, getModelSearchText, (model) => ({
-					value: `model ${model.provider}/${model.id}`,
-					label: model.id,
-					description: model.provider,
-				}));
+				return createFuzzyAutocompleteItems(
+					["1", "2"],
+					prefix,
+					(option) => option,
+					(option) => ({
+						value: option,
+						label: option === "1" ? "Agent 1" : "Agent 2",
+					}),
+				);
 			};
 		}
 
 		const routingCommand = slashCommands.find((command) => command.name === "routing");
 		if (routingCommand) {
 			routingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const options = ["status", "off", "local", "frontier", "auto", "fallback on", "fallback off"];
+				const options = ["status", "off", "1", "2", "auto", "local", "frontier", "fallback on", "fallback off"];
 				return createFuzzyAutocompleteItems(
 					options,
 					prefix,
 					(option) => option,
 					(option) => ({
 						value: option,
-						label: option,
+						label:
+							option === "local" || option === "1"
+								? "Agent 1"
+								: option === "frontier" || option === "2"
+									? "Agent 2"
+									: option,
 					}),
 				);
 			};
@@ -854,12 +897,22 @@ export class InteractiveMode {
 			const command = slashCommands.find((candidate) => candidate.name === name);
 			if (!command) continue;
 			command.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const options = ["auto", "local", "frontier", "frontier-local", "status"];
+				const options = ["auto", "1", "2", "frontier-local", "local", "frontier", "status"];
 				return createFuzzyAutocompleteItems(
 					options,
 					prefix,
 					(option) => option,
-					(option) => ({ value: option, label: option }),
+					(option) => ({
+						value: option,
+						label:
+							option === "local" || option === "1"
+								? "Agent 1"
+								: option === "frontier" || option === "2"
+									? "Agent 2"
+									: option === "frontier-local"
+										? "Agent 2 -> Agent 1"
+										: option,
+					}),
 				);
 			};
 		}
@@ -3113,14 +3166,15 @@ export class InteractiveMode {
 				await this.handleModelCommand(searchTerm);
 				return;
 			}
-			if (text === "/local" || text.startsWith("/local ")) {
+			const agentCommand = parseAgentSlashCommand(rawText);
+			if (agentCommand) {
 				this.editor.setText("");
-				await this.handleKlermModelCommand("local", rawText.trimStart().slice(6));
+				await this.handleKlermModelCommand(agentCommand.lane, agentCommand.argument);
 				return;
 			}
-			if (text === "/frontier" || text.startsWith("/frontier ")) {
+			if (text === "/agent" || text.startsWith("/agent ")) {
 				this.editor.setText("");
-				await this.handleKlermModelCommand("frontier", rawText.trimStart().slice(9));
+				this.showError("Usage: /agent 1|2 <model [reference]|status|off|task <prompt>>");
 				return;
 			}
 			if (text === "/routing" || text.startsWith("/routing ")) {
@@ -4955,15 +5009,15 @@ export class InteractiveMode {
 		const command = parseKlermLaneCommand(argument);
 		if (command.action === "task") {
 			if (!command.prompt.trim()) {
-				this.showError(`Usage: /${lane} task <prompt>`);
+				this.showError(`Usage: /${agentSlashName(lane)} task <prompt>`);
 				return;
 			}
 			if (this.session.isStreaming) {
-				this.showWarning(`Cannot run /${lane} task while a response is in progress.`);
+				this.showWarning(`Cannot run /${agentSlashName(lane)} task while a response is in progress.`);
 				return;
 			}
 			if (this.session.isCompacting) {
-				this.showWarning(`Cannot run /${lane} task while compaction is in progress.`);
+				this.showWarning(`Cannot run /${agentSlashName(lane)} task while compaction is in progress.`);
 				return;
 			}
 			try {
@@ -4981,7 +5035,7 @@ export class InteractiveMode {
 			const results = await discoverLocalRuntimes(undefined, AbortSignal.timeout(5000));
 			const output =
 				command.action === "status"
-					? `${formatLocalRuntimeStatus(results)}\n\nConfigured local model: ${routing.config.localModel ?? "not configured"}`
+					? `${formatLocalRuntimeStatus(results)}\n\nConfigured Agent 1 model: ${routing.config.localModel ?? "not configured"}`
 					: formatLocalRuntimeModels(results);
 			this.showStatus(output);
 			const providers = results.filter((result) => !result.error).map((result) => result.providerId);
@@ -5005,7 +5059,7 @@ export class InteractiveMode {
 				? findExactModelReferenceMatch(reference, [...this.session.modelRuntime.getAvailableSnapshot()])
 				: undefined;
 			const selectable = model !== undefined && this.session.modelRuntime.hasConfiguredAuth(model.provider);
-			this.showStatus(`Frontier model: ${reference ?? "not configured"}\nSelectable: ${selectable ? "yes" : "no"}`);
+			this.showStatus(`Agent 2 model: ${reference ?? "not configured"}\nSelectable: ${selectable ? "yes" : "no"}`);
 			return;
 		}
 
@@ -5013,7 +5067,7 @@ export class InteractiveMode {
 			if (lane === "local") await routing.setLocalModel(undefined);
 			else await routing.setFrontierModel(undefined);
 			this.updateKlermRoutingStatus();
-			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model disabled`);
+			this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} model disabled`);
 			return;
 		}
 
@@ -5023,11 +5077,11 @@ export class InteractiveMode {
 		}
 
 		if (command.action === "models") {
-			this.showError(`Usage: /${lane} model [reference]`);
+			this.showError(`Usage: /${agentSlashName(lane)} model [reference]`);
 			return;
 		}
 		if (command.action !== "model") {
-			this.showError(`Usage: /${lane} model [reference]`);
+			this.showError(`Usage: /${agentSlashName(lane)} model [reference]`);
 			return;
 		}
 		try {
@@ -5036,7 +5090,7 @@ export class InteractiveMode {
 					...this.session.modelRuntime.getAvailableSnapshot(),
 				]);
 				const provider = command.reference.slice(0, command.reference.indexOf("/"));
-				if (!cached && isLocalProviderId(provider)) {
+				if (!cached && provider) {
 					await this.session.modelRuntime.refresh({
 						providers: [provider],
 						allowNetwork: true,
@@ -5048,7 +5102,7 @@ export class InteractiveMode {
 				await routing.setFrontierModel(command.reference);
 			}
 			this.updateKlermRoutingStatus();
-			this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${command.reference}`);
+			this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} model: ${command.reference}`);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -5061,16 +5115,24 @@ export class InteractiveMode {
 			return;
 		}
 		if (!argument) {
-			const modes: KlermRoutingMode[] = ["auto", "local", "frontier", "off"];
+			const choices = ["Auto", "Agent 1", "Agent 2", "Direct"];
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
 					"Klerm routing mode",
-					modes,
-					(mode) => {
+					choices,
+					(choice) => {
 						done();
-						void routing.setRoutingMode(mode as KlermRoutingMode).then(() => {
+						const mode =
+							choice === "Auto"
+								? "auto"
+								: choice === "Agent 1"
+									? "local"
+									: choice === "Agent 2"
+										? "frontier"
+										: "off";
+						void routing.setRoutingMode(mode).then(() => {
 							this.updateKlermRoutingStatus();
-							this.showStatus(`Routing: ${mode}`);
+							this.showStatus(`Routing: ${routingValueLabel(mode)}`);
 						});
 					},
 					() => done(),
@@ -5087,7 +5149,7 @@ export class InteractiveMode {
 			const enabled = argument === "fallback on";
 			await routing.setAllowFrontierFallback(enabled);
 			this.updateKlermRoutingStatus();
-			this.showStatus(`Frontier fallback: ${enabled ? "on" : "off"}`);
+			this.showStatus(`Agent 2 fallback: ${enabled ? "on" : "off"}`);
 			return;
 		}
 		if (argument === "fallback" || argument.startsWith("fallback ")) {
@@ -5121,13 +5183,14 @@ export class InteractiveMode {
 			this.showError("Usage: /routing cycles <positive integer|unlimited>");
 			return;
 		}
-		if (argument !== "off" && argument !== "local" && argument !== "frontier" && argument !== "auto") {
-			this.showError("Routing mode must be off, local, frontier, or auto.");
+		const mode = parseRoutingModeInput(argument);
+		if (!mode) {
+			this.showError("Routing mode must be off, auto, Agent 1, or Agent 2.");
 			return;
 		}
-		await routing.setRoutingMode(argument);
+		await routing.setRoutingMode(mode);
 		this.updateKlermRoutingStatus();
-		this.showStatus(`Routing: ${argument}`);
+		this.showStatus(`Routing: ${routingValueLabel(mode)}`);
 	}
 
 	private async handleKlermActiveCommand(argument: string): Promise<void> {
@@ -5137,16 +5200,17 @@ export class InteractiveMode {
 			return;
 		}
 		if (!argument || argument === "status") {
-			this.showStatus(`Start lane: ${routing.config.activeStartLane}`);
+			this.showStatus(`Start lane: ${routingValueLabel(routing.config.activeStartLane)}`);
 			return;
 		}
-		if (argument !== "auto" && argument !== "local" && argument !== "frontier" && argument !== "frontier-local") {
-			this.showError("Start lane must be auto, local, frontier, or frontier-local.");
+		const lane = parseActiveStartLaneInput(argument);
+		if (!lane) {
+			this.showError("Start lane must be auto, Agent 1, Agent 2, or Agent 2 -> Agent 1.");
 			return;
 		}
-		await routing.setActiveStartLane(argument as KlermActiveStartLane);
+		await routing.setActiveStartLane(lane);
 		this.updateKlermRoutingStatus();
-		this.showStatus(`Start lane: ${argument}`);
+		this.showStatus(`Start lane: ${routingValueLabel(lane)}`);
 	}
 
 	private async handleKlermModeCommand(argument: string): Promise<void> {
@@ -5156,18 +5220,18 @@ export class InteractiveMode {
 			return;
 		}
 		if (!argument) {
-			const choices = ["Local: Plan", "Local: Build", "Frontier: Plan", "Frontier: Build"];
+			const choices = ["Agent 1: Plan", "Agent 1: Build", "Agent 2: Plan", "Agent 2: Build"];
 			this.showSelector((done) => {
 				const selector = new ExtensionSelectorComponent(
-					"Klerm worker mode",
+					"Klerm agent mode",
 					choices,
 					(choice) => {
 						done();
-						const lane = choice.startsWith("Local") ? "local" : "frontier";
+						const lane = choice.startsWith("Agent 1") ? "local" : "frontier";
 						const role = choice.endsWith("Plan") ? "planner" : "builder";
 						void routing.setWorkerRole(lane, role).then(() => {
 							this.updateKlermRoutingStatus();
-							this.showStatus(`${lane === "local" ? "Local" : "Frontier"} role: ${role}`);
+							this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} role: ${role}`);
 						});
 					},
 					() => done(),
@@ -5176,17 +5240,28 @@ export class InteractiveMode {
 			});
 			return;
 		}
-		const [lane, role, extra] = argument.split(/\s+/);
-		if (
-			extra !== undefined ||
-			(lane !== "local" && lane !== "frontier") ||
-			(role !== "planner" && role !== "builder")
-		) {
-			this.showError("Usage: /mode <local|frontier> <planner|builder>");
+		const parts = argument.toLowerCase().split(/\s+/);
+		const target = parts[0];
+		let lane: "local" | "frontier" | undefined;
+		let roleIndex = 1;
+		if (target === "1" || target === "agent1" || target === "agent-1" || target === "local") lane = "local";
+		else if (target === "2" || target === "agent2" || target === "agent-2" || target === "frontier") {
+			lane = "frontier";
+		} else if (target === "agent" && parts[1] === "1") {
+			lane = "local";
+			roleIndex = 2;
+		} else if (target === "agent" && parts[1] === "2") {
+			lane = "frontier";
+			roleIndex = 2;
+		}
+		const role = parts[roleIndex];
+		if (!lane || parts.length !== roleIndex + 1 || (role !== "planner" && role !== "builder")) {
+			this.showError("Usage: /mode <agent 1|agent 2|1|2> <planner|builder>");
 			return;
 		}
 		await routing.setWorkerRole(lane, role as KlermWorkerRole);
-		this.showStatus(`${lane === "local" ? "Local" : "Frontier"} role: ${role}`);
+		this.updateKlermRoutingStatus();
+		this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} role: ${role}`);
 	}
 
 	private handleTokenCommand(argument: string): void {
@@ -5220,6 +5295,16 @@ export class InteractiveMode {
 		const localModel = state.localModel ?? routing.config.localModel;
 		const frontierModel = state.frontierModel ?? routing.config.frontierModel;
 		const activeLabel = theme.fg("success", "(currently active)");
+		const laneLabel = (lane: string) =>
+			lane === "local" ? "Agent 1" : lane === "frontier" ? "Agent 2" : lane === "direct" ? "Direct" : lane;
+		const routingLabel = (mode: string) =>
+			mode === "off"
+				? "Direct"
+				: mode === "auto"
+					? "Auto"
+					: mode === "frontier-local"
+						? "Agent 2 -> Agent 1"
+						: laneLabel(mode);
 		if (!this.toolOutputExpanded) {
 			const activeRoute =
 				state.lane === "direct"
@@ -5231,9 +5316,9 @@ export class InteractiveMode {
 					: state.lane;
 			this.klermRoutingStatus.setText(
 				[
-					`Local: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
-					`Frontier: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
-					`Route: ${state.mode} · ${activeRoute}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
+					`Agent 1: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					`Agent 2: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					`Route: ${routingLabel(state.mode)} · ${laneLabel(activeRoute)}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
 				].join("\n"),
 			);
 			return;
@@ -5241,18 +5326,18 @@ export class InteractiveMode {
 
 		const lines: string[] = [];
 		lines.push(
-			`Local model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+			`Agent 1 model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
 		lines.push(
-			`Frontier model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+			`Agent 2 model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
-		lines.push(`Routing: ${state.mode}`);
-		lines.push(`Start lane: ${routing.config.activeStartLane}`);
+		lines.push(`Routing: ${routingLabel(state.mode)}`);
+		lines.push(`Start lane: ${routingLabel(routing.config.activeStartLane)}`);
 		const effectiveHandback = state.handbackEnabled ?? routing.config.handbackEnabled;
 		lines.push(
 			`Return to task owner: ${effectiveHandback ? "on" : "off"}${effectiveHandback !== routing.config.handbackEnabled ? ` (configured ${routing.config.handbackEnabled ? "on" : "off"})` : ""}`,
 		);
-		lines.push(`Completion owner: ${state.completionOwner ?? "not assigned"}`);
+		lines.push(`Completion owner: ${state.completionOwner ? laneLabel(state.completionOwner) : "not assigned"}`);
 		const cycleLimit = state.maxDelegationCycles ?? routing.config.maxDelegationCycles;
 		lines.push(
 			cycleLimit === 0
@@ -5261,15 +5346,15 @@ export class InteractiveMode {
 		);
 		if (state.lane === "direct" && state.selectedTarget && (state.handoffReason || state.decisionSource)) {
 			const lastRoute = state.selectedTarget === frontierModel ? "frontier" : "local";
-			lines.push(`Last route: ${lastRoute} · ${state.selectedTarget}`);
+			lines.push(`Last route: ${laneLabel(lastRoute)} · ${state.selectedTarget}`);
 		} else {
-			lines.push(`Active route: ${state.lane}${selectedTarget ? ` · ${selectedTarget}` : ""}`);
+			lines.push(`Active route: ${laneLabel(state.lane)}${selectedTarget ? ` · ${selectedTarget}` : ""}`);
 		}
 		if (state.score !== undefined && state.confidence !== undefined && state.risk !== undefined) {
 			const assessedRoute =
 				state.lane === "direct" ? (state.selectedTarget === frontierModel ? "frontier" : "local") : state.lane;
 			lines.push(
-				`Auto score: ${assessedRoute} · capability ${Math.round(state.score * 100)}% · confidence ${Math.round(state.confidence * 100)}% · risk ${Math.round(state.risk * 100)}%`,
+				`Auto score: ${laneLabel(assessedRoute)} · capability ${Math.round(state.score * 100)}% · confidence ${Math.round(state.confidence * 100)}% · risk ${Math.round(state.risk * 100)}%`,
 			);
 		}
 		if (
@@ -5278,7 +5363,7 @@ export class InteractiveMode {
 			(state.delegationCycle ?? 0) === 0 &&
 			!state.explicitFrontierRequestSatisfied
 		) {
-			lines.push("Delegation recommended: frontier");
+			lines.push("Delegation recommended: Agent 2");
 		}
 
 		this.klermRoutingStatus.setText(lines.join("\n"));
@@ -5315,11 +5400,13 @@ export class InteractiveMode {
 		if (this.renderedKlermTransitionIds.has(transition.id)) return;
 		this.renderedKlermTransitionIds.add(transition.id);
 		const isReturn = transition.kind === "return";
+		const returnLane =
+			transition.toLane === "local" ? "Agent 1" : transition.toLane === "frontier" ? "Agent 2" : transition.toLane;
 		const call = [
 			theme.bold(
 				theme.fg(
 					isReturn ? "success" : "warning",
-					isReturn ? `+ returned to ${transition.toLane}` : "+ called other model",
+					isReturn ? `+ returned to ${returnLane}` : "+ called other model",
 				),
 			),
 			`  ${theme.fg("warning", "model:")} ${transition.toTarget}`,
@@ -5510,7 +5597,7 @@ export class InteractiveMode {
 						else await routing.setFrontierModel(reference);
 						this.updateKlermRoutingStatus();
 						done();
-						this.showStatus(`${lane === "local" ? "Local" : "Frontier"} model: ${reference}`);
+						this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} model: ${reference}`);
 					} catch (error) {
 						done();
 						this.showError(error instanceof Error ? error.message : String(error));
@@ -5519,9 +5606,11 @@ export class InteractiveMode {
 				() => done(),
 				initialSearchInput,
 				{
-					filter: (model) =>
-						lane === "local" ? isLocalProviderId(model.provider) : !isLocalProviderId(model.provider),
-					hint: lane === "local" ? "Detected local runtime models" : "Configured frontier models",
+					filter: (model) => {
+						const other = lane === "local" ? routing.config.frontierModel : routing.config.localModel;
+						return `${model.provider}/${model.id}` !== other;
+					},
+					hint: `${agentLaneLabel(lane)}: any available model except the other agent`,
 					persistDefault: false,
 				},
 			);

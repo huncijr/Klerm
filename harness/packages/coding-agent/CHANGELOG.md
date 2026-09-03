@@ -23,7 +23,7 @@
 - Added `klerm routing status` and typed `klerm config get`/`set` for the persisted Klerm routing configuration.
 - Added `klerm session list [--json] [--dir <dir>]` for listing stored sessions with metadata, and `--session`, `--provider`, `--model` filters plus `--export <file>` (with a sharing warning) for `klerm debug decisions`.
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
-- Added persistent per-lane planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, and backend-enforced read-only planner tools.
+- Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
 
 ### Changed
 
@@ -32,6 +32,9 @@
 - Changed the persistent A2A cycle budget to accept any positive safe integer or an explicit unlimited mode through `/routing cycles unlimited` or `0`.
 - Changed interactive mode to show animated startup/working feedback and a compact completion indicator.
 - Changed `Ctrl+O` to expand or collapse tool output, startup shortcuts, the routing guide, and routing details; the default view is compact and no longer repeats the Klerm wordmark.
+- Changed Klerm mode CLI, TUI, and desktop labels to use public Agent 1/Agent 2 wording while preserving legacy local/frontier aliases.
+- Changed Agent 1 and Agent 2 model selection so either slot can use a local or cloud model, rejects assigning the same model twice, and injects a peer identity/strength lookup into both system prompts.
+- Changed interactive Agent commands to `/agent1`, `/agent2`, and `/agent 1|2`. `/local` and `/frontier` remain hidden aliases.
 
 ### Fixed
 

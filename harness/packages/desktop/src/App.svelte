@@ -23,7 +23,6 @@
 		LocalRuntime,
 		McpServerUpdate,
 		McpStatus,
-		McpToolOption,
 		RoutingState,
 		RoutingTransition,
 		RunningService,
@@ -38,6 +37,7 @@
 		ThinkingSetting,
 		WorkspaceStatus,
 	} from "./lib/model.ts";
+	import { expandMcpMentions } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import Composer from "./components/Composer.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
@@ -72,7 +72,7 @@
 	let sidebarOpen = $state(false);
 	let sessionsExpanded = $state(true);
 	let sessionWidth = $state(280);
-	let filesWidth = $state(430);
+	let filesWidth = $state(280);
 	let pendingDelete = $state<DesktopSession | undefined>(undefined);
 	let pendingApproval = $state<{ id: string; title: string; message: string } | undefined>(undefined);
 	let workspacePanelOpen = $state(true);
@@ -105,8 +105,11 @@
 	let terminalStreamed = false;
 	let mcpStatus = $state<McpStatus | undefined>(undefined);
 	let mcpBusy = $state(false);
+	let backendCommands = $state<string[]>([]);
+	let mcpNeedsReload = false;
 
 	let currentLocalRuntimes: LocalRuntime[] = [];
+	let modelCatalog: SelectOption[] = [];
 	let lastFallbackReason = "";
 	let feedSeq = 0;
 	let taskSeq = 0;
@@ -159,16 +162,7 @@
 		terminalBusy || workspaceListeners.length > 0 || activityLogs.length > 0,
 	);
 	const bottomPanelVisible = $derived(hasConversation && bottomPanelRevealed);
-	const mcpToolOptions = $derived.by(() => {
-		const options: McpToolOption[] = [];
-		for (const server of mcpStatus?.servers ?? []) {
-			if (server.state !== "connected") continue;
-			for (const tool of server.tools) {
-				options.push({ ...tool, label: `${server.name} / ${tool.remoteName}` });
-			}
-		}
-		return options.sort((left, right) => left.label.localeCompare(right.label));
-	});
+	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const MIN_MAIN_COL = 280;
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
@@ -612,7 +606,12 @@
 				void refreshStateAfterSettle();
 				void refreshWorkspace();
 				void refreshRunningServices();
-				void refreshMcpStatus();
+				if (mcpNeedsReload && supportsCommand("reload_mcp_servers")) {
+					mcpNeedsReload = false;
+					void reloadMcpServers();
+				} else {
+					void refreshMcpStatus();
+				}
 				return;
 			}
 			case "message_start": {
@@ -670,6 +669,10 @@
 			case "tool_execution_end": {
 				pendingApproval = undefined;
 				handleToolEnd(event);
+				if (event.toolName === "configure_mcp_server" && event.isError !== true) {
+					mcpNeedsReload = true;
+					void refreshMcpStatus();
+				}
 				return;
 			}
 			case "routing_changed": {
@@ -847,8 +850,12 @@
 		}
 	}
 
+	function supportsCommand(name: string): boolean {
+		return backendCommands.includes(name);
+	}
+
 	async function refreshMcpStatus(): Promise<void> {
-		if (!backendReady || mcpBusy) return;
+		if (!backendReady || mcpBusy || !supportsCommand("get_mcp_status")) return;
 		mcpBusy = true;
 		try {
 			mcpStatus = await bridge.send<McpStatus>("get_mcp_status");
@@ -860,8 +867,21 @@
 		}
 	}
 
+	async function reloadMcpServers(): Promise<void> {
+		if (!backendReady || interactionActive || mcpBusy || !supportsCommand("reload_mcp_servers")) return;
+		mcpBusy = true;
+		clearError();
+		try {
+			mcpStatus = await bridge.send<McpStatus>("reload_mcp_servers", {}, 45_000);
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			mcpBusy = false;
+		}
+	}
+
 	async function addMcpServer(server: McpServerUpdate): Promise<boolean> {
-		if (!backendReady || interactionActive || mcpBusy) return false;
+		if (!backendReady || interactionActive || mcpBusy || !supportsCommand("add_mcp_server")) return false;
 		mcpBusy = true;
 		clearError();
 		try {
@@ -1014,8 +1034,38 @@
 		}
 	}
 
+	function mergeModelCatalog(options: SelectOption[]): SelectOption[] {
+		const seen = new Set<string>();
+		const merged: SelectOption[] = [];
+		for (const option of options) {
+			if (!option.value || seen.has(option.value)) continue;
+			seen.add(option.value);
+			merged.push(option);
+		}
+		return merged;
+	}
+
+	function assignAgentOptions(): void {
+		const catalog = mergeModelCatalog(modelCatalog);
+		if (catalog.length === 0) {
+			localOptions = [{ value: "", label: "No models found" }];
+			frontierOptions = [{ value: "", label: "No models found" }];
+			return;
+		}
+		const agent1 = currentConfig?.localModel;
+		const agent2 = currentConfig?.frontierModel;
+		localOptions = catalog.filter((option) => option.value !== agent2);
+		frontierOptions = catalog.filter((option) => option.value !== agent1);
+		if (agent1 && !localOptions.some((option) => option.value === agent1)) {
+			localOptions = [{ value: agent1, label: agent1 }, ...localOptions];
+		}
+		if (agent2 && !frontierOptions.some((option) => option.value === agent2)) {
+			frontierOptions = [{ value: agent2, label: agent2 }, ...frontierOptions];
+		}
+	}
+
 	async function refreshLocalModels(): Promise<void> {
-		runtimeStatus = { state: "starting", title: "Checking Agent 1 runtimes", detail: "Looking for installed models" };
+		runtimeStatus = { state: "starting", title: "Checking local runtimes", detail: "Looking for installed models" };
 		try {
 			const result = await bridge.send<{ runtimes: LocalRuntime[] }>("get_local_runtimes");
 			const runtimes = [...result.runtimes].sort((left, right) => {
@@ -1030,22 +1080,20 @@
 					label: `${runtime.name} / ${model.id}${model.details ? ` / ${model.details}` : ""}`,
 				})),
 			);
+			const availableRuntime = runtimes.find((runtime) => !runtime.error);
 			if (modelOptions.length === 0) {
-				localOptions = [{ value: "", label: "No Agent 1 models found" }];
-				const availableRuntime = runtimes.find((runtime) => !runtime.error);
 				runtimeStatus = {
-					state: "error",
-					title: "No Agent 1 model available",
+					state: availableRuntime ? "error" : "starting",
+					title: availableRuntime ? "No local models installed" : "No local runtime running",
 					detail: availableRuntime
 						? `${availableRuntime.name} is running without installed models`
-						: "Start Ollama and install a model, then refresh",
+						: "Start Ollama or pick a cloud model for Agent 1 or Agent 2",
 				};
 				return;
 			}
-			localOptions = modelOptions;
 			runtimeStatus = {
 				state: "online",
-				title: `${modelOptions.length} Agent 1 model${modelOptions.length === 1 ? "" : "s"} ready`,
+				title: `${modelOptions.length} local model${modelOptions.length === 1 ? "" : "s"} ready`,
 				detail: runtimes
 					.filter((runtime) => !runtime.error)
 					.map((runtime) => runtime.name)
@@ -1053,7 +1101,6 @@
 			};
 		} catch (error) {
 			currentLocalRuntimes = [];
-			localOptions = [{ value: "", label: "Agent 1 discovery failed" }];
 			runtimeStatus = { state: "error", title: "Runtime discovery failed", detail: toError(error).message };
 		}
 	}
@@ -1061,14 +1108,28 @@
 	async function refreshFrontierModels(): Promise<void> {
 		try {
 			const result = await bridge.send<{ models: Array<{ provider: string; id: string }> }>("get_available_models");
-			const localProviders = new Set(currentLocalRuntimes.map((runtime) => runtime.providerId));
-			const options = result.models
-				.filter((model) => !localProviders.has(model.provider))
-				.map((model) => ({ value: `${model.provider}/${model.id}`, label: `${model.provider} / ${model.id}` }));
-			frontierOptions =
-				options.length > 0 ? options : [{ value: "", label: "No Agent 2 models found" }];
+			const localOptionsFromRuntimes = currentLocalRuntimes.flatMap((runtime) =>
+				runtime.models.map((model) => ({
+					value: `${runtime.providerId}/${model.id}`,
+					label: `${runtime.name} / ${model.id}${model.details ? ` / ${model.details}` : ""}`,
+				})),
+			);
+			const available = result.models.map((model) => ({
+				value: `${model.provider}/${model.id}`,
+				label: `${model.provider} / ${model.id}`,
+			}));
+			modelCatalog = mergeModelCatalog([...localOptionsFromRuntimes, ...available]);
+			assignAgentOptions();
+			if (modelCatalog.length > 0 && runtimeStatus.state !== "online") {
+				runtimeStatus = {
+					state: "online",
+					title: `${modelCatalog.length} model${modelCatalog.length === 1 ? "" : "s"} ready`,
+					detail: "Agent 1 and Agent 2 can use any available model except the same one",
+				};
+			}
 		} catch (error) {
-			frontierOptions = [{ value: "", label: "Agent 2 discovery failed" }];
+			modelCatalog = [];
+			assignAgentOptions();
 			runtimeStatus = { ...runtimeStatus, detail: toError(error).message };
 		}
 	}
@@ -1126,6 +1187,7 @@
 				});
 				currentConfig = result.config;
 				currentRoutingState = result.routingState;
+				assignAgentOptions();
 				if (update.localModel !== undefined) await refreshThinkingSetting("local");
 				if (update.frontierModel !== undefined) await refreshThinkingSetting("frontier");
 				return true;
@@ -1158,7 +1220,11 @@
 			throw new Error(`Unsupported Klerm RPC protocol ${handshake.protocolVersion}. Expected 1.`);
 		}
 		backendReady = true;
+		backendCommands = handshake.capabilities?.commands ?? [];
 		setStatus("online", "Backend connected", `Klerm ${handshake.klermVersion} / RPC v${handshake.protocolVersion}`);
+		if (!supportsCommand("get_mcp_status")) {
+			showError("Rebuild the desktop backend. This sidecar does not support MCP commands.");
+		}
 		lastState = handshake.state;
 		currentRoutingState = handshake.routingState;
 		sessionTitle = handshake.state.sessionName ?? "New Agent 1 session";
@@ -1245,7 +1311,7 @@
 		activeTaskKey = ++taskSeq;
 		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, streaming: false });
 		try {
-			await bridge.send("prompt", { message: text });
+			await bridge.send("prompt", { message: expandMcpMentions(text, mcpServers) });
 			if (draft.trim() === text) draft = "";
 		} catch (error) {
 			taskActive = false;
@@ -1344,6 +1410,7 @@
 		onexpand={() => (sessionsExpanded = true)}
 		oncollapse={() => (sessionsExpanded = false)}
 		onrefreshmcp={() => void refreshMcpStatus()}
+		onreloadmcp={() => void reloadMcpServers()}
 		onaddmcpserver={addMcpServer}
 	/>
 	<button
@@ -1437,7 +1504,7 @@
 			frontierThinkingLevels={frontierThinking.levels}
 			frontierThinkingValue={frontierThinking.level}
 			{frontierThinkingDisabled}
-			mcpTools={mcpToolOptions}
+			mcpServers={mcpServers}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
 			{activeAgent}

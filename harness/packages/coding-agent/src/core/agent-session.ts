@@ -52,6 +52,7 @@ import {
 	type KlermModelTransition,
 	type KlermRoutingController,
 	projectKlermHandoffContext,
+	projectKlermPlannerContext,
 } from "../klerm/router/runtime.ts";
 import {
 	KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
@@ -59,6 +60,7 @@ import {
 	type KlermRoutingState,
 	type KlermWorkerLane,
 } from "../klerm/router/types.ts";
+import { type KlermToolApprovalCategory, requiresBuilderApproval, toolPath } from "../klerm/tool-policy.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -390,6 +392,8 @@ export class AgentSession {
 	private readonly _klermRoutingController?: KlermRoutingController;
 	private readonly _klermThinkingLevels: Partial<Record<KlermWorkerLane, ThinkingLevel>> = {};
 	private _klermBuilderTools?: AgentTool[];
+	private readonly _klermBuilderApprovedCategories = new Set<KlermToolApprovalCategory>();
+	private readonly _klermBuilderChangedPaths = new Set<string>();
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -520,7 +524,7 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ assistantMessage, toolCall, args }) => {
+		this.agent.beforeToolCall = async ({ assistantMessage, toolCall, args }, signal) => {
 			const toolCalls = assistantMessage.content.filter((part) => part.type === "toolCall");
 			const hasRoutingTool =
 				this._klermRoutingController !== undefined &&
@@ -536,6 +540,32 @@ export class AgentSession {
 					block: true,
 					reason: "Klerm routing tools must be called alone in a model turn. Retry the routing call separately.",
 				};
+			}
+			if (this._klermRoutingController?.activeWorkerRole === "builder") {
+				const path = toolPath(toolCall.name, args);
+				const changedPath = (toolCall.name === "edit" || toolCall.name === "write") && path ? path : undefined;
+				const changedFileCount =
+					changedPath && !this._klermBuilderChangedPaths.has(changedPath)
+						? this._klermBuilderChangedPaths.size + 1
+						: this._klermBuilderChangedPaths.size;
+				const approval = requiresBuilderApproval(toolCall.name, args, changedFileCount);
+				if (approval && !this._klermBuilderApprovedCategories.has(approval.category)) {
+					const approved =
+						this._extensionRunner.hasUI() &&
+						(await this._extensionRunner.getUIContext().confirm(approval.title, approval.message, {
+							signal,
+							timeout: 120_000,
+						}));
+					this._recordKlermToolApproval(toolCall.name, approval.category, approved);
+					if (!approved) {
+						return {
+							block: true,
+							reason: `Builder action was not approved: ${approval.category}.`,
+						};
+					}
+					this._klermBuilderApprovedCategories.add(approval.category);
+				}
+				if (changedPath) this._klermBuilderChangedPaths.add(changedPath);
 			}
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
@@ -591,13 +621,35 @@ export class AgentSession {
 		};
 	}
 
+	private _recordKlermToolApproval(toolName: string, category: KlermToolApprovalCategory, approved: boolean): void {
+		const controller = this._klermRoutingController;
+		if (!controller) return;
+		const entryId = this.sessionManager.appendCustomEntry("klerm-tool-approval", {
+			version: 1,
+			taskId: controller.routingState.taskId,
+			lane: controller.routingState.lane,
+			role: controller.activeWorkerRole,
+			toolName,
+			category,
+			approved,
+			timestamp: new Date().toISOString(),
+		});
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) this._emit({ type: "entry_appended", entry });
+	}
+
 	private _installKlermContextProjection(): void {
 		const controller = this._klermRoutingController;
 		if (!controller) return;
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {
 			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
-			return projectKlermHandoffContext(transformed, this.agent.state.model, controller.routingState);
+			const handoffContext = projectKlermHandoffContext(
+				transformed,
+				this.agent.state.model,
+				controller.routingState,
+			);
+			return controller.activeWorkerRole === "planner" ? projectKlermPlannerContext(handoffContext) : handoffContext;
 		};
 	}
 
@@ -694,7 +746,7 @@ export class AgentSession {
 		if (controller.activeWorkerRole === "planner") {
 			this._klermBuilderTools ??= this.agent.state.tools.slice();
 			const tools = new Map(this._klermBuilderTools.map((tool) => [tool.name, tool]));
-			for (const name of ["read", "grep", "find", "ls"]) {
+			for (const name of ["find", "ls"]) {
 				const tool = this._toolRegistry.get(name);
 				if (tool) tools.set(name, tool);
 			}
@@ -1401,6 +1453,10 @@ export class AgentSession {
 		let restoreThinkingLevel: ThinkingLevel | undefined;
 
 		try {
+			if (!this.isStreaming) {
+				this._klermBuilderApprovedCategories.clear();
+				this._klermBuilderChangedPaths.clear();
+			}
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
 			if (expandPromptTemplates && text.startsWith("/")) {

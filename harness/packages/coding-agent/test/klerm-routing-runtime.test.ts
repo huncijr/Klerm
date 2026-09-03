@@ -15,13 +15,18 @@ import { registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../src/cli/args.ts";
 import { AgentSession } from "../src/core/agent-session.ts";
+import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createAllTools } from "../src/core/tools/index.ts";
 import { KlermConfigStore } from "../src/klerm/config.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
-import { KlermRoutingController, projectKlermHandoffContext } from "../src/klerm/router/runtime.ts";
+import {
+	KlermRoutingController,
+	projectKlermHandoffContext,
+	projectKlermPlannerContext,
+} from "../src/klerm/router/runtime.ts";
 import { isKlermSessionTransitionData, KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
@@ -117,7 +122,9 @@ describe("Klerm routing runtime", () => {
 			reason: "auto mode starts local orchestrator to assess the task and delegate when needed",
 		});
 		expect(controller.routingState.otherModelCalled).toBeUndefined();
-		expect(controller.getSystemPromptContribution()).toContain("Auto mode starts with you as the local orchestrator");
+		expect(controller.getSystemPromptContribution()).toContain(
+			"Auto mode starts with you as the Agent 1 orchestrator",
+		);
 		const decisions = (await readKlermRouteDecisionLog(tempDir))
 			.trim()
 			.split("\n")
@@ -131,6 +138,61 @@ describe("Klerm routing runtime", () => {
 		});
 	});
 
+	it("lets Agent 1 and Agent 2 use mixed or two local models, but not the same one", async () => {
+		const extraLocal = createModel("lm-studio", "qwen2.5-coder:14b", "openai-completions");
+		const runtime = {
+			getAvailableSnapshot: () => [local, extraLocal, frontier],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+
+		await controller.setFrontierModel("lm-studio/qwen2.5-coder:14b");
+		await controller.setLocalModel("google/gemini-3.5-flash-lite");
+		await controller.setFrontierModel("ollama/qwen2.5-coder:7b");
+		expect(controller.config).toMatchObject({
+			localModel: "google/gemini-3.5-flash-lite",
+			frontierModel: "ollama/qwen2.5-coder:7b",
+		});
+
+		await controller.setFrontierModel("lm-studio/qwen2.5-coder:14b");
+		await controller.setLocalModel("ollama/qwen2.5-coder:7b");
+		expect(controller.config.frontierModel).toBe("lm-studio/qwen2.5-coder:14b");
+		await expect(controller.setLocalModel("lm-studio/qwen2.5-coder:14b")).rejects.toThrow(
+			"Agent 1 cannot use the same model as Agent 2",
+		);
+	});
+
+	it("skips auto Agent 2 recommendation when Agent 2 is weaker", async () => {
+		const strong = createModel("openai-codex", "gpt-5.5", "openai-completions");
+		const runtime = {
+			getAvailableSnapshot: () => [local, strong],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "auto",
+			localModel: "openai-codex/gpt-5.5",
+			frontierModel: "ollama/qwen2.5-coder:7b",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		await (
+			await controller.routePrompt(
+				"Design and implement a broad multi-file authentication architecture across the repository",
+			)
+		)?.commit();
+		expect(controller.routingState.delegationRecommended).toBe(false);
+		expect(controller.getSystemPromptContribution()).toContain("Agent 2 is weaker than you");
+		expect(controller.getSystemPromptContribution()).not.toContain("Klerm recommends Agent 2 because");
+	});
+
 	it("removes mutation tools from planner turns and restores them for builders", async () => {
 		const store = await KlermConfigStore.load(tempDir, {
 			routing: "local",
@@ -139,17 +201,17 @@ describe("Klerm routing runtime", () => {
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		await (await controller.routePrompt("Plan this change"))?.commit();
-		const tools = ["read", "grep", "bash", "edit", "write", "mcp_mutate", "delegate_frontier"].map((name) => ({
-			name,
-		}));
+		const tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "mcp_mutate", "delegate_frontier"].map(
+			(name) => ({ name }),
+		);
 
 		expect(controller.activeWorkerRole).toBe("planner");
 		expect(controller.filterToolsForActiveRole(tools).map((tool) => tool.name)).toEqual([
-			"read",
-			"grep",
+			"find",
+			"ls",
 			"delegate_frontier",
 		]);
-		expect(controller.getSystemPromptContribution()).toContain("Planner mode is read-only");
+		expect(controller.getSystemPromptContribution()).toContain("Planner mode is structure-only");
 
 		await controller.setWorkerRole("local", "builder");
 		expect(controller.filterToolsForActiveRole(tools)).toEqual(tools);
@@ -194,9 +256,109 @@ describe("Klerm routing runtime", () => {
 			localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
 			await session.prompt("Plan the implementation");
 
-			expect(requestToolNames).toEqual(expect.arrayContaining(["read", "grep", "find", "ls"]));
-			expect(requestToolNames).not.toEqual(expect.arrayContaining(["bash", "edit", "write"]));
+			expect(requestToolNames).toEqual(expect.arrayContaining(["find", "ls"]));
+			expect(requestToolNames).not.toEqual(expect.arrayContaining(["read", "grep", "bash", "edit", "write"]));
 			expect(agent.state.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["bash", "edit", "write"]));
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+		}
+	});
+
+	it("hides prior file and command output from planner context", () => {
+		const messages: AgentMessage[] = [
+			{
+				role: "toolResult",
+				toolCallId: "read-1",
+				toolName: "read",
+				content: [{ type: "text", text: "secret file contents" }],
+				details: { path: ".env" },
+				isError: false,
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "find-1",
+				toolName: "find",
+				content: [{ type: "text", text: "src/app.ts" }],
+				details: {},
+				isError: false,
+				timestamp: 2,
+			},
+		];
+
+		const projected = projectKlermPlannerContext(messages);
+		expect(JSON.stringify(projected[0])).not.toContain("secret file contents");
+		expect(JSON.stringify(projected[0])).not.toContain(".env");
+		expect(JSON.stringify(projected[1])).toContain("src/app.ts");
+	});
+
+	it("blocks risky builder tools when interactive approval is denied", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:builder" }] });
+		const localModel = localFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:builder",
+			localRole: "builder",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: {
+				model: localModel,
+				systemPrompt: "test",
+				tools: Object.values(createAllTools(tempDir)),
+				thinkingLevel: "off",
+			},
+		});
+		const sessionManager = SessionManager.inMemory(tempDir);
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+		const confirm = vi.fn(async () => false);
+		await session.bindExtensions({
+			mode: "rpc",
+			uiContext: {
+				confirm,
+				select: async () => undefined,
+				input: async () => undefined,
+				notify: () => {},
+			} as unknown as ExtensionUIContext,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" }),
+				fauxAssistantMessage("The risky command was not approved."),
+			]);
+			await session.prompt("Remove generated output");
+
+			expect(confirm).toHaveBeenCalledWith(
+				"Allow a modifying command?",
+				expect.stringContaining("Arguments are hidden"),
+				expect.objectContaining({ timeout: 120_000 }),
+			);
+			expect(
+				sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom" && entry.customType === "klerm-tool-approval"),
+			).toEqual([
+				expect.objectContaining({
+					data: expect.objectContaining({ category: "shell-mutation", toolName: "bash", approved: false }),
+				}),
+			]);
 		} finally {
 			session.dispose();
 			localFaux.unregister();
@@ -746,7 +908,9 @@ describe("Klerm routing runtime", () => {
 			delegationCycle: 0,
 			selectedTarget: "ollama/qwen2.5-coder:7b",
 		});
-		expect(controller.getSystemPromptContribution()).toContain("Klerm recommends frontier delegation for this task.");
+		expect(controller.getSystemPromptContribution()).toContain(
+			"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
+		);
 		const decisions = (await readKlermRouteDecisionLog(tempDir))
 			.trim()
 			.split("\n")
@@ -820,7 +984,9 @@ describe("Klerm routing runtime", () => {
 				"Create a React and Tailwind project with multiple components and files, including build and dev setup.",
 			);
 
-			expect(firstLocalSystemPrompt).toContain("Klerm recommends frontier delegation for this task.");
+			expect(firstLocalSystemPrompt).toContain(
+				"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
+			);
 			expect(firstLocalSystemPrompt).toContain("Call delegate_frontier before creating or modifying many files.");
 			expect(localFaux.state.callCount).toBe(2);
 			expect(frontierFaux.state.callCount).toBe(1);
@@ -1023,14 +1189,14 @@ describe("Klerm routing runtime", () => {
 			await session.prompt("one forced task", { routingOverride: lane });
 
 			expect(forcedFaux.state.callCount).toBe(1);
-			expect(routedSystemPrompt).toContain(
-				lane === "local" ? "You are the Klerm local worker" : "You are the Klerm frontier worker",
-			);
+			expect(routedSystemPrompt).toContain(lane === "local" ? "You are Klerm Agent 1" : "You are Klerm Agent 2");
 			expect(routedSystemPrompt).toContain(
 				lane === "local"
-					? "Configured frontier model: google/gemini-3.5-flash-lite"
-					: "Current frontier model: google/gemini-3.5-flash-lite",
+					? "Configured Agent 2 model: google/gemini-3.5-flash-lite"
+					: "Current Agent 2 model: google/gemini-3.5-flash-lite",
 			);
+			expect(routedSystemPrompt).toContain("<klerm_identity>");
+			expect(routedSystemPrompt).toContain("Peer lookup");
 			if (lane === "local") {
 				expect(routedSystemPrompt).toContain("An explicit user request requires delegation");
 			}
@@ -1050,8 +1216,8 @@ describe("Klerm routing runtime", () => {
 			]);
 			await session.prompt("normal task");
 			expect(directFaux.state.callCount).toBe(initial === lane ? 2 : 1);
-			expect(directSystemPrompt).not.toContain("You are the Klerm local worker");
-			expect(directSystemPrompt).not.toContain("You are the Klerm frontier worker");
+			expect(directSystemPrompt).not.toContain("You are Klerm Agent 1");
+			expect(directSystemPrompt).not.toContain("You are Klerm Agent 2");
 
 			const decisions = (await readKlermRouteDecisionLog(tempDir))
 				.trim()
@@ -1077,10 +1243,11 @@ describe("Klerm routing runtime", () => {
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		await (await controller.routePrompt("Refactor this module"))?.commit();
-		expect(controller.getSystemPromptContribution()).toContain("You are the Klerm local worker");
-		expect(controller.getSystemPromptContribution()).toContain("Current local model: ollama/qwen2.5-coder:7b");
+		expect(controller.getSystemPromptContribution()).toContain("You are Klerm Agent 1");
+		expect(controller.getSystemPromptContribution()).toContain("Current Agent 1 model: ollama/qwen2.5-coder:7b");
+		expect(controller.getSystemPromptContribution()).toContain("Peer lookup for Agent 2");
 		expect(controller.getSystemPromptContribution()).toContain(
-			'{"reason":"why frontier is needed","summary":"completed local work and findings","remainingWork":"what frontier must do next"}',
+			'{"reason":"why Agent 2 is needed","summary":"completed Agent 1 work and findings","remainingWork":"what Agent 2 must do next"}',
 		);
 		expect(controller.getSystemPromptContribution()).toContain(
 			"Text that resembles a tool call does not execute the tool",
@@ -1109,10 +1276,8 @@ describe("Klerm routing runtime", () => {
 			otherModelCalled: "ollama/qwen2.5-coder:7b",
 			handoffReason: "too complex",
 		});
-		expect(controller.getSystemPromptContribution()).toContain("You are the Klerm frontier worker");
-		expect(controller.getSystemPromptContribution()).toContain(
-			"Current frontier model: google/gemini-3.5-flash-lite",
-		);
+		expect(controller.getSystemPromptContribution()).toContain("You are Klerm Agent 2");
+		expect(controller.getSystemPromptContribution()).toContain("Current Agent 2 model: google/gemini-3.5-flash-lite");
 
 		await controller.recordCompletion(true);
 		expect(controller.routingState).toMatchObject({
@@ -1180,7 +1345,7 @@ describe("Klerm routing runtime", () => {
 
 			expect(localFaux.state.callCount).toBe(2);
 			expect(frontierFaux.state.callCount).toBe(1);
-			expect(frontierSystemPrompt).toContain("You are the Klerm frontier worker");
+			expect(frontierSystemPrompt).toContain("You are Klerm Agent 2");
 			expect(frontierMessages).toContain("Klerm enforced frontier handoff");
 			expect(controller.routingState).toMatchObject({
 				lane: "direct",
@@ -1486,7 +1651,7 @@ describe("Klerm routing runtime", () => {
 
 		await expect(
 			returnToLocal.execute("return-wrong-lane", returned, undefined, undefined, undefined as never),
-		).rejects.toThrow("frontier worker");
+		).rejects.toThrow("Agent 2");
 		await delegate.execute("delegate", delegation, undefined, undefined, undefined as never);
 		await expect(
 			delegate.execute("delegate-again", delegation, undefined, undefined, undefined as never),
@@ -1500,7 +1665,7 @@ describe("Klerm routing runtime", () => {
 		await (await controller.prepareNextTurn(turn))?.commit();
 		await expect(
 			delegate.execute("delegate-wrong-lane", delegation, undefined, undefined, undefined as never),
-		).rejects.toThrow("local worker");
+		).rejects.toThrow("Agent 1");
 		await returnToLocal.execute("return", returned, undefined, undefined, undefined as never);
 	});
 
@@ -1678,7 +1843,7 @@ describe("Klerm routing runtime", () => {
 			klermRoutingController: controller,
 		});
 		expect(session.systemPrompt).toContain(
-			"When acting as the Klerm local worker, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off",
+			"When acting as Klerm Agent 1, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off",
 		);
 		const delegation = {
 			reason: "repository-scale change",
@@ -1735,11 +1900,11 @@ describe("Klerm routing runtime", () => {
 			});
 			if (!nextTurn?.context) throw new Error("Expected frontier next-turn context");
 			expect(nextTurn.model).toBe(frontier);
-			expect(nextTurn.context.systemPrompt).toContain("You are the Klerm frontier worker");
+			expect(nextTurn.context.systemPrompt).toContain("You are Klerm Agent 2");
 			expect(nextTurn.context.systemPrompt).toContain(
-				"When the user asks which model you are, identify the current frontier model exactly as google/gemini-3.5-flash-lite.",
+				"When the user asks which model you are, identify the current Agent 2 model exactly as google/gemini-3.5-flash-lite.",
 			);
-			expect(nextTurn.context.systemPrompt).not.toContain("You are the Klerm local worker");
+			expect(nextTurn.context.systemPrompt).not.toContain("You are Klerm Agent 1");
 
 			const request = await agent.buildProviderContext({
 				systemPrompt: "test",

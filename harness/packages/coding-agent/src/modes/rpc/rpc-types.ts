@@ -11,7 +11,7 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
-import type { McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
+import type { McpServerColor, McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
@@ -100,6 +100,8 @@ export interface RpcMcpServerStatus {
 	tools: RpcMcpToolStatus[];
 	skippedTools: string[];
 	error?: string;
+	label?: string;
+	color?: McpServerColor;
 }
 
 export interface RpcMcpStatus {
@@ -117,6 +119,8 @@ export interface RpcMcpServerUpdate {
 	url?: string;
 	headers?: Record<string, string>;
 	enabled?: boolean;
+	label?: string;
+	color?: McpServerColor;
 }
 
 export interface RpcKlermConfigUpdate {
