@@ -71,6 +71,8 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 export type TransportSetting = Transport;
 
 export type McpServerTransport = "stdio" | "http" | "sse";
+export type McpServerColor = "green" | "blue" | "amber" | "red" | "purple" | "teal";
+export const MCP_SERVER_COLORS = ["green", "blue", "amber", "red", "purple", "teal"] as const;
 
 export interface McpServerSettings {
 	transport?: McpServerTransport;
@@ -80,6 +82,8 @@ export interface McpServerSettings {
 	url?: string;
 	headers?: Record<string, string>;
 	enabled?: boolean;
+	label?: string;
+	color?: McpServerColor;
 }
 
 /**
