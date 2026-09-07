@@ -14,12 +14,16 @@
 		AgentMessage,
 		BashResult,
 		ChatMessage,
+		CustomModelEntry,
+		DesktopAppearance,
 		DesktopHandshake,
+		DesktopSettings,
 		DesktopSession,
 		EditorInfo,
 		FeedItem,
 		JsonObject,
 		KlermConfig,
+		KlermProfile,
 		LocalRuntime,
 		McpServerUpdate,
 		McpStatus,
@@ -44,6 +48,7 @@
 	import ConfirmDialog from "./components/ConfirmDialog.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
 	import Feed from "./components/Feed.svelte";
+	import SettingsView from "./components/SettingsView.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
 	import Splash from "./components/Splash.svelte";
 	import Topbar from "./components/Topbar.svelte";
@@ -62,6 +67,8 @@
 	let sessionTransitionActive = $state(false);
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
+	let settingsOpen = $state(false);
+	let desktopSettings = $state<DesktopSettings | undefined>(undefined);
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
@@ -108,7 +115,7 @@
 	let backendCommands = $state<string[]>([]);
 	let mcpNeedsReload = false;
 
-	let currentLocalRuntimes: LocalRuntime[] = [];
+	let currentLocalRuntimes = $state<LocalRuntime[]>([]);
 	let modelCatalog: SelectOption[] = [];
 	let lastFallbackReason = "";
 	let feedSeq = 0;
@@ -166,7 +173,7 @@
 	const MIN_MAIN_COL = 280;
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
-	const filesColPx = $derived(workspacePanelOpen ? filesWidth : 0);
+	const filesColPx = $derived(!settingsOpen && workspacePanelOpen ? filesWidth : 0);
 	const shellColumns = "grid-cols-[var(--session-col)_minmax(0,1fr)_var(--files-col)] narrow-900:grid-cols-[var(--session-col)_minmax(0,1fr)] narrow-720:grid-cols-1";
 
 	const currentModel = $derived.by(() => {
@@ -197,9 +204,11 @@
 	});
 
 	const workspaceRows = $derived(
-		bottomPanelVisible
-			? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
-			: "grid-rows-[auto_minmax(0,1fr)_auto]",
+		settingsOpen
+			? "grid-rows-[auto_minmax(0,1fr)]"
+			: bottomPanelVisible
+				? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
+				: "grid-rows-[auto_minmax(0,1fr)_auto]",
 	);
 
 	$effect(() => {
@@ -903,6 +912,72 @@
 		}
 	}
 
+	async function refreshDesktopSettings(): Promise<void> {
+		if (!backendReady || !supportsCommand("get_desktop_settings")) return;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("get_desktop_settings");
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function setDesktopAppearance(appearance: DesktopAppearance): Promise<void> {
+		if (!supportsCommand("set_desktop_appearance")) return;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("set_desktop_appearance", { appearance });
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function upsertProfile(profile: KlermProfile): Promise<boolean> {
+		if (!supportsCommand("upsert_klerm_profile")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("upsert_klerm_profile", { profile });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function deleteProfile(id: string): Promise<boolean> {
+		if (!supportsCommand("delete_klerm_profile")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("delete_klerm_profile", { profileId: id });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function assignProfile(lane: "local" | "frontier", profileId: string): Promise<boolean> {
+		if (!supportsCommand("assign_klerm_profile")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("assign_klerm_profile", {
+				lane,
+				profileId: profileId || null,
+			});
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function addCustomModel(model: CustomModelEntry): Promise<boolean> {
+		if (!supportsCommand("add_custom_model")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("add_custom_model", { model });
+			await refreshModels();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
 	async function addMcpServer(server: McpServerUpdate): Promise<boolean> {
 		if (!backendReady || interactionActive || mcpBusy || !supportsCommand("add_mcp_server")) return false;
 		mcpBusy = true;
@@ -1256,7 +1331,7 @@
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		await refreshLocalModels();
-		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus()]);
+		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus(), refreshDesktopSettings()]);
 		const entries = await entriesPromise;
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
@@ -1397,6 +1472,7 @@
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape") return;
 			if (pendingDelete) pendingDelete = undefined;
+			else if (settingsOpen) settingsOpen = false;
 			else if (sidebarOpen) sidebarOpen = false;
 			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
 		};
@@ -1420,7 +1496,6 @@
 	<Sidebar
 		{sessions}
 		activeSessionId={lastState?.sessionId ?? ""}
-		{status}
 		{mcpStatus}
 		{mcpBusy}
 		open={sidebarOpen}
@@ -1431,10 +1506,11 @@
 		onrename={renameSession}
 		ondelete={(session) => (pendingDelete = session)}
 		onexpand={() => (sessionsExpanded = true)}
-		oncollapse={() => (sessionsExpanded = false)}
 		onrefreshmcp={() => void refreshMcpStatus()}
 		onreloadmcp={() => void reloadMcpServers()}
 		onaddmcpserver={addMcpServer}
+		settingsOpen={settingsOpen}
+		ontogglesettings={() => (settingsOpen = !settingsOpen)}
 	/>
 	<button
 		type="button"
@@ -1484,6 +1560,28 @@
 			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
 		/>
 
+		{#if settingsOpen}
+			{#if desktopSettings}
+			<SettingsView
+				settings={desktopSettings}
+				{mcpStatus}
+				{mcpBusy}
+				{localOptions}
+				{frontierOptions}
+				runtimes={currentLocalRuntimes}
+				onclose={() => (settingsOpen = false)}
+				onappearance={(value) => void setDesktopAppearance(value)}
+				onaddmodel={addCustomModel}
+				onupsertprofile={upsertProfile}
+				ondeleteprofile={deleteProfile}
+				onrefreshmcp={() => void refreshMcpStatus()}
+				onreloadmcp={() => void reloadMcpServers()}
+				onaddmcpserver={addMcpServer}
+			/>
+			{:else}
+				<p class="px-7 py-6 font-mono text-[11px] text-[#8b969e]">Loading settings...</p>
+			{/if}
+		{:else}
 		<section class="relative min-h-0 overflow-y-auto">
 			<div
 				class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]"
@@ -1528,6 +1626,10 @@
 			frontierThinkingValue={frontierThinking.level}
 			{frontierThinkingDisabled}
 			mcpServers={mcpServers}
+			profiles={desktopSettings?.profiles.profiles ?? []}
+			localProfileId={desktopSettings?.profiles.localProfileId ?? ""}
+			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
+			profileDisabled={!backendReady || interactionActive}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
 			{activeAgent}
@@ -1541,6 +1643,8 @@
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
 			onlocalrolechange={(role) => applyConfigUpdate({ localRole: role })}
 			onfrontierrolechange={(role) => applyConfigUpdate({ frontierRole: role })}
+			onlocalprofilechange={(id) => void assignProfile("local", id)}
+			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
 		/>
 
 		{#if bottomPanelVisible}
@@ -1560,8 +1664,9 @@
 			onclearterminal={() => (terminalOutput = "")}
 		/>
 		{/if}
+		{/if}
 	</main>
-	{#if workspacePanelOpen}
+	{#if workspacePanelOpen && !settingsOpen}
 		<WorkspacePanel
 			{workspace}
 			{editors}

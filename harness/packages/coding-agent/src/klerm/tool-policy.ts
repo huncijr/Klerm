@@ -78,6 +78,14 @@ export function requiresBuilderApproval(
 			};
 		}
 	}
+	if (toolName === "update_klerm_profile") {
+		const name = stringArgument(args, "id") ?? "a profile";
+		return {
+			category: "external-tool",
+			title: "Allow updating a Klerm profile?",
+			message: `Builder wants to update profile ${name}.`,
+		};
+	}
 	if (toolName === "configure_mcp_server") {
 		const name = stringArgument(args, "name") ?? "an MCP server";
 		return {

@@ -9,7 +9,7 @@
 		type McpSuggestion,
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
-	import type { McpColor, McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
+	import type { KlermProfile, McpColor, McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
@@ -39,6 +39,10 @@
 		frontierThinkingValue,
 		frontierThinkingDisabled,
 		mcpServers,
+		profiles,
+		localProfileId,
+		frontierProfileId,
+		profileDisabled,
 		localRole,
 		frontierRole,
 		activeAgent,
@@ -52,6 +56,8 @@
 		onfrontierthinkingchange,
 		onlocalrolechange,
 		onfrontierrolechange,
+		onlocalprofilechange,
+		onfrontierprofilechange,
 	}: {
 		draft: string;
 		sendDisabled: boolean;
@@ -78,6 +84,10 @@
 		frontierThinkingValue: ThinkingLevel;
 		frontierThinkingDisabled: boolean;
 		mcpServers: McpServerStatus[];
+		profiles: KlermProfile[];
+		localProfileId: string;
+		frontierProfileId: string;
+		profileDisabled: boolean;
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
 		activeAgent: "agent1" | "agent2";
@@ -91,6 +101,8 @@
 		onfrontierthinkingchange: (level: ThinkingLevel) => void;
 		onlocalrolechange: (role: WorkerRole) => void;
 		onfrontierrolechange: (role: WorkerRole) => void;
+		onlocalprofilechange: (id: string) => void;
+		onfrontierprofilechange: (id: string) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -452,7 +464,16 @@
 				value={localValue}
 				disabled={localDisabled}
 				placeholder="Discovering models..."
-				onchange={onlocalchange}
+				profiles={profileDisabled ? [] : profiles}
+				selectedProfile={profiles.find((profile) => profile.id === localProfileId)}
+				onchange={(value) => {
+					onlocalchange(value);
+					if (localProfileId) onlocalprofilechange("");
+				}}
+				onprofile={(model, profileId) => {
+					onlocalchange(model);
+					onlocalprofilechange(profileId);
+				}}
 			/>
 			{#if localThinkingLevels.length > 1}
 				<ThinkingSlider
@@ -471,7 +492,17 @@
 				value={frontierValue}
 				disabled={frontierDisabled}
 				placeholder="Discovering models..."
-				onchange={onfrontierchange}
+				profiles={profileDisabled ? [] : profiles}
+				selectedProfile={profiles.find((profile) => profile.id === frontierProfileId)}
+				flyout="left"
+				onchange={(value) => {
+					onfrontierchange(value);
+					if (frontierProfileId) onfrontierprofilechange("");
+				}}
+				onprofile={(model, profileId) => {
+					onfrontierchange(model);
+					onfrontierprofilechange(profileId);
+				}}
 			/>
 			{#if frontierThinkingLevels.length > 1}
 				<ThinkingSlider

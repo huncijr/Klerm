@@ -11,11 +11,18 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
-import type { McpServerColor, McpServerTransport, SettingsScope } from "../../core/settings-manager.ts";
+import type {
+	DesktopAppearance,
+	McpServerColor,
+	McpServerTransport,
+	SettingsScope,
+} from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
+import type { CustomModelEntry } from "../../klerm/custom-models.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { McpServerState } from "../../klerm/mcp/runtime.ts";
+import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
 export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
@@ -132,6 +139,25 @@ export interface RpcKlermConfigUpdate {
 	frontierRole?: KlermWorkerRole;
 }
 
+export interface RpcDesktopSettings {
+	appearance: DesktopAppearance;
+	agentDir: string;
+	klermVersion: string;
+	cwd: string;
+	profiles: KlermProfileState;
+	customModels: CustomModelEntry[];
+	shortcuts: Array<{ action: string; keys: string }>;
+}
+
+export interface RpcCustomModelUpdate {
+	provider: string;
+	id: string;
+	name?: string;
+	api: string;
+	baseUrl: string;
+	apiKey?: string;
+}
+
 // ============================================================================
 // RPC Commands (stdin)
 // ============================================================================
@@ -156,6 +182,13 @@ export type RpcCommand =
 	| { id?: string; type: "get_mcp_status" }
 	| { id?: string; type: "add_mcp_server"; server: RpcMcpServerUpdate }
 	| { id?: string; type: "reload_mcp_servers" }
+	| { id?: string; type: "get_desktop_settings" }
+	| { id?: string; type: "set_desktop_appearance"; appearance: DesktopAppearance }
+	| { id?: string; type: "upsert_klerm_profile"; profile: KlermProfile }
+	| { id?: string; type: "delete_klerm_profile"; profileId: string }
+	| { id?: string; type: "assign_klerm_profile"; lane: KlermWorkerLane; profileId?: string | null }
+	| { id?: string; type: "add_custom_model"; model: RpcCustomModelUpdate }
+	| { id?: string; type: "remove_custom_model"; provider: string; modelId: string }
 
 	// Prompting
 	| {
@@ -344,6 +377,13 @@ export type RpcResponse =
 			data: { name: string; scope: SettingsScope; reloadRequired: boolean; status: RpcMcpStatus };
 	  }
 	| { id?: string; type: "response"; command: "reload_mcp_servers"; success: true; data: RpcMcpStatus }
+	| { id?: string; type: "response"; command: "get_desktop_settings"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "set_desktop_appearance"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "upsert_klerm_profile"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "delete_klerm_profile"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "assign_klerm_profile"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "add_custom_model"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "remove_custom_model"; success: true; data: RpcDesktopSettings }
 	| {
 			id?: string;
 			type: "response";

@@ -14,7 +14,7 @@
 import * as crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { constants as errnoConstants } from "node:os";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
@@ -37,9 +37,12 @@ import {
 	type McpServerTransport,
 	type SettingsScope,
 } from "../../core/settings-manager.ts";
+import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
+import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
+import { normalizeProfile } from "../../klerm/profiles.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -48,6 +51,7 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
 	RpcDesktopSessionInfo,
+	RpcDesktopSettings,
 	RpcEditorInfo,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -108,6 +112,13 @@ const DESKTOP_COMMANDS = [
 	"get_mcp_status",
 	"add_mcp_server",
 	"reload_mcp_servers",
+	"get_desktop_settings",
+	"set_desktop_appearance",
+	"upsert_klerm_profile",
+	"delete_klerm_profile",
+	"assign_klerm_profile",
+	"add_custom_model",
+	"remove_custom_model",
 	"bash",
 	"abort_bash",
 	"get_state",
@@ -287,6 +298,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			reloadRequired,
 		};
 	};
+
+	const modelsPath = () => join(session.settingsManager.getAgentDir(), "models.json");
+
+	const getDesktopSettingsPayload = async (): Promise<RpcDesktopSettings> => ({
+		appearance: session.settingsManager.getDesktopAppearance(),
+		agentDir: session.settingsManager.getAgentDir(),
+		klermVersion: VERSION,
+		cwd: session.sessionManager.getCwd(),
+		profiles: session.settingsManager.getKlermProfiles(),
+		customModels: await loadCustomModels(modelsPath()),
+		shortcuts: [
+			{ action: "Send prompt", keys: "Ctrl/Cmd+Enter" },
+			{ action: "New line", keys: "Enter" },
+			{ action: "Stop task", keys: "Escape" },
+			{ action: "Open Settings", keys: "Ctrl/Cmd+," },
+			{ action: "Toggle files", keys: "Ctrl/Cmd+Shift+F" },
+			{ action: "New session", keys: "Ctrl/Cmd+N" },
+		],
+	});
 
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
@@ -1058,7 +1088,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					server = {
 						transport: "stdio",
 						command: commandValue,
-						args: update.args ?? [],
+						args: normalizeStdioArgs(update.args ?? []),
 						...(existing?.transport !== "http" && existing?.transport !== "sse" && existing?.env
 							? { env: existing.env }
 							: {}),
@@ -1141,6 +1171,98 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				}
 				await session.reload();
 				return success(id, "reload_mcp_servers", getMcpStatusPayload());
+			}
+
+			case "get_desktop_settings": {
+				return success(id, "get_desktop_settings", await getDesktopSettingsPayload());
+			}
+
+			case "set_desktop_appearance": {
+				if (command.appearance !== "dark" && command.appearance !== "light" && command.appearance !== "system") {
+					return error(
+						id,
+						"set_desktop_appearance",
+						"Appearance must be dark, light, or system.",
+						"INVALID_SETTINGS",
+					);
+				}
+				session.settingsManager.setDesktopAppearance(command.appearance);
+				await session.settingsManager.flush();
+				return success(id, "set_desktop_appearance", await getDesktopSettingsPayload());
+			}
+
+			case "upsert_klerm_profile": {
+				const profile = normalizeProfile(command.profile);
+				if (!profile) return error(id, "upsert_klerm_profile", "Invalid Klerm profile.", "INVALID_PROFILE");
+				session.settingsManager.upsertKlermProfile(profile);
+				await session.settingsManager.flush();
+				return success(id, "upsert_klerm_profile", await getDesktopSettingsPayload());
+			}
+
+			case "delete_klerm_profile": {
+				if (typeof command.profileId !== "string" || command.profileId.trim().length === 0) {
+					return error(id, "delete_klerm_profile", "A profile id is required.", "INVALID_PROFILE");
+				}
+				session.settingsManager.deleteKlermProfile(command.profileId);
+				await session.settingsManager.flush();
+				return success(id, "delete_klerm_profile", await getDesktopSettingsPayload());
+			}
+
+			case "assign_klerm_profile": {
+				if (command.lane !== "local" && command.lane !== "frontier") {
+					return error(id, "assign_klerm_profile", "Lane must be local or frontier.", "INVALID_PROFILE");
+				}
+				const profileId = command.profileId === null || command.profileId === "" ? undefined : command.profileId;
+				try {
+					session.settingsManager.assignKlermProfile(command.lane, profileId);
+				} catch (assignError) {
+					return error(
+						id,
+						"assign_klerm_profile",
+						assignError instanceof Error ? assignError.message : String(assignError),
+						"INVALID_PROFILE",
+					);
+				}
+				await session.settingsManager.flush();
+				return success(id, "assign_klerm_profile", await getDesktopSettingsPayload());
+			}
+
+			case "add_custom_model": {
+				const model = command.model;
+				if (!model || typeof model !== "object") {
+					return error(id, "add_custom_model", "A custom model object is required.", "INVALID_MODEL");
+				}
+				if (!isCustomModelApi(model.api)) {
+					return error(id, "add_custom_model", "Unsupported custom model API.", "INVALID_MODEL");
+				}
+				try {
+					await upsertCustomModel(modelsPath(), {
+						provider: model.provider,
+						id: model.id,
+						name: model.name,
+						api: model.api,
+						baseUrl: model.baseUrl,
+						apiKey: typeof model.apiKey === "string" ? model.apiKey : undefined,
+					});
+					await session.modelRuntime.refresh({ allowNetwork: false });
+				} catch (modelError) {
+					return error(
+						id,
+						"add_custom_model",
+						modelError instanceof Error ? modelError.message : String(modelError),
+						"INVALID_MODEL",
+					);
+				}
+				return success(id, "add_custom_model", await getDesktopSettingsPayload());
+			}
+
+			case "remove_custom_model": {
+				if (typeof command.provider !== "string" || typeof command.modelId !== "string") {
+					return error(id, "remove_custom_model", "Provider and id are required.", "INVALID_MODEL");
+				}
+				await removeCustomModel(modelsPath(), command.provider, command.modelId);
+				await session.modelRuntime.refresh({ allowNetwork: false });
+				return success(id, "remove_custom_model", await getDesktopSettingsPayload());
 			}
 
 			// =================================================================

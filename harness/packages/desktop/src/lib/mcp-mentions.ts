@@ -25,6 +25,62 @@ export function isMcpColor(value: string | undefined): value is McpColor {
 	return value !== undefined && (MCP_COLORS as readonly string[]).includes(value);
 }
 
+export function parseStdioArgs(value: string): string[] {
+	const json = parseJsonStringArray(value);
+	if (json) return json;
+	return tokenizeStdioArgs(value).map(cleanStdioArg).filter(Boolean);
+}
+
+function parseJsonStringArray(value: string): string[] | undefined {
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[")) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) return undefined;
+		return parsed.map((item) => item.trim()).filter(Boolean);
+	} catch {
+		return undefined;
+	}
+}
+
+function tokenizeStdioArgs(value: string): string[] {
+	const args: string[] = [];
+	let current = "";
+	let inQuote: string | null = null;
+	for (const char of value) {
+		if (inQuote) {
+			if (char === inQuote) inQuote = null;
+			else current += char;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			inQuote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) {
+				args.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (current) args.push(current);
+	return args;
+}
+
+function cleanStdioArg(value: string): string {
+	let arg = value.trim().replace(/^\[/, "").replace(/\]$/, "").replace(/,$/, "").trim();
+	if (
+		(arg.startsWith('"') && arg.endsWith('"') && arg.length >= 2) ||
+		(arg.startsWith("'") && arg.endsWith("'") && arg.length >= 2)
+	) {
+		arg = arg.slice(1, -1).trim();
+	}
+	return arg.replace(/,$/, "").trim();
+}
+
 export function mcpServerIdFromName(value: string): string | undefined {
 	const slug = value
 		.trim()

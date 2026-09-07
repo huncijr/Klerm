@@ -811,8 +811,16 @@ export async function main(args: string[], options?: MainOptions) {
 			frontierModel: parsed.frontierModel,
 			allowFrontierFallback: parsed.allowFrontierFallback,
 		});
-		const klermRoutingController = new KlermRoutingController(cwd, modelRuntime, klermConfigStore, () =>
-			sessionManager.getSessionId(),
+		const klermRoutingController = new KlermRoutingController(
+			cwd,
+			modelRuntime,
+			klermConfigStore,
+			() => sessionManager.getSessionId(),
+			(lane) => {
+				const state = settingsManager.getKlermProfiles();
+				const id = lane === "local" ? state.localProfileId : state.frontierProfileId;
+				return state.profiles.find((profile) => profile.id === id);
+			},
 		);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,

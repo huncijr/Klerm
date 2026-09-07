@@ -198,6 +198,9 @@ describe("Klerm desktop RPC contract", () => {
 							"get_mcp_status",
 							"add_mcp_server",
 							"reload_mcp_servers",
+							"get_desktop_settings",
+							"set_desktop_appearance",
+							"upsert_klerm_profile",
 							"bash",
 							"abort_bash",
 						]),
@@ -218,6 +221,16 @@ describe("Klerm desktop RPC contract", () => {
 			expect(runtimes).toMatchObject({
 				success: true,
 				data: { runtimes: [{ providerId: "ollama", models: [{ id: "qwen3" }] }] },
+			});
+
+			const desktopSettings = await send({ id: "desktop-settings", type: "get_desktop_settings" });
+			expect(desktopSettings).toMatchObject({
+				success: true,
+				data: {
+					appearance: "dark",
+					profiles: { profiles: expect.arrayContaining([expect.objectContaining({ id: "scout" })]) },
+					shortcuts: expect.arrayContaining([expect.objectContaining({ action: "Send prompt" })]),
+				},
 			});
 
 			const emptyMcpStatus = await send({ id: "mcp-status-empty", type: "get_mcp_status" });

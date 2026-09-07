@@ -1,14 +1,13 @@
 <script lang="ts">
-	import { Plus } from "@lucide/svelte";
-	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName } from "../lib/mcp-mentions.ts";
-	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus, StatusInfo } from "../lib/model.ts";
+	import { Plus, Settings } from "@lucide/svelte";
+	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, parseStdioArgs } from "../lib/mcp-mentions.ts";
+	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus } from "../lib/model.ts";
 	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
 
 	let {
 		sessions,
 		activeSessionId,
-		status,
 		mcpStatus,
 		mcpBusy,
 		open,
@@ -19,14 +18,14 @@
 		onrename,
 		ondelete,
 		onexpand,
-		oncollapse,
 		onrefreshmcp,
 		onreloadmcp,
 		onaddmcpserver,
+		settingsOpen,
+		ontogglesettings,
 	}: {
 		sessions: DesktopSession[];
 		activeSessionId: string;
-		status: StatusInfo;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
 		open: boolean;
@@ -37,10 +36,11 @@
 		onrename: (session: DesktopSession, name: string) => Promise<boolean>;
 		ondelete: (session: DesktopSession) => void;
 		onexpand: () => void;
-		oncollapse: () => void;
 		onrefreshmcp: () => void;
 		onreloadmcp: () => void;
 		onaddmcpserver: (server: McpServerUpdate) => Promise<boolean>;
+		settingsOpen: boolean;
+		ontogglesettings: () => void;
 	} = $props();
 
 	let mcpPopoverOpen = $state(false);
@@ -102,13 +102,6 @@
 		};
 	});
 
-	const dotClass = $derived(
-		status.state === "online"
-			? "bg-accent shadow-[0_0_9px_rgba(214,255,63,.45)]"
-			: status.state === "starting"
-				? "animate-pulse bg-[#d6a63f]"
-				: "bg-danger",
-	);
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const mcpDotClass = $derived.by(() => {
 		if (!mcpStatus || mcpServers.length === 0) return "bg-[#59646d]";
@@ -123,13 +116,6 @@
 		if (mcpStatus.toolCount > 0) return "Tools ready";
 		return "No connected tools";
 	});
-
-	function parseArgs(value: string): string[] {
-		return value
-			.split(/\s+/)
-			.map((part) => part.trim())
-			.filter(Boolean);
-	}
 
 	function parseHeaders(value: string): Record<string, string> | undefined {
 		const headers: Record<string, string> = {};
@@ -180,7 +166,7 @@
 						color: mcpColor,
 						transport: "stdio",
 						command: mcpCommand.trim(),
-						args: parseArgs(mcpArgs),
+						args: parseStdioArgs(mcpArgs),
 						enabled: true,
 					}
 				: {
@@ -309,7 +295,7 @@
 							</div>
 							{#if mcpTransport === "stdio"}
 								<input bind:value={mcpCommand} placeholder="command, e.g. npx" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
-								<textarea bind:value={mcpArgs} rows="3" placeholder="args, space separated; e.g. -y @modelcontextprotocol/server-postgres postgresql://user:pass@host/db" class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+								<textarea bind:value={mcpArgs} rows="3" placeholder='-y @modelcontextprotocol/server-postgres postgresql://user:pass@host/db' class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
 							{:else}
 								<input bind:value={mcpUrl} placeholder="https://example.com/mcp" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 								<textarea bind:value={mcpHeaders} rows="2" placeholder="optional non-secret Header=value" class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
@@ -340,13 +326,20 @@
 		<div class="flex h-full min-h-0 flex-col items-center py-2.5">
 			<button
 				type="button"
+				aria-label="Open settings"
+				aria-pressed={settingsOpen}
+				class={`mt-1 grid h-9 w-9 place-items-center rounded-lg border ${settingsOpen ? "border-[#d7e7ff] bg-[#171e24] text-white" : "border-[#313a41] bg-[#12171c] text-[#c5ced3] hover:border-[#58636b] hover:bg-[#171d22]"}`}
+				onclick={ontogglesettings}
+			>
+				<Settings size={15} stroke-width={1.7} />
+			</button>
+			<button
+				type="button"
 				aria-label="Expand sessions"
-				class="relative mt-1 grid h-11 w-11 place-items-center rounded-[13px] border border-[#33424c] bg-[#12181d] shadow-[0_10px_24px_rgba(0,0,0,.35)] hover:border-[#5a6a74] hover:bg-[#171e24]"
+				class="relative mt-3 grid h-11 w-11 place-items-center rounded-[13px] border border-[#33424c] bg-[#12181d] shadow-[0_10px_24px_rgba(0,0,0,.35)] hover:border-[#5a6a74] hover:bg-[#171e24]"
 				onclick={onexpand}
 			>
-				<img src="/Klerm_logo_no_background.png" alt="" class="h-7 w-7 object-contain" />
-				<span class={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ${dotClass}`}></span>
-				<span class="absolute right-0 -bottom-0.5 h-1.5 w-1.5 rounded-sm bg-[#2c3942]"></span>
+				<img src="/K_Klerm_no_background.png" alt="" class="h-7 w-7 object-contain" />
 			</button>
 			<button
 				type="button"
@@ -359,28 +352,21 @@
 			<div class="relative mt-auto mb-2">
 				{@render mcpControl(true)}
 			</div>
-			<button
-				type="button"
-				aria-label="Expand sessions"
-				class="mb-2 grid h-8 w-8 place-items-center rounded-md text-[#6d7a83] hover:bg-[#151c21] hover:text-[#d5dce0]"
-				onclick={onexpand}
-			>
-				<span class="font-mono text-[9px]">›</span>
-			</button>
 		</div>
 	{:else}
 		<header
 			class="relative flex min-h-[112px] items-center border-b border-line-soft px-[13px] py-3.5 short-650:min-h-[76px] short-650:py-2"
 		>
-			<img src="/Klerm_logo_no_background.png" alt="Klerm" class="block h-auto w-full max-h-[84px] object-contain short-650:max-h-[58px]" />
 			<button
 				type="button"
-				aria-label="Collapse sessions"
-				class="absolute top-2.5 right-2 hidden h-7 w-7 place-items-center rounded-md text-[#66747d] hover:bg-[#151c21] hover:text-[#d5dce0] min-[721px]:grid"
-				onclick={oncollapse}
+				aria-label="Open settings"
+				aria-pressed={settingsOpen}
+				class={`absolute top-2.5 left-2 z-[1] grid h-8 w-8 place-items-center rounded-md ${settingsOpen ? "bg-[#1a2228] text-white" : "text-[#66747d] hover:bg-[#151c21] hover:text-[#d5dce0]"}`}
+				onclick={ontogglesettings}
 			>
-				<span class="font-mono text-[10px]">‹</span>
+				<Settings size={15} stroke-width={1.7} />
 			</button>
+			<img src="/Klerm_logo_no_background.png" alt="Klerm" class="mx-auto block h-auto w-full max-h-[84px] object-contain short-650:max-h-[58px]" />
 		</header>
 
 		<button
@@ -422,16 +408,9 @@
 		</section>
 
 		<footer class="border-t border-line-soft px-4 py-3 short-650:py-2">
-			<div class="mb-2 flex items-center justify-between gap-2">
+			<div class="flex items-center justify-between gap-2">
 				{@render mcpControl(false)}
 				<span class="font-mono text-[8px] text-[#536069]">{mcpStateLabel}</span>
-			</div>
-			<div class="flex min-h-10 items-center gap-2.5">
-				<span class={`h-1.75 w-1.75 shrink-0 rounded-full ${dotClass}`}></span>
-				<div>
-				<strong class="block text-[10px] text-[#aab4bb]">{status.label}</strong>
-				<small class="mt-[3px] block font-mono text-[8px] text-[#536069]">{status.detail}</small>
-				</div>
 			</div>
 		</footer>
 	{/if}

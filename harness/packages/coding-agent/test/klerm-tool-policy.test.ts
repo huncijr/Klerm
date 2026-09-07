@@ -22,6 +22,10 @@ describe("Klerm builder tool policy", () => {
 		);
 		expect(requiresBuilderApproval("bash", { command: "find . -delete" }, 0)?.category).toBe("shell-mutation");
 		expect(requiresBuilderApproval("mcp_remote_publish", {}, 0)?.category).toBe("external-tool");
+		expect(requiresBuilderApproval("update_klerm_profile", { id: "scout" }, 0)).toMatchObject({
+			category: "external-tool",
+			title: "Allow updating a Klerm profile?",
+		});
 		expect(requiresBuilderApproval("configure_mcp_server", { name: "google-maps" }, 0)).toMatchObject({
 			category: "external-tool",
 			title: "Allow configuring an MCP server?",

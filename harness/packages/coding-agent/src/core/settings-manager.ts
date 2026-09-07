@@ -6,6 +6,12 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import {
+	type KlermProfile,
+	type KlermProfileState,
+	normalizeProfile,
+	normalizeProfileState,
+} from "../klerm/profiles.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
@@ -67,6 +73,7 @@ export interface WarningSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
+export type DesktopAppearance = "dark" | "light" | "system";
 
 export type TransportSetting = Transport;
 
@@ -155,6 +162,8 @@ export interface Settings {
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	mcpServers?: Record<string, McpServerSettings>; // MCP servers; project entries replace global entries by name
+	desktopAppearance?: DesktopAppearance;
+	klermProfiles?: KlermProfileState;
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -212,12 +221,14 @@ export interface SettingsError {
 }
 
 export class FileSettingsStorage implements SettingsStorage {
+	readonly agentDir: string;
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
 
 	constructor(cwd: string, agentDir: string) {
 		const resolvedCwd = resolvePath(cwd);
 		const resolvedAgentDir = resolvePath(agentDir);
+		this.agentDir = resolvedAgentDir;
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
 	}
@@ -464,6 +475,10 @@ export class SettingsManager {
 		}
 
 		return settings as Settings;
+	}
+
+	getAgentDir(): string {
+		return this.storage instanceof FileSettingsStorage ? this.storage.agentDir : getAgentDir();
 	}
 
 	getGlobalSettings(): Settings {
@@ -785,6 +800,58 @@ export class SettingsManager {
 		if (!server) return false;
 		this.setMcpServer(name, { ...server, enabled }, scope);
 		return true;
+	}
+
+	getDesktopAppearance(): DesktopAppearance {
+		const value = this.settings.desktopAppearance;
+		return value === "light" || value === "system" ? value : "dark";
+	}
+
+	setDesktopAppearance(appearance: DesktopAppearance): void {
+		this.globalSettings.desktopAppearance = appearance;
+		this.markModified("desktopAppearance");
+		this.save();
+	}
+
+	getKlermProfiles(): KlermProfileState {
+		return normalizeProfileState(this.settings.klermProfiles);
+	}
+
+	setKlermProfiles(state: KlermProfileState): void {
+		this.globalSettings.klermProfiles = normalizeProfileState(state);
+		this.markModified("klermProfiles");
+		this.save();
+	}
+
+	upsertKlermProfile(profile: KlermProfile): KlermProfileState {
+		const next = this.getKlermProfiles();
+		const normalized = normalizeProfile(profile);
+		if (!normalized) throw new Error("Invalid Klerm profile.");
+		const index = next.profiles.findIndex((candidate) => candidate.id === normalized.id);
+		if (index >= 0) next.profiles[index] = normalized;
+		else next.profiles.push(normalized);
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
+	deleteKlermProfile(id: string): KlermProfileState {
+		const next = this.getKlermProfiles();
+		next.profiles = next.profiles.filter((profile) => profile.id !== id);
+		if (next.localProfileId === id) next.localProfileId = undefined;
+		if (next.frontierProfileId === id) next.frontierProfileId = undefined;
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
+	assignKlermProfile(lane: "local" | "frontier", profileId: string | undefined): KlermProfileState {
+		const next = this.getKlermProfiles();
+		if (profileId && !next.profiles.some((profile) => profile.id === profileId)) {
+			throw new Error("Unknown Klerm profile.");
+		}
+		if (lane === "local") next.localProfileId = profileId;
+		else next.frontierProfileId = profileId;
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
 	}
 
 	getSteeringMode(): "all" | "one-at-a-time" {

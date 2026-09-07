@@ -4,6 +4,7 @@ import {
 	filterMcpSuggestions,
 	findActiveMention,
 	mcpServerIdFromName,
+	parseStdioArgs,
 	resolveMcpTool,
 	splitMcpMentions,
 } from "../../desktop/src/lib/mcp-mentions.ts";
@@ -47,6 +48,26 @@ describe("MCP mentions", () => {
 		const baseServers = [{ name: "docs", color: "base" as const, tools: [] }];
 		expect(filterMcpSuggestions(baseServers, "docs")[0]).toMatchObject({ color: "base", insertText: "@docs " });
 		expect(splitMcpMentions("Use @docs", baseServers)[1]?.mention?.color).toBe("base");
+	});
+
+	it("keeps a quoted database URL as one stdio argument", () => {
+		expect(
+			parseStdioArgs('-y @modelcontextprotocol/server-postgres "postgresql://user:pass@example.com:6543/postgres"'),
+		).toEqual(["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@example.com:6543/postgres"]);
+	});
+
+	it("parses a pasted JSON argv array", () => {
+		expect(
+			parseStdioArgs(
+				'["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@example.com:6543/postgres"]',
+			),
+		).toEqual(["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@example.com:6543/postgres"]);
+	});
+
+	it("strips JSON commas from loosely pasted npx args", () => {
+		expect(parseStdioArgs('"-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@host/db"')).toEqual(
+			["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@host/db"],
+		);
 	});
 
 	it("resolves a called tool to its server appearance", () => {

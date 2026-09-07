@@ -14,6 +14,7 @@ import type {
 	KlermWorkerRole,
 } from "../config.ts";
 import { compareStrength, describeModelProfile, formatPeerLookup } from "../model-profile.ts";
+import { formatProfilePrompt, type KlermProfile } from "../profiles.ts";
 import { hasKlermResponseUsage } from "../response-usage.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
@@ -386,17 +387,20 @@ export class KlermRoutingController {
 	private task = "";
 	private explicitFrontierRequest = false;
 	private readonly getSessionId?: () => string | undefined;
+	private readonly profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined;
 
 	constructor(
 		cwd: string,
 		modelRuntime: ModelRuntime,
 		configStore: KlermConfigStore,
 		getSessionId?: () => string | undefined,
+		profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined,
 	) {
 		this.cwd = cwd;
 		this.modelRuntime = modelRuntime;
 		this.configStore = configStore;
 		this.getSessionId = getSessionId;
+		this.profileForLane = profileForLane;
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
@@ -472,12 +476,15 @@ export class KlermRoutingController {
 		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
 		const selfRef = lane === "local" ? this.config.localModel : this.config.frontierModel;
 		const otherRef = lane === "local" ? this.config.frontierModel : this.config.localModel;
-		return formatPeerLookup(
-			lane === "local" ? "Agent 1" : "Agent 2",
+		const agent = lane === "local" ? "Agent 1" : "Agent 2";
+		const identity = formatPeerLookup(
+			agent,
 			describeModelProfile(selfRef, selfRef ? findExactModelReferenceMatch(selfRef, snapshot) : undefined),
 			lane === "local" ? "Agent 2" : "Agent 1",
 			describeModelProfile(otherRef, otherRef ? findExactModelReferenceMatch(otherRef, snapshot) : undefined),
 		);
+		const profile = this.profileForLane?.(lane);
+		return profile ? `${identity}\n\n${formatProfilePrompt(agent, profile)}` : identity;
 	}
 
 	getSystemPromptContribution(): string | undefined {

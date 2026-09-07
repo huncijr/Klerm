@@ -2,6 +2,48 @@ export type JsonObject = Record<string, unknown>;
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type WorkerRole = "planner" | "builder";
+export type DesktopAppearance = "dark" | "light" | "system";
+export const KLERM_PROFILE_FACES = ["fox", "owl", "wolf", "cat", "bear", "otter"] as const;
+export type KlermProfileFace = (typeof KLERM_PROFILE_FACES)[number];
+
+export interface KlermProfile {
+	id: string;
+	name: string;
+	face: KlermProfileFace;
+	level: number;
+	memory: string;
+	readme: string;
+}
+
+export interface KlermProfileState {
+	localProfileId?: string;
+	frontierProfileId?: string;
+	profiles: KlermProfile[];
+}
+
+export interface CustomModelEntry {
+	provider: string;
+	id: string;
+	name?: string;
+	api: string;
+	baseUrl: string;
+	apiKey?: string;
+}
+
+export interface DesktopShortcut {
+	action: string;
+	keys: string;
+}
+
+export interface DesktopSettings {
+	appearance: DesktopAppearance;
+	agentDir: string;
+	klermVersion: string;
+	cwd: string;
+	profiles: KlermProfileState;
+	customModels: CustomModelEntry[];
+	shortcuts: DesktopShortcut[];
+}
 
 export interface ThinkingSetting {
 	level: ThinkingLevel;

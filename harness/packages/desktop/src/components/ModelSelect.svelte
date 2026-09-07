@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
-	import type { SelectOption } from "../lib/model.ts";
+	import type { KlermProfile, SelectOption } from "../lib/model.ts";
+	import { profileIcon } from "../lib/profiles.ts";
 
 	let {
 		label,
@@ -9,6 +10,10 @@
 		disabled,
 		placeholder,
 		onchange,
+		profiles = [],
+		selectedProfile,
+		onprofile,
+		flyout = "right",
 	}: {
 		label: string;
 		options: SelectOption[];
@@ -16,9 +21,14 @@
 		disabled: boolean;
 		placeholder: string;
 		onchange: (value: string) => void;
+		profiles?: KlermProfile[];
+		selectedProfile?: KlermProfile;
+		onprofile?: (model: string, profileId: string) => void;
+		flyout?: "left" | "right";
 	} = $props();
 
 	let open = $state(false);
+	let hovered = $state("");
 	let rootEl: HTMLElement | undefined = $state();
 	let buttonEl: HTMLButtonElement | undefined = $state();
 
@@ -45,7 +55,16 @@
 	function select(option: SelectOption): void {
 		if (disabled || !option.value) return;
 		open = false;
+		hovered = "";
 		onchange(option.value);
+		buttonEl?.focus();
+	}
+
+	function selectProfile(profileId: string): void {
+		if (!hovered || !onprofile) return;
+		open = false;
+		onprofile(hovered, profileId);
+		hovered = "";
 		buttonEl?.focus();
 	}
 
@@ -111,7 +130,10 @@
 			onclick={toggle}
 			onkeydown={handleButtonKeydown}
 		>
-			<span class="min-w-0 truncate" title={selected?.label ?? ""}>{displayLabel}</span>
+			<span class="flex min-w-0 items-center gap-1.5" title={selected?.label ?? ""}>
+				{#if selectedProfile}<span class="shrink-0 text-[12px]">{profileIcon(selectedProfile.face)}</span>{/if}
+				<span class="min-w-0 truncate">{displayLabel}</span>
+			</span>
 			<i
 				class={`h-1.75 w-1.75 shrink-0 border-r border-b border-[#6f7a82] transition-transform duration-150 ${
 					open ? "-translate-x-[2px] -translate-y-[1px] rotate-[225deg]" : "translate-y-[-2px] rotate-45"
@@ -119,27 +141,48 @@
 			></i>
 		</button>
 		{#if open}
-			<div
-				role="listbox"
-				aria-label={`${label} options`}
-				tabindex="-1"
-				class="absolute right-0 bottom-[calc(100%+12px)] left-0 z-30 max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)]"
-				onkeydown={handleMenuKeydown}
-			>
-				{#each options as option (option.value || option.label)}
-					<button
-						type="button"
-						role="option"
-						aria-selected={option.value === value}
-						disabled={disabled || !option.value}
-						class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#1a2026] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#1a2026] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
-							option.value === value ? "bg-[#171d22] text-[#f1f4f5]" : "bg-transparent text-[#aeb7bd]"
-						}`}
-						onclick={() => select(option)}
-					>
-						{option.label}
-					</button>
-				{/each}
+			<div class="absolute right-0 bottom-[calc(100%+12px)] left-0 z-30">
+				<div
+					role="listbox"
+					aria-label={`${label} options`}
+					tabindex="-1"
+					class="max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#1b2228] bg-[#05080b] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)]"
+					onkeydown={handleMenuKeydown}
+				>
+					{#each options as option (option.value || option.label)}
+						<button
+							type="button"
+							role="option"
+							aria-selected={option.value === value}
+							disabled={disabled || !option.value}
+							class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#141a1f] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#141a1f] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
+								option.value === value || option.value === hovered ? "bg-[#141a1f] text-[#f1f4f5]" : "bg-transparent text-[#aeb7bd]"
+							}`}
+							onmouseenter={() => {
+								if (option.value) hovered = option.value;
+							}}
+							onclick={() => select(option)}
+						>
+							{option.label}
+						</button>
+					{/each}
+				</div>
+				{#if profiles.length > 0 && hovered}
+					<div class={`absolute top-0 w-[158px] rounded-lg border border-[#1b2228] bg-[#05080b] p-1 shadow-[0_18px_55px_rgba(0,0,0,.62)] ${flyout === "left" ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"}`}>
+						<p class="px-2 py-1 font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase">Profiles</p>
+						{#each profiles as profile (profile.id)}
+							<button
+								type="button"
+								class={`flex w-full cursor-pointer items-center gap-2 rounded-md border-0 px-2 py-1.5 text-left font-mono text-[10px] hover:bg-[#141a1f] ${selectedProfile?.id === profile.id ? "bg-[#141a1f] text-white" : "text-[#d7dfe2]"}`}
+								onmousedown={(event) => event.preventDefault()}
+								onclick={() => selectProfile(profile.id)}
+							>
+								<span>{profileIcon(profile.face)}</span>
+								<span class="truncate">{profile.name}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
