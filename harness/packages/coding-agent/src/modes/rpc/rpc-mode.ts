@@ -328,8 +328,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		profiles: session.settingsManager.getKlermProfiles(),
 		customModels: await loadCustomModels(modelsPath()),
 		shortcuts: [
-			{ action: "Send prompt", keys: "Ctrl/Cmd+Enter" },
-			{ action: "New line", keys: "Enter" },
+			{ action: "Send prompt", keys: "Enter" },
+			{ action: "New line", keys: "Shift+Enter" },
 			{ action: "Stop task", keys: "Escape" },
 			{ action: "Open Settings", keys: "Ctrl/Cmd+," },
 			{ action: "Toggle files", keys: "Ctrl/Cmd+Shift+F" },
@@ -1480,12 +1480,31 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 
 			case "prompt": {
+				const mcpMentions: unknown = command.mcpMentions;
+				if (
+					mcpMentions !== undefined &&
+					(!Array.isArray(mcpMentions) ||
+						mcpMentions.length > 20 ||
+						mcpMentions.some(
+							(mention) =>
+								typeof mention !== "object" ||
+								mention === null ||
+								Array.isArray(mention) ||
+								typeof (mention as Record<string, unknown>).serverName !== "string" ||
+								!/^[A-Za-z0-9_-]+$/.test((mention as Record<string, unknown>).serverName as string) ||
+								((mention as Record<string, unknown>).toolName !== undefined &&
+									typeof (mention as Record<string, unknown>).toolName !== "string"),
+						))
+				) {
+					return error(id, "prompt", "Invalid MCP mention selection.", "INVALID_MCP_MENTION");
+				}
 				// Start prompt handling immediately, but emit the authoritative response only after
 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
 				let preflightSucceeded = false;
 				void session
 					.prompt(command.message, {
 						images: command.images,
+						mcpMentions: command.mcpMentions,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
 						preflightResult: (didSucceed) => {

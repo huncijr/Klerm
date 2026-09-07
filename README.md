@@ -313,8 +313,8 @@ first prompt is accepted. Assistant responses identify the actual model directly
 above Markdown-lite headings, emphasis, lists, inline code, and fenced code
 blocks. During
 generation, a working spinner is visible and a square stop control replaces Send
-in the same position. Enter inserts a line break; Send or Ctrl/Cmd+Enter submits
-the prompt. ArrowUp/ArrowDown recall prior prompts at the beginning/end of the
+in the same position. Enter or Send submits the prompt; Shift+Enter inserts
+a line break. ArrowUp/ArrowDown recall prior prompts at the beginning/end of the
 composer. Sent prompts expose `Edit`, `Save & rerun`, and `Cancel`; rerunning
 appends a corrected prompt without rewriting the persisted original. Agent 1
 and Agent 2 each show a compact effort slider below their model selector only

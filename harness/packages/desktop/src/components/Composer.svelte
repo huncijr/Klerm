@@ -229,7 +229,7 @@
 			mcpPickerOpen = false;
 			return;
 		}
-		const mention = findActiveMention(draft, promptEl.selectionStart);
+		const mention = findActiveMention(draft, promptEl.selectionStart, mcpServers);
 		if (!mention) {
 			mcpPickerOpen = false;
 			return;
@@ -254,8 +254,33 @@
 		});
 	}
 
+	function insertNewline(): void {
+		if (!promptEl) {
+			draft += "\n";
+			return;
+		}
+		const start = promptEl.selectionStart ?? draft.length;
+		const end = promptEl.selectionEnd ?? draft.length;
+		draft = `${draft.slice(0, start)}\n${draft.slice(end)}`;
+		historyIndex = -1;
+		draftBeforeHistory = "";
+		const position = start + 1;
+		void tick().then(() => {
+			promptEl?.focus();
+			promptEl?.setSelectionRange(position, position);
+			resizePrompt();
+			updateMcpPicker();
+		});
+	}
+
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.isComposing) return;
+		if (event.key === "Enter" && (event.shiftKey || event.ctrlKey || event.metaKey)) {
+			event.preventDefault();
+			if (mcpPickerOpen) mcpPickerOpen = false;
+			insertNewline();
+			return;
+		}
 		if (mcpPickerOpen) {
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
@@ -272,9 +297,17 @@
 				return;
 			}
 			if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey)) {
-				event.preventDefault();
-				insertMcpSuggestion(filteredMcpSuggestions[mcpSelectedIndex]);
-				return;
+				if (filteredMcpSuggestions.length === 0) {
+					mcpPickerOpen = false;
+					if (event.key === "Tab") {
+						event.preventDefault();
+						return;
+					}
+				} else {
+					event.preventDefault();
+					insertMcpSuggestion(filteredMcpSuggestions[mcpSelectedIndex]);
+					return;
+				}
 			}
 			if (event.key === "Escape") {
 				event.preventDefault();
@@ -303,7 +336,7 @@
 			navigateHistory(1);
 			return;
 		}
-		if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
 			event.preventDefault();
 			submit();
 		}
@@ -527,7 +560,7 @@
 	<div
 		class={`mx-auto flex w-[min(820px,100%)] justify-between px-[3px] pt-2 font-mono text-[8px] text-dim ${showMeta ? "" : "invisible"}`}
 	>
-		<span class="narrow-720:hidden">Ctrl/Cmd+Enter to send, Enter for a new line</span>
+		<span class="narrow-720:hidden">Enter to send, Shift+Enter for a new line</span>
 		<span aria-live="polite" class="flex items-center gap-1.5">
 			{#if taskActive}
 				<span class="h-2 w-2 animate-spin rounded-full border border-[#4e5962] border-t-[#d7dde1]"></span>
