@@ -1,5 +1,10 @@
+<script module lang="ts">
+	let lastHeadline: number | undefined;
+</script>
+
 <script lang="ts">
 	import { Code2, FolderSearch, ShieldAlert, SquareTerminal } from "@lucide/svelte";
+	import { EMPTY_HEADLINES, EMPTY_SUBTITLE, pickHeadline } from "../lib/empty-copy.ts";
 	import type { RuntimeStatus } from "../lib/model.ts";
 
 	let {
@@ -7,6 +12,9 @@
 		onrefresh,
 		onprompt,
 	}: { runtimeStatus: RuntimeStatus; onrefresh: () => void; onprompt: (prompt: string) => void } = $props();
+
+	lastHeadline = pickHeadline(lastHeadline);
+	const headline = EMPTY_HEADLINES[lastHeadline] ?? EMPTY_HEADLINES[0];
 
 	const suggestions = [
 		{ icon: "code", text: "Create a simple website in this folder" },
@@ -39,12 +47,12 @@
 	<h1
 		class="m-0 text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-.045em] narrow-900:text-[clamp(30px,5vw,42px)] narrow-520:text-[28px] short-650:text-[clamp(27px,4vw,38px)] short-500:text-[25px]"
 	>
-		What should we build?
+		{headline}
 	</h1>
 	<p
 		class="mx-auto mt-[18px] mb-[26px] max-w-[510px] text-[13px] leading-[1.7] text-muted narrow-520:my-3 narrow-520:text-[11px] short-650:mt-2.5 short-650:mb-4 short-650:leading-[1.45] short-500:hidden"
 	>
-		Choose models for Agent 1 and Agent 2, then send a task. They can be local or cloud, but not the same model.
+		{EMPTY_SUBTITLE}
 	</p>
 	<div class="mb-4 grid w-[min(560px,100%)] grid-cols-2 gap-2 text-left narrow-520:grid-cols-1 short-500:hidden">
 		{#each suggestions as suggestion}
