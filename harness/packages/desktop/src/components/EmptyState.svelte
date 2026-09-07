@@ -35,12 +35,11 @@
 <div
 	class="flex min-h-full w-full flex-col items-center justify-end pt-7 text-center short-500:justify-center short-500:pt-0"
 >
-	<div class="relative mb-6 grid h-[78px] w-[78px] place-items-center short-650:mb-3.5 short-650:h-[54px] short-650:w-[54px] short-500:hidden">
-		<div class="absolute inset-0 rotate-[62deg] scale-x-[.34] rounded-full border border-[#2b343a]"></div>
-		<div class="absolute inset-0 -rotate-[62deg] scale-x-[.34] rounded-full border border-[#2b343a]"></div>
-		<div class="absolute inset-0 scale-y-[.34] rounded-full border border-[#2b343a]"></div>
-		<span class="font-mono text-[21px] text-hero [text-shadow:0_0_18px_rgba(240,160,68,.24)]">K</span>
-	</div>
+	<img
+		src="/K_Klerm_no_background.png"
+		alt="Klerm"
+		class="mb-6 h-[78px] w-[78px] object-contain short-650:mb-3.5 short-650:h-[54px] short-650:w-[54px] short-500:hidden"
+	/>
 	<p class="mb-3.5 font-mono text-[9px] tracking-[.2em] text-accent short-500:mb-[9px] short-500:text-[7px]">
 		LOCAL-FIRST CODING AGENT
 	</p>
