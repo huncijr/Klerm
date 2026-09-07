@@ -78,6 +78,10 @@ export class RpcBridge {
 		return response;
 	}
 
+	async respond(message: JsonObject): Promise<void> {
+		await invoke("rpc_send", { command: message });
+	}
+
 	private handleMessage(message: JsonObject): void {
 		if (message.type === "response" && typeof message.id === "string") {
 			const pending = this.pending.get(message.id);

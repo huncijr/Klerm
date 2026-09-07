@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Plus } from "@lucide/svelte";
-	import type { DesktopSession, McpServerUpdate, McpStatus, StatusInfo } from "../lib/model.ts";
+	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName } from "../lib/mcp-mentions.ts";
+	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus, StatusInfo } from "../lib/model.ts";
 	import SessionRow from "./SessionRow.svelte";
 
 	let {
@@ -19,6 +20,7 @@
 		onexpand,
 		oncollapse,
 		onrefreshmcp,
+		onreloadmcp,
 		onaddmcpserver,
 	}: {
 		sessions: DesktopSession[];
@@ -36,12 +38,15 @@
 		onexpand: () => void;
 		oncollapse: () => void;
 		onrefreshmcp: () => void;
+		onreloadmcp: () => void;
 		onaddmcpserver: (server: McpServerUpdate) => Promise<boolean>;
 	} = $props();
 
 	let mcpPopoverOpen = $state(false);
 	let addingMcp = $state(false);
 	let mcpName = $state("");
+	let mcpLabel = $state("");
+	let mcpColor = $state<McpColor>("blue");
 	let mcpTransport = $state<"stdio" | "http" | "sse">("stdio");
 	let mcpCommand = $state("");
 	let mcpArgs = $state("");
@@ -64,7 +69,7 @@
 		return "bg-[#d6a63f]";
 	});
 	const mcpStateLabel = $derived.by(() => {
-		if (!mcpStatus || mcpServers.length === 0) return "No servers configured";
+		if (!mcpStatus || mcpServers.length === 0) return "";
 		if (mcpServers.some((server) => server.state === "failed")) return "Server failed";
 		if (mcpStatus.reloadRequired) return "Reload required";
 		if (mcpStatus.toolCount > 0) return "Tools ready";
@@ -91,6 +96,18 @@
 		return headers;
 	}
 
+	function mcpDotStyle(server: McpServerStatus): string {
+		if (server.state === "failed") return "background: #f09b93";
+		if (server.state === "disabled") return "background: #59646d";
+		if (server.color) return `background: ${MCP_COLOR_CSS[server.color]}`;
+		return server.state === "connected" ? "background: #d6ff3f" : "background: #d6a63f";
+	}
+
+	function mcpBadgeStyle(server: McpServerStatus): string {
+		const color = server.color ? MCP_COLOR_CSS[server.color] : "#9cc0f2";
+		return `border-color: ${color}; color: ${color}`;
+	}
+
 	async function submitMcpServer(): Promise<void> {
 		mcpFormError = "";
 		const name = mcpName.trim();
@@ -107,6 +124,8 @@
 			mcpTransport === "stdio"
 				? {
 						name,
+						label: mcpLabel.trim() || undefined,
+						color: mcpColor,
 						transport: "stdio",
 						command: mcpCommand.trim(),
 						args: parseArgs(mcpArgs),
@@ -114,6 +133,8 @@
 					}
 				: {
 						name,
+						label: mcpLabel.trim() || undefined,
+						color: mcpColor,
 						transport: mcpTransport,
 						url: mcpUrl.trim(),
 						headers,
@@ -122,6 +143,8 @@
 		const saved = await onaddmcpserver(server);
 		if (!saved) return;
 		mcpName = "";
+		mcpLabel = "";
+		mcpColor = "blue";
 		mcpCommand = "";
 		mcpArgs = "";
 		mcpUrl = "";
@@ -152,7 +175,10 @@
 						<strong class="block text-[11px] text-[#d8e0e4]">MCP</strong>
 						<span class="mt-0.5 block font-mono text-[8px] text-[#687580]">{mcpStateLabel}</span>
 					</div>
-					<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onrefreshmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Refresh"}</button>
+					<div class="flex shrink-0 gap-2">
+						<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onreloadmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Reload"}</button>
+						<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onrefreshmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Refresh"}</button>
+					</div>
 				</div>
 				{#if mcpServers.length === 0}
 					<p class="m-0 rounded-lg border border-[#242d35] bg-[#10161b] p-2 text-[10px]/[1.45] text-[#87929a]">No MCP servers configured yet.</p>
@@ -161,15 +187,18 @@
 						{#each mcpServers as server (server.name)}
 							<section class="rounded-lg border border-[#232c34] bg-[#10161b] p-2">
 								<div class="flex items-center gap-2">
-									<span class={`h-1.75 w-1.75 shrink-0 rounded-full ${server.state === "connected" ? "bg-accent" : server.state === "failed" ? "bg-danger" : server.state === "disabled" ? "bg-[#59646d]" : "bg-[#d6a63f]"}`}></span>
-									<strong class="min-w-0 flex-1 truncate font-mono text-[10px] text-[#d7dfe3]">{server.name}</strong>
+									<span class="h-1.75 w-1.75 shrink-0 rounded-full" style={mcpDotStyle(server)}></span>
+									<div class="min-w-0 flex-1">
+										<strong class="block truncate font-mono text-[10px] text-[#d7dfe3]">{mcpDisplayName(server)}</strong>
+										{#if server.label}<small class="block truncate font-mono text-[7px] text-[#65727b]">{server.name}</small>{/if}
+									</div>
 									<span class="rounded border border-[#2f3941] px-1.5 py-0.5 font-mono text-[7px] text-[#75828b] uppercase">{server.transport}</span>
 								</div>
 								<p class="m-0 mt-1 font-mono text-[8px] text-[#6e7a83]">{server.enabled ? server.state : "disabled"}</p>
 								{#if server.tools.length > 0}
 									<div class="mt-2 flex flex-wrap gap-1">
 										{#each server.tools.slice(0, 12) as tool (tool.name)}
-											<span class="max-w-full truncate rounded border border-[rgba(88,132,196,.4)] bg-[rgba(18,30,48,.45)] px-1.5 py-0.5 font-mono text-[8px] text-[#9cc0f2]">{tool.remoteName}</span>
+											<span class="max-w-full truncate rounded border bg-[rgba(18,30,48,.45)] px-1.5 py-0.5 font-mono text-[8px]" style={mcpBadgeStyle(server)}>{tool.remoteName}</span>
 										{/each}
 									</div>
 								{/if}
@@ -182,6 +211,20 @@
 					{#if addingMcp}
 						<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void submitMcpServer(); }}>
 							<input bind:value={mcpName} placeholder="server name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
+							<input bind:value={mcpLabel} placeholder="display label, e.g. Google Maps" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
+							<div class="grid grid-cols-6 gap-1">
+								{#each MCP_COLORS as color}
+									<button
+										type="button"
+										aria-label={`Use ${color} MCP color`}
+										class={`h-7 rounded-md border bg-[#0a0f13] font-mono text-[7px] capitalize ${mcpColor === color ? "border-white" : "border-[#2d3740]"}`}
+										style={`color: ${MCP_COLOR_CSS[color]}`}
+										onclick={() => (mcpColor = color)}
+									>
+										{color}
+									</button>
+								{/each}
+							</div>
 							<select bind:value={mcpTransport} class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0">
 								<option value="stdio">stdio</option>
 								<option value="http">http</option>
