@@ -484,7 +484,8 @@ export class KlermRoutingController {
 			describeModelProfile(otherRef, otherRef ? findExactModelReferenceMatch(otherRef, snapshot) : undefined),
 		);
 		const profile = this.profileForLane?.(lane);
-		return profile ? `${identity}\n\n${formatProfilePrompt(agent, profile)}` : identity;
+		const role = lane === "local" ? this.config.localRole : this.config.frontierRole;
+		return profile ? `${identity}\n\n${formatProfilePrompt(agent, profile, role)}` : identity;
 	}
 
 	getSystemPromptContribution(): string | undefined {

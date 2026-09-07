@@ -13,9 +13,9 @@
 	></div>
 	<div class="absolute aspect-square w-[42vw] rounded-full bg-[rgba(214,255,63,.09)] blur-[100px]"></div>
 	<img
-		src="/Klerm_logo.png"
+		src="/K_Klerm_no_background.png"
 		alt="Klerm"
-		class="relative w-[min(580px,72vw)] animate-[reveal_.9s_cubic-bezier(.2,.8,.2,1)_both] rounded-3xl shadow-[0_32px_90px_rgba(0,0,0,.6)]"
+		class="relative w-[min(320px,58vw)] object-contain"
 	/>
 	<div
 		class="absolute bottom-[9vh] flex items-center gap-2.5 font-mono text-[11px] tracking-[.14em] text-[#7e898f] uppercase"

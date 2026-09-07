@@ -349,7 +349,9 @@ whole object; their nested fields are never merged with global environment or
 header values. Environment values, headers, and credential-bearing stdio args
 are stored as plaintext; do not put secrets in a project settings file or commit
 them. Prefer a trusted wrapper command, process environment, or external secret
-store for credentials when practical.
+store for credentials when practical. `@modelcontextprotocol/server-postgres` is
+archived; a connect-time `Connection closed` error is usually missing/split argv
+or npx startup output, not a later Postgres auth/SSL failure.
 
 Run `/mcpset` without arguments to open the guided setup wizard. It walks
 through scope, server name, transport, connection fields, optional stdio

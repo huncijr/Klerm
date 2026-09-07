@@ -13,6 +13,7 @@ import { APP_NAME, VERSION } from "../../config.ts";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
 import { MCP_SERVER_COLORS, type McpServerColor, type McpServerSettings } from "../../core/settings-manager.ts";
 import { redactMcpSecretText, redactMcpSecretValue } from "./redact.ts";
+import { normalizeStdioArgs } from "./stdio-args.ts";
 
 export type McpServerState = "disabled" | "connecting" | "connected" | "failed" | "closed";
 
@@ -39,6 +40,17 @@ interface McpConnection {
 }
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const STDIO_STDERR_LIMIT = 8_000;
+const STDIO_ERROR_DETAIL_LIMIT = 400;
+const STDIO_EXTRA_ENV_KEYS = [
+	"LANG",
+	"LC_ALL",
+	"NODE_PATH",
+	"npm_config_cache",
+	"npm_config_prefix",
+	"NPM_CONFIG_CACHE",
+	"NPM_CONFIG_PREFIX",
+] as const;
 
 function getTransport(settings: McpServerSettings): "stdio" | "http" | "sse" {
 	return settings.transport ?? "stdio";
@@ -147,11 +159,42 @@ function createTransport(settings: McpServerSettings, cwd: string): Transport {
 	}
 	return new StdioClientTransport({
 		command: settings.command ?? "",
-		args: settings.args,
-		env: { ...getDefaultEnvironment(), ...(settings.env ?? {}) },
+		args: normalizeStdioArgs(settings.args),
+		env: stdioProcessEnv(settings.env),
 		cwd,
 		stderr: "pipe",
 	});
+}
+
+function stdioProcessEnv(settingsEnv?: Record<string, string>): Record<string, string> {
+	const env = { ...getDefaultEnvironment() };
+	for (const key of STDIO_EXTRA_ENV_KEYS) {
+		const value = process.env[key];
+		if (!value || value.startsWith("()")) continue;
+		env[key] = value;
+	}
+	return { ...env, ...(settingsEnv ?? {}) };
+}
+
+function collectStdioStderr(transport: StdioClientTransport): () => string {
+	let stderr = "";
+	const stream = transport.stderr;
+	const onData = (chunk: Buffer | string) => {
+		stderr += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+		if (stderr.length > STDIO_STDERR_LIMIT) stderr = stderr.slice(-STDIO_STDERR_LIMIT);
+	};
+	stream?.on("data", onData);
+	return () => redactMcpSecretText(stderr).trim();
+}
+
+function formatStdioConnectError(error: unknown, stderr: string): string {
+	const message = redactMcpSecretValue(error);
+	const details = stderr.replace(/\s+/g, " ").slice(0, STDIO_ERROR_DETAIL_LIMIT);
+	if (/Connection closed|-32000/i.test(message)) {
+		return details ? `MCP process exited during handshake: ${details}` : "MCP process exited during handshake.";
+	}
+	if (details && !message.includes(details)) return `${message}: ${details}`;
+	return message;
 }
 
 function sanitizeToolName(value: string): string {
@@ -268,7 +311,7 @@ export class McpRuntime {
 				error: "server transport disconnected",
 			});
 		};
-		if (transport instanceof StdioClientTransport) transport.stderr?.on("data", () => {});
+		const readStderr = transport instanceof StdioClientTransport ? collectStdioStderr(transport) : () => "";
 		try {
 			await client.connect(transport, { timeout: REQUEST_TIMEOUT_MS });
 			const tools: Tool[] = [];
@@ -283,8 +326,10 @@ export class McpRuntime {
 			} while (cursor);
 			return { client, tools };
 		} catch (error) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			const handshakeError = formatStdioConnectError(error, readStderr());
 			await client.close().catch(() => {});
-			throw error;
+			throw new Error(handshakeError);
 		}
 	}
 

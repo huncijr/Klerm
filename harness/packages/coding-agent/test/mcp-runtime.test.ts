@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { redactMcpSecretText } from "../src/klerm/mcp/redact.ts";
 import { McpRuntime } from "../src/klerm/mcp/runtime.ts";
+import { normalizeStdioArgs } from "../src/klerm/mcp/stdio-args.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
+const failingFixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "failing-mcp-stdio-server.mjs");
 
 describe("MCP stdio runtime", () => {
 	let tempDir: string | undefined;
@@ -95,6 +97,32 @@ describe("MCP stdio runtime", () => {
 			error: "HTTP header values must be strings",
 		});
 		await runtime.close();
+	});
+
+	it("surfaces redacted stderr when a stdio server exits during handshake", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "klerm-mcp-"));
+		const runtime = new McpRuntime(tempDir, {
+			broken: { command: process.execPath, args: [failingFixture] },
+		});
+
+		await runtime.start(() => {});
+
+		const status = runtime.getStatus("broken")[0];
+		expect(status?.state).toBe("failed");
+		expect(status?.error).toMatch(/MCP process exited during handshake/);
+		expect(status?.error).toContain("Please provide a database URL");
+		expect(status?.error).toContain("postgresql://********:********@example.com/postgres");
+		expect(status?.error).not.toContain("secret-pass");
+		expect(status?.error).not.toMatch(/MCP error -32000: Connection closed/);
+		await runtime.close();
+	});
+
+	it("flattens a JSON argv blob before spawning stdio MCP", () => {
+		expect(
+			normalizeStdioArgs([
+				'["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@example.com/postgres"]',
+			]),
+		).toEqual(["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@example.com/postgres"]);
 	});
 
 	it("redacts credential-bearing URLs from MCP error text", () => {

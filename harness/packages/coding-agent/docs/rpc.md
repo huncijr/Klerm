@@ -131,9 +131,10 @@ Optional `label` and `color` fields control desktop appearance. Valid colors are
 `base`, `green`, `blue`, `amber`, `red`, `purple`, and `teal`; omitted colors
 default to gray `base`.
 Status responses never include command, args, URLs, headers, or environment
-values, and MCP errors redact common credential-bearing URL forms. MCP settings
-are plaintext JSON on disk; do not commit project `.klerm/settings.json` files
-that contain credentials.
+values. Stdio handshake failures include redacted child stderr instead of only
+`MCP error -32000: Connection closed`. MCP errors redact common credential-bearing
+URL forms. MCP settings are plaintext JSON on disk; do not commit project
+`.klerm/settings.json` files that contain credentials.
 
 ```json
 {"id":"mcp-add","type":"add_mcp_server","server":{"name":"filesystem","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/project"]}}

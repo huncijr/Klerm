@@ -89,9 +89,13 @@
 	let profileName = $state("");
 	let profileFace = $state<KlermProfileFace>("fox");
 	let profileLevel = $state(1);
-	let profileMemory = $state("");
-	let profileReadme = $state("");
+	let profileBehaviour = $state("");
+	let profileWorkPlan = $state("");
+	let profilePlanMode = $state("");
+	let profileBuildMode = $state("");
+	let profileMemoryFormat = $state<"md" | "html">("md");
 	let editingProfileId = $state("");
+	let openProfileId = $state("");
 	let mcpName = $state("");
 	let mcpColor = $state<(typeof MCP_COLORS)[number]>("base");
 	let mcpTransport = $state<"stdio" | "http" | "sse">("stdio");
@@ -111,6 +115,7 @@
 	];
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const profiles = $derived(settings.profiles.profiles);
+	const openedProfile = $derived(profiles.find((profile) => profile.id === openProfileId));
 	const providerCards = $derived(orderProviderGroups(groupProviderAccounts(providers)));
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
 	const connectGroup = $derived(providerCards.find((group) => group.id === connectId));
@@ -167,8 +172,33 @@
 		profileName = profile.name;
 		profileFace = profile.face;
 		profileLevel = profile.level;
-		profileMemory = profile.memory;
-		profileReadme = profile.readme;
+		profileBehaviour = profile.behaviour || profile.memory;
+		profileWorkPlan = profile.workPlan || profile.readme;
+		profilePlanMode = profile.planMode;
+		profileBuildMode = profile.buildMode;
+		profileMemoryFormat = profile.memoryFormat === "html" ? "html" : "md";
+	}
+
+	function resetProfileForm(): void {
+		editingProfileId = "";
+		profileName = "";
+		profileBehaviour = "";
+		profileWorkPlan = "";
+		profilePlanMode = "";
+		profileBuildMode = "";
+		profileMemoryFormat = "md";
+		profileLevel = 1;
+		profileFace = "fox";
+	}
+
+	function showProfile(profile: KlermProfile): void {
+		openProfileId = profile.id;
+		editProfile(profile);
+	}
+
+	function closeProfile(): void {
+		openProfileId = "";
+		resetProfileForm();
 	}
 
 	async function saveProfile(): Promise<void> {
@@ -186,16 +216,18 @@
 			name,
 			face: profileFace,
 			level: profileLevel,
-			memory: profileMemory,
-			readme: profileReadme,
+			behaviour: profileBehaviour,
+			workPlan: profileWorkPlan,
+			planMode: profilePlanMode,
+			buildMode: profileBuildMode,
+			memoryFormat: profileMemoryFormat,
+			memory: "",
+			readme: "",
 		});
 		if (saved) {
-			editingProfileId = "";
-			profileName = "";
-			profileMemory = "";
-			profileReadme = "";
-			profileLevel = 1;
-			profileFace = "fox";
+			const wasEditing = editingProfileId !== "";
+			resetProfileForm();
+			if (wasEditing) openProfileId = "";
 		}
 	}
 
@@ -453,30 +485,37 @@
 			</div>
 		{:else}
 			<div class="mx-auto w-[min(720px,100%)] space-y-4">
-				{#each profiles as profile (profile.id)}
+				{#if openedProfile}
+					{@const profile = openedProfile}
+					<button type="button" class="flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-[9px] text-[#8b969e] hover:text-white" onclick={closeProfile}>← Back</button>
 					<section class="rounded-lg border border-[#232c34] bg-[#0a0f13] p-3">
 						<div class="flex items-center justify-between gap-2">
 							<strong class="font-mono text-[11px] text-white">{profileIcon(profile.face)} {profile.name} · L{profile.level}</strong>
-							<div class="flex gap-2">
-								<button type="button" class="border-0 bg-transparent font-mono text-[9px] text-[#9cc0f2]" onclick={() => editProfile(profile)}>Edit</button>
-								<button type="button" class="border-0 bg-transparent font-mono text-[9px] text-[#f3a49c]" onclick={() => void ondeleteprofile(profile.id)}>Delete</button>
-							</div>
+							<button type="button" class="border-0 bg-transparent font-mono text-[9px] text-[#f3a49c]" onclick={() => { closeProfile(); void ondeleteprofile(profile.id); }}>Delete</button>
 						</div>
-						{#if profile.memory}<p class="m-0 mt-2 whitespace-pre-wrap font-mono text-[9px] text-[#8b969e]">{profile.memory}</p>{/if}
+						{#if profile.behaviour || profile.memory}<p class="m-0 mt-2 whitespace-pre-wrap font-mono text-[9px] text-[#8b969e]"><strong class="text-[#aab4bb]">Behaviour · {profile.memoryFormat === "html" ? "html" : "md"}</strong><br />{profile.behaviour || profile.memory}</p>{/if}
+						{#if profile.workPlan || profile.readme}<p class="m-0 mt-2 whitespace-pre-wrap font-mono text-[9px] text-[#8b969e]"><strong class="text-[#aab4bb]">Work plan</strong><br />{profile.workPlan || profile.readme}</p>{/if}
 					</section>
-				{/each}
-				<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
-					<input bind:value={profileName} placeholder="profile name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
-					<div class="flex flex-wrap gap-1.5">
-						{#each KLERM_PROFILE_FACES as face}
-							<button type="button" class={`h-8 rounded-md border bg-[#05080b] px-2 ${profileFace === face ? "border-white" : "border-[#303a42]"}`} onclick={() => (profileFace = face)}>{profileIcon(face)}</button>
-						{/each}
-					</div>
-					<input type="number" min="1" max="5" bind:value={profileLevel} class="h-8 w-20 rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
-					<textarea bind:value={profileMemory} rows="4" placeholder="custom memory for this profile" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-					<textarea bind:value={profileReadme} rows="3" placeholder="optional README" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-					<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">{editingProfileId ? "Save profile" : "Create profile"}</button>
-				</form>
+					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
+						{@render profileForm()}
+						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">Save profile</button>
+					</form>
+				{:else}
+					{#each profiles as profile (profile.id)}
+						<button
+							type="button"
+							class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-[#232c34] bg-[#0a0f13] p-3 text-left hover:border-[#3b464e]"
+							onclick={() => showProfile(profile)}
+						>
+							<strong class="font-mono text-[11px] text-white">{profileIcon(profile.face)} {profile.name} · L{profile.level}</strong>
+							<span class="font-mono text-[11px] text-[#66747d]">›</span>
+						</button>
+					{/each}
+					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
+						{@render profileForm()}
+						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">Create profile</button>
+					</form>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -625,3 +664,28 @@
 		</div>
 	{/if}
 </section>
+
+{#snippet profileForm()}
+	<input bind:value={profileName} placeholder="profile name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
+	<div class="flex flex-wrap gap-1.5">
+		{#each KLERM_PROFILE_FACES as face}
+			<button type="button" class={`h-8 rounded-md border bg-[#05080b] px-2 ${profileFace === face ? "border-white" : "border-[#303a42]"}`} onclick={() => (profileFace = face)}>{profileIcon(face)}</button>
+		{/each}
+	</div>
+	<div class="flex items-center gap-2">
+		<input type="number" min="1" max="5" bind:value={profileLevel} class="h-8 w-20 rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
+		{#each ["md", "html"] as format}
+			<button
+				type="button"
+				class={`h-8 rounded-md border px-3 font-mono text-[9px] ${profileMemoryFormat === format ? "border-white bg-[#1a2229] text-white" : "border-[#303a42] bg-[#05080b] text-[#8b969e]"}`}
+				onclick={() => (profileMemoryFormat = format as "md" | "html")}
+			>
+				{format}
+			</button>
+		{/each}
+	</div>
+	<textarea bind:value={profileBehaviour} rows="4" placeholder="Behaviour — personality, tone, delegation style" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+	<textarea bind:value={profileWorkPlan} rows="4" placeholder="Work plan — how this profile approaches tasks" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+	<textarea bind:value={profilePlanMode} rows="3" placeholder="Plan mode — prompt used when this profile plans" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+	<textarea bind:value={profileBuildMode} rows="3" placeholder="Build mode — prompt used when this profile builds" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+{/snippet}

@@ -65,48 +65,12 @@
 
 	const dotClass = $derived(
 		model.statusClass === "online"
-			? "bg-accent"
+			? "bg-accent shadow-[0_0_8px_rgba(214,255,63,.5)]"
 			: model.statusClass === "starting"
-				? "animate-pulse bg-[#d6a63f]"
+				? "bg-[#d6a63f]"
 				: "bg-danger",
 	);
 </script>
-
-<style>
-	@keyframes klerm-dot-glow {
-		0%,
-		100% {
-			box-shadow: 0 0 5px rgba(214, 255, 63, 0.35);
-			transform: scale(1);
-		}
-		50% {
-			box-shadow: 0 0 12px rgba(214, 255, 63, 0.7);
-			transform: scale(1.25);
-		}
-	}
-	@keyframes klerm-model-enter {
-		from {
-			opacity: 0;
-			transform: translateY(3px);
-			filter: blur(2px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-			filter: blur(0);
-		}
-	}
-	.model-live {
-		animation:
-			klerm-dot-glow 2.6s ease-in-out infinite,
-			klerm-model-enter 0.35s ease-out;
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.model-live {
-			animation: none;
-		}
-	}
-</style>
 
 <div class="bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
 <header
@@ -160,13 +124,9 @@
 	</button>
 
 	<div class="flex min-w-0 items-center justify-end gap-2 text-right">
-		{#key model.reference}
-			<i class={`h-1.5 w-1.5 shrink-0 rounded-full model-live ${dotClass}`}></i>
-		{/key}
+		<i class={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}></i>
 		<span class="min-w-0">
-			{#key model.reference}
-				<span class="model-live block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
-			{/key}
+			<span class="block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
 			<span class="mt-0.5 block font-mono text-[7px] tracking-[.1em] text-[#536069] uppercase">{model.badge}</span>
 		</span>
 	</div>

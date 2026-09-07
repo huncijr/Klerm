@@ -6,12 +6,21 @@ export type DesktopAppearance = "dark" | "light" | "system";
 export const KLERM_PROFILE_FACES = ["fox", "owl", "wolf", "cat", "bear", "otter"] as const;
 export type KlermProfileFace = (typeof KLERM_PROFILE_FACES)[number];
 
+export type KlermProfileMemoryFormat = "md" | "html";
+
 export interface KlermProfile {
 	id: string;
 	name: string;
 	face: KlermProfileFace;
 	level: number;
+	behaviour: string;
+	workPlan: string;
+	planMode: string;
+	buildMode: string;
+	memoryFormat: KlermProfileMemoryFormat;
+	/** @deprecated Use behaviour instead. Kept for reading older settings. */
 	memory: string;
+	/** @deprecated Use workPlan instead. Kept for reading older settings. */
 	readme: string;
 }
 
