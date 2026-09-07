@@ -65,54 +65,91 @@
 
 	const dotClass = $derived(
 		model.statusClass === "online"
-			? "bg-accent shadow-[0_0_9px_rgba(214,255,63,.45)]"
+			? "bg-accent"
 			: model.statusClass === "starting"
 				? "animate-pulse bg-[#d6a63f]"
 				: "bg-danger",
 	);
 </script>
 
+<style>
+	@keyframes klerm-dot-glow {
+		0%,
+		100% {
+			box-shadow: 0 0 5px rgba(214, 255, 63, 0.35);
+			transform: scale(1);
+		}
+		50% {
+			box-shadow: 0 0 12px rgba(214, 255, 63, 0.7);
+			transform: scale(1.25);
+		}
+	}
+	@keyframes klerm-model-enter {
+		from {
+			opacity: 0;
+			transform: translateY(3px);
+			filter: blur(2px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+			filter: blur(0);
+		}
+	}
+	.model-live {
+		animation:
+			klerm-dot-glow 2.6s ease-in-out infinite,
+			klerm-model-enter 0.35s ease-out;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.model-live {
+			animation: none;
+		}
+	}
+</style>
+
 <div class="bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
 <header
-	class="flex items-center gap-5 border-b border-line px-7 py-2.5 narrow-900:gap-3 narrow-900:px-[18px] narrow-720:justify-between narrow-520:gap-2.5 narrow-520:px-3"
+	class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-line px-7 py-2.5 narrow-900:gap-2 narrow-900:px-[18px] narrow-520:gap-2 narrow-520:px-3"
 >
-	<button
-		type="button"
-		aria-controls="sidebar"
-		aria-expanded={sidebarOpen}
-		aria-label="Toggle navigation"
-		class="hidden h-[34px] w-[34px] cursor-pointer place-items-center rounded-md border border-line bg-[#0e1317] narrow-720:grid"
-		onclick={ontogglesidebar}
-	>
-		<Menu size={14} stroke-width={1.7} />
-	</button>
-
-	<div class="min-w-0 flex-1">
-		{#if editing}
-			<div class="flex max-w-[340px] items-center gap-1">
-				<input
-					bind:this={renameInput}
-					bind:value={renameValue}
-					aria-label="Session name"
-					class="min-w-0 flex-1 rounded border border-[#3a454d] bg-[#0c1115] px-2 py-1 text-[12px] text-[#e5eaed] outline-none focus:border-[#68757e]"
-					onkeydown={handleRenameKeydown}
-				/>
-				<button type="button" aria-label="Save session name" class="grid h-6 w-6 place-items-center rounded text-[#a9c94d] hover:bg-[#1a211b]" onclick={() => void commitRename()}><Check size={13} /></button>
-				<button type="button" aria-label="Cancel rename" class="grid h-6 w-6 place-items-center rounded text-[#737e85] hover:bg-[#171d22]" onclick={() => (editing = false)}><X size={13} /></button>
-			</div>
-		{:else}
-			<button type="button" class="group/title mt-0.5 flex max-w-[340px] items-center text-left" onclick={startRename}>
-				<strong class="min-w-0 truncate text-[13px] narrow-720:max-w-[180px] narrow-720:text-[11px]">{title}</strong>
-			</button>
-		{/if}
-		<small class="mt-0.5 block max-w-[420px] truncate font-mono text-[8px]/[1.3] text-muted narrow-720:max-w-[180px]">{cwd}</small>
+	<div class="flex min-w-0 items-center gap-2">
+		<button
+			type="button"
+			aria-controls="sidebar"
+			aria-expanded={sidebarOpen}
+			aria-label="Toggle navigation"
+			class="hidden h-[34px] w-[34px] shrink-0 cursor-pointer place-items-center rounded-md border border-line bg-[#0e1317] narrow-720:grid"
+			onclick={ontogglesidebar}
+		>
+			<Menu size={14} stroke-width={1.7} />
+		</button>
+		<div class="min-w-0 narrow-520:hidden">
+			{#if editing}
+				<div class="flex max-w-[340px] items-center gap-1">
+					<input
+						bind:this={renameInput}
+						bind:value={renameValue}
+						aria-label="Session name"
+						class="min-w-0 flex-1 rounded border border-[#3a454d] bg-[#0c1115] px-2 py-1 text-[12px] text-[#e5eaed] outline-none focus:border-[#68757e]"
+						onkeydown={handleRenameKeydown}
+					/>
+					<button type="button" aria-label="Save session name" class="grid h-6 w-6 place-items-center rounded text-[#a9c94d] hover:bg-[#1a211b]" onclick={() => void commitRename()}><Check size={13} /></button>
+					<button type="button" aria-label="Cancel rename" class="grid h-6 w-6 place-items-center rounded text-[#737e85] hover:bg-[#171d22]" onclick={() => (editing = false)}><X size={13} /></button>
+				</div>
+			{:else}
+				<button type="button" class="group/title mt-0.5 flex max-w-[340px] items-center text-left" onclick={startRename}>
+					<strong class="min-w-0 truncate text-[13px] narrow-720:max-w-[180px] narrow-720:text-[11px]">{title}</strong>
+				</button>
+			{/if}
+			<small class="mt-0.5 block max-w-[420px] truncate font-mono text-[8px]/[1.3] text-muted narrow-720:max-w-[180px]">{cwd}</small>
+		</div>
 	</div>
 
 	<button
 		type="button"
 		aria-label="Change workspace root"
 		title={projectRoot}
-		class="mx-auto flex min-w-0 max-w-[300px] cursor-pointer items-center gap-2 border-0 bg-transparent px-1 py-1 text-left narrow-720:hidden"
+		class="flex min-w-0 max-w-[320px] cursor-pointer items-center gap-2 justify-self-center border-0 bg-transparent px-1 py-1 text-center narrow-720:hidden"
 		onclick={onchangeroot}
 	>
 		<FolderGit2 size={14} stroke-width={1.6} class="shrink-0 text-[#8a969e]" />
@@ -122,10 +159,14 @@
 		</span>
 	</button>
 
-	<div class="ml-auto flex min-w-0 items-center gap-2 text-right narrow-720:flex-1 narrow-720:justify-end">
-		<i class={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}></i>
+	<div class="flex min-w-0 items-center justify-end gap-2 text-right">
+		{#key model.reference}
+			<i class={`h-1.5 w-1.5 shrink-0 rounded-full model-live ${dotClass}`}></i>
+		{/key}
 		<span class="min-w-0">
-			<span class="block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
+			{#key model.reference}
+				<span class="model-live block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
+			{/key}
 			<span class="mt-0.5 block font-mono text-[7px] tracking-[.1em] text-[#536069] uppercase">{model.badge}</span>
 		</span>
 	</div>

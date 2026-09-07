@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Maximize2, Minimize2 } from "@lucide/svelte";
+	import { Maximize2, Shrink } from "@lucide/svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import type {
 		CustomModelEntry,
@@ -285,6 +285,15 @@
 
 <section class="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
 	<header class="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line px-5">
+		<button
+			type="button"
+			aria-label={fullscreen ? "Exit fullscreen settings" : "Fullscreen settings"}
+			aria-pressed={fullscreen}
+			class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#8b969e] hover:bg-[#141a1f] hover:text-white"
+			onclick={ontogglefullscreen}
+		>
+			{#if fullscreen}<Shrink size={14} />{:else}<Maximize2 size={14} />{/if}
+		</button>
 		{#each tabs as item}
 			<button
 				type="button"
@@ -296,15 +305,6 @@
 				{item.label}
 			</button>
 		{/each}
-		<button
-			type="button"
-			aria-label={fullscreen ? "Exit fullscreen settings" : "Fullscreen settings"}
-			aria-pressed={fullscreen}
-			class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#8b969e] hover:bg-[#141a1f] hover:text-white"
-			onclick={ontogglefullscreen}
-		>
-			{#if fullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
-		</button>
 		<div class="ml-auto flex shrink-0 flex-col items-end gap-1 py-1.5">
 			<button
 				type="button"
