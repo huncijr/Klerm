@@ -44,7 +44,7 @@
 		ThinkingSetting,
 		WorkspaceStatus,
 	} from "./lib/model.ts";
-	import { expandMcpMentions, mcpDisplayName, resolveMcpTool } from "./lib/mcp-mentions.ts";
+	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import Composer from "./components/Composer.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
@@ -1544,7 +1544,12 @@
 		activeTaskKey = ++taskSeq;
 		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, streaming: false });
 		try {
-			await bridge.send("prompt", { message: expandMcpMentions(text, mcpServers), displayMessage: text });
+			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
+			await bridge.send("prompt", {
+				message: preparedPrompt.message,
+				displayMessage: text,
+				mcpMentions: preparedPrompt.mentions,
+			});
 			if (draft.trim() === text) draft = "";
 		} catch (error) {
 			taskActive = false;

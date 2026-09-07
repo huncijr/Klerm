@@ -9,11 +9,53 @@ import type {
 	ToolDefinition,
 } from "../src/core/extensions/types.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { createMcpExtension } from "../src/klerm/mcp/extension.ts";
+import { createMcpExtension, resolveMcpPromptMentions } from "../src/klerm/mcp/extension.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
 
 describe("MCP extension commands", () => {
+	it("exposes live inventory and resolves selected servers to exact usable tools", async () => {
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setMcpServer("fake", {
+			command: process.execPath,
+			args: [fixture],
+			label: "Fake Data",
+		});
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown>();
+		const tools: ToolDefinition[] = [];
+		const pi = {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown) => {
+				handlers.set(event, handler);
+			},
+			registerCommand: vi.fn(),
+			registerTool: (tool: ToolDefinition) => tools.push(tool),
+		} as unknown as ExtensionAPI;
+		await createMcpExtension(settingsManager, "/tmp")(pi);
+		const context = {
+			ui: { notify: vi.fn() },
+			sessionManager: { getSessionId: () => "session-selection" },
+		} as unknown as ExtensionContext;
+
+		await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, context);
+		const toolName = "mcp_fake_echo_text";
+		const instruction = resolveMcpPromptMentions(settingsManager, [{ serverName: "fake" }], new Set([toolName]));
+		expect(instruction).toContain("MUST call at least one listed MCP tool");
+		expect(instruction).toContain(`Fake Data (server id: fake): ${toolName}`);
+
+		const inventory = await handlers.get("before_agent_start")?.(
+			{ type: "before_agent_start", systemPrompt: "Base", prompt: "Hello", systemPromptOptions: {} },
+			context,
+		);
+		expect(inventory).toMatchObject({
+			systemPrompt: expect.stringContaining(`Fake Data (server id: fake): connected; tools: ${toolName}`),
+		});
+
+		expect(() => resolveMcpPromptMentions(settingsManager, [{ serverName: "fake" }], new Set())).toThrow(
+			"unavailable to the active agent role",
+		);
+		await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, context);
+	});
+
 	it("notifies the UI before an MCP tool call", async () => {
 		const settingsManager = SettingsManager.inMemory();
 		settingsManager.setMcpServer("fake", { command: process.execPath, args: [fixture] });
@@ -131,7 +173,7 @@ describe("MCP extension commands", () => {
 		});
 		expect(stdioResult?.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("Run /reload to load its tools"),
+			text: expect.stringContaining("desktop will reload MCP tools after this task settles"),
 		});
 		expect(notify).toHaveBeenCalledWith("mcp: filesystem configured");
 		expect(notify).toHaveBeenCalledWith("mcp: remote configured");

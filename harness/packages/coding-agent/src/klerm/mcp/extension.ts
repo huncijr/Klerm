@@ -9,7 +9,7 @@ import type {
 	SettingsScope,
 } from "../../core/settings-manager.ts";
 import { redactMcpSecretText } from "./redact.ts";
-import type { McpServerStatus } from "./runtime.ts";
+import type { McpPromptMention, McpServerStatus } from "./runtime.ts";
 import { McpRuntime } from "./runtime.ts";
 
 const USAGE = [
@@ -20,11 +20,83 @@ const USAGE = [
 	"/mcpset [--project] <name> remove|enable|disable|status",
 ].join("\n");
 
-const runtimeStatuses = new WeakMap<SettingsManager, McpServerStatus[]>();
+const runtimes = new WeakMap<SettingsManager, McpRuntime>();
 
 export function getMcpRuntimeStatus(settingsManager: SettingsManager): McpServerStatus[] | undefined {
-	const status = runtimeStatuses.get(settingsManager);
-	return status ? structuredClone(status) : undefined;
+	return runtimes.get(settingsManager)?.getStatus();
+}
+
+export function resolveMcpPromptMentions(
+	settingsManager: SettingsManager,
+	mentions: readonly McpPromptMention[],
+	availableToolNames: ReadonlySet<string>,
+): string | undefined {
+	if (mentions.length === 0) return undefined;
+	const statuses = getMcpRuntimeStatus(settingsManager);
+	if (!statuses) throw new Error("MCP runtime is not ready. Reload MCP servers and retry the prompt.");
+	const settings = settingsManager.getMcpServers();
+	const selected = new Map<string, { label: string; tools: string[] }>();
+
+	for (const mention of mentions) {
+		const status = statuses.find((candidate) => candidate.name === mention.serverName);
+		if (!status || !settings[mention.serverName]) {
+			throw new Error(`Mentioned MCP server "${mention.serverName}" is not configured.`);
+		}
+		if (status.state !== "connected") {
+			throw new Error(
+				`Mentioned MCP server "${mention.serverName}" is ${status.state}. Reload or fix this MCP server before retrying.`,
+			);
+		}
+		const serverTools = mention.toolName
+			? status.tools.filter((toolName) => toolName === mention.toolName)
+			: status.tools;
+		if (mention.toolName && serverTools.length === 0) {
+			throw new Error(`MCP tool "${mention.toolName}" is not exposed by server "${mention.serverName}".`);
+		}
+		const usableTools = serverTools.filter((toolName) => availableToolNames.has(toolName));
+		if (usableTools.length === 0) {
+			throw new Error(
+				`Mentioned MCP server "${mention.serverName}" is connected, but its tools are unavailable to the active agent role. Switch that agent to Build mode and retry.`,
+			);
+		}
+		const label = settings[mention.serverName]?.label?.trim() || mention.serverName;
+		const existing = selected.get(mention.serverName);
+		selected.set(mention.serverName, {
+			label,
+			tools: [...new Set([...(existing?.tools ?? []), ...usableTools])].sort(),
+		});
+	}
+
+	return [
+		"<klerm_mcp_selection>",
+		"The user explicitly selected the MCP servers below. You MUST call at least one listed MCP tool from each selected server before answering the user.",
+		"Do not answer from memory, do not claim the MCP is unavailable, and do not substitute workspace or shell tools for the selected MCP.",
+		...Array.from(
+			selected,
+			([serverName, selection]) => `- ${selection.label} (server id: ${serverName}): ${selection.tools.join(", ")}`,
+		),
+		"After the required MCP calls complete, answer from their actual results and report any tool error accurately.",
+		"</klerm_mcp_selection>",
+	].join("\n");
+}
+
+function formatMcpInventory(settingsManager: SettingsManager): string | undefined {
+	const settings = settingsManager.getMcpServers();
+	const statuses = new Map((getMcpRuntimeStatus(settingsManager) ?? []).map((status) => [status.name, status]));
+	const servers = Object.keys(settings).sort();
+	if (servers.length === 0) return undefined;
+	return [
+		"<klerm_mcp_inventory>",
+		"Configured MCP servers for this session:",
+		...servers.map((name) => {
+			const status = statuses.get(name);
+			const label = settings[name]?.label?.trim() || name;
+			const tools = status?.tools.length ? status.tools.join(", ") : "none";
+			return `- ${label} (server id: ${name}): ${status?.state ?? "closed"}; tools: ${tools}`;
+		}),
+		"Use the exact exposed tool names above. Builder agents may use configure_mcp_server when the user explicitly asks to create or update an MCP server.",
+		"</klerm_mcp_inventory>",
+	].join("\n");
 }
 
 const configureMcpServerSchema = Type.Object({
@@ -538,6 +610,7 @@ async function selectMcpTool(
 export function createMcpExtension(settingsManager: SettingsManager, cwd: string): ExtensionFactory {
 	return (pi) => {
 		let runtime = new McpRuntime(cwd, {});
+		runtimes.set(settingsManager, runtime);
 		let unregisterSessionCleanup: (() => void) | undefined;
 
 		pi.registerTool({
@@ -548,8 +621,9 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 			promptSnippet: "Create or update a credential-free stdio, HTTP, or SSE MCP server configuration.",
 			promptGuidelines: [
 				"Use configure_mcp_server when the user explicitly asks you to create, add, set up, or configure an MCP server.",
+				"When the user provides enough credential-free connection details, call configure_mcp_server instead of only describing manual setup steps.",
 				"Never request or place API keys, tokens, passwords, environment values, or HTTP headers in configure_mcp_server arguments.",
-				"After configuration, tell the user to add credentials with /mcpset if needed and run /reload to load the configured MCP tools.",
+				"After configuration, the desktop reloads MCP tools when the task settles. In CLI mode, tell the user to run /reload. If credentials are needed, direct the user to MCP settings or /mcpset.",
 			],
 			parameters: configureMcpServerSchema,
 			executionMode: "sequential",
@@ -567,7 +641,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 					content: [
 						{
 							type: "text",
-							text: `MCP server "${params.name}" configured in ${scope} settings. Run /reload to load its tools.${existing ? " Existing credential fields were preserved when compatible with the selected transport." : " Add credentials with /mcpset if the server requires them."}`,
+							text: `MCP server "${params.name}" configured in ${scope} settings. The desktop will reload MCP tools after this task settles; in CLI mode run /reload.${existing ? " Existing credential fields were preserved when compatible with the selected transport." : " Add required credentials in MCP settings or with /mcpset."}`,
 						},
 					],
 					details: {
@@ -585,7 +659,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 			await runtime.close();
 			unregisterSessionCleanup?.();
 			runtime = new McpRuntime(cwd, settingsManager.getMcpServers());
-			runtimeStatuses.set(settingsManager, runtime.getStatus());
+			runtimes.set(settingsManager, runtime);
 			const sessionId = ctx.sessionManager.getSessionId();
 			unregisterSessionCleanup = registerSessionResourceCleanup((disposedSessionId) => {
 				if (disposedSessionId !== sessionId) return;
@@ -597,7 +671,6 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 				(tool) => pi.registerTool(tool),
 				({ serverName, remoteToolName }) => ctx.ui.notify(`mcp: ${serverName}/${remoteToolName} used`),
 			);
-			runtimeStatuses.set(settingsManager, runtime.getStatus());
 			const failed = runtime.getStatus().filter((status) => status.state === "failed");
 			if (failed.length > 0) {
 				ctx.ui.notify(
@@ -607,11 +680,15 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 			}
 		});
 
+		pi.on("before_agent_start", (event) => {
+			const inventory = formatMcpInventory(settingsManager);
+			return inventory ? { systemPrompt: `${event.systemPrompt}\n\n${inventory}` } : undefined;
+		});
+
 		pi.on("session_shutdown", async () => {
 			unregisterSessionCleanup?.();
 			unregisterSessionCleanup = undefined;
 			await runtime.close();
-			runtimeStatuses.set(settingsManager, runtime.getStatus());
 		});
 
 		pi.registerCommand("mcp", {

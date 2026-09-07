@@ -21,7 +21,7 @@ import type { SourceInfo } from "../../core/source-info.ts";
 import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
 import type { CustomModelEntry } from "../../klerm/custom-models.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
-import type { McpServerState } from "../../klerm/mcp/runtime.ts";
+import type { McpPromptMention, McpServerState } from "../../klerm/mcp/runtime.ts";
 import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
@@ -234,6 +234,7 @@ export type RpcCommand =
 			type: "prompt";
 			message: string;
 			displayMessage?: string;
+			mcpMentions?: McpPromptMention[];
 			images?: ImageContent[];
 			streamingBehavior?: "steer" | "followUp";
 	  }

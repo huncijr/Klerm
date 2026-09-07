@@ -34,6 +34,11 @@ export interface McpToolUseEvent {
 	toolName: string;
 }
 
+export interface McpPromptMention {
+	serverName: string;
+	toolName?: string;
+}
+
 interface McpConnection {
 	client: Client;
 	tools: Tool[];

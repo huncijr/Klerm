@@ -83,10 +83,14 @@ describe("Klerm profiles", () => {
 			memory: "",
 			readme: "",
 		});
-		expect(manager.getKlermProfiles().profiles.find((profile) => profile.id === "scout")?.behaviour).toBe(
+		manager.assignKlermProfile("local", "scout");
+		await manager.flush();
+		const reloaded = SettingsManager.create(dir, dir);
+		expect(reloaded.getKlermProfiles().profiles.find((profile) => profile.id === "scout")?.behaviour).toBe(
 			"Prefer local-first routing.",
 		);
-		expect(formatProfilePrompt("Agent 1", manager.getKlermProfiles().profiles[0]!, "builder")).toContain(
+		expect(reloaded.getKlermProfiles().localProfileId).toBe("scout");
+		expect(formatProfilePrompt("Agent 1", reloaded.getKlermProfiles().profiles[0]!, "builder")).toContain(
 			"Profile behaviour:",
 		);
 	});

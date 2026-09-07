@@ -47,6 +47,8 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { resolveMcpPromptMentions } from "../klerm/mcp/extension.ts";
+import type { McpPromptMention } from "../klerm/mcp/runtime.ts";
 import {
 	type KlermEnforcedDelegation,
 	type KlermModelTransition,
@@ -268,6 +270,8 @@ export interface PromptOptions {
 	source?: InputSource;
 	/** Force the initial Klerm lane for this prompt without changing persisted routing. */
 	routingOverride?: KlermPromptRoutingOverride;
+	/** MCP servers or tools explicitly selected by the user for this prompt. */
+	mcpMentions?: McpPromptMention[];
 	/** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
 	preflightResult?: (success: boolean) => void;
 }
@@ -1500,6 +1504,7 @@ export class AgentSession {
 				expandedText = this._expandSkillCommand(expandedText);
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 			}
+			let modelText = expandedText;
 
 			// If streaming, queue via steer() or followUp() based on option
 			if (this.isStreaming) {
@@ -1508,10 +1513,16 @@ export class AgentSession {
 						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 					);
 				}
+				const mcpInstruction = resolveMcpPromptMentions(
+					this.settingsManager,
+					options.mcpMentions ?? [],
+					new Set(this.agent.state.tools.map((tool) => tool.name)),
+				);
+				if (mcpInstruction) modelText = `${modelText}\n\n${mcpInstruction}`;
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(modelText, currentImages);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(modelText, currentImages);
 				}
 				preflightResult?.(true);
 				return;
@@ -1529,6 +1540,12 @@ export class AgentSession {
 				restoreThinkingLevel = thinkingBeforeRouting;
 			}
 			if (routedTransition) await this._applyKlermTransition(routedTransition, true);
+			const mcpInstruction = resolveMcpPromptMentions(
+				this.settingsManager,
+				options?.mcpMentions ?? [],
+				new Set(this.agent.state.tools.map((tool) => tool.name)),
+			);
+			if (mcpInstruction) modelText = `${modelText}\n\n${mcpInstruction}`;
 
 			// Flush any pending bash messages before the new prompt
 			this._flushPendingBashMessages();
@@ -1564,7 +1581,7 @@ export class AgentSession {
 			messages = [];
 
 			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
+			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: modelText }];
 			if (currentImages) {
 				userContent.push(...currentImages);
 			}
@@ -1582,7 +1599,7 @@ export class AgentSession {
 
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
-				expandedText,
+				modelText,
 				currentImages,
 				this._baseSystemPrompt,
 				this._baseSystemPromptOptions,

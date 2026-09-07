@@ -107,6 +107,11 @@ export interface McpSuggestion {
 	insertText: string;
 }
 
+export interface McpPromptMention {
+	serverName: string;
+	toolName?: string;
+}
+
 export interface MentionSegment {
 	text: string;
 	mention?: { displayName: string; color?: McpColor };
@@ -135,20 +140,36 @@ export function resolveMcpTool(
 	return undefined;
 }
 
-export function findActiveMention(text: string, cursor: number): { start: number; query: string } | undefined {
+export function findActiveMention(
+	text: string,
+	cursor: number,
+	servers: readonly McpMentionServer[] = [],
+): { start: number; query: string } | undefined {
 	const before = text.slice(0, cursor);
 	const match = before.match(/(^|\s)@([^\n@]*)$/);
 	if (!match || match.index === undefined) return undefined;
-	return { start: match.index + match[1].length, query: match[2] ?? "" };
+	const start = match.index + match[1].length;
+	const rawMention = before.slice(start).toLowerCase();
+	const completedMention = mentionMatchers(servers).find((candidate) =>
+		rawMention.startsWith(candidate.token.toLowerCase()),
+	);
+	if (completedMention) {
+		const rest = rawMention.slice(completedMention.token.length);
+		if (/^\s/.test(rest)) return undefined;
+	}
+	return { start, query: match[2] ?? "" };
 }
 
 export function filterMcpSuggestions(servers: readonly McpMentionServer[], query: string): McpSuggestion[] {
 	const needle = query.trim().toLowerCase();
+	const slashIndex = needle.indexOf("/");
+	const serverNeedle = slashIndex === -1 ? needle : needle.slice(0, slashIndex).trim();
+	const toolNeedle = slashIndex === -1 ? "" : needle.slice(slashIndex + 1).trim();
 	const suggestions: McpSuggestion[] = [];
 	for (const server of servers) {
 		const displayName = mcpDisplayName(server);
 		const hay = `${displayName} ${server.name}`.toLowerCase();
-		if (!needle || hay.includes(needle)) {
+		if (slashIndex === -1 && (!serverNeedle || hay.includes(serverNeedle))) {
 			suggestions.push({
 				kind: "server",
 				serverName: server.name,
@@ -157,9 +178,10 @@ export function filterMcpSuggestions(servers: readonly McpMentionServer[], query
 				insertText: `@${displayName} `,
 			});
 		}
+		if (slashIndex === -1 || (serverNeedle && !hay.includes(serverNeedle))) continue;
 		for (const tool of server.tools) {
-			const toolHay = `${displayName} ${server.name} ${tool.remoteName} ${tool.name}`.toLowerCase();
-			if (!needle || toolHay.includes(needle)) {
+			const toolHay = `${tool.remoteName} ${tool.name}`.toLowerCase();
+			if (!toolNeedle || toolHay.includes(toolNeedle)) {
 				suggestions.push({
 					kind: "tool",
 					serverName: server.name,
@@ -231,15 +253,21 @@ export function splitMcpMentions(text: string, servers: readonly McpMentionServe
 	return segments;
 }
 
-export function expandMcpMentions(text: string, servers: readonly McpMentionServer[]): string {
+export function prepareMcpPrompt(
+	text: string,
+	servers: readonly McpMentionServer[],
+): { message: string; mentions: McpPromptMention[] } {
 	const matchers = mentionMatchers(servers);
 	let result = "";
+	const mentions = new Map<string, McpPromptMention>();
 	let index = 0;
 	while (index < text.length) {
 		if (text[index] === "@" && (index === 0 || /\s/.test(text[index - 1] ?? ""))) {
 			const rest = text.slice(index);
 			const match = matchers.find((candidate) => rest.toLowerCase().startsWith(candidate.token.toLowerCase()));
 			if (match) {
+				const mention = { serverName: match.serverName, ...(match.toolName ? { toolName: match.toolName } : {}) };
+				mentions.set(`${mention.serverName}\0${mention.toolName ?? ""}`, mention);
 				result += match.toolName
 					? `Use MCP tool ${match.toolName} from MCP server called ${match.serverName}`
 					: `Use the MCP server called ${match.serverName}`;
@@ -250,5 +278,9 @@ export function expandMcpMentions(text: string, servers: readonly McpMentionServ
 		result += text[index];
 		index += 1;
 	}
-	return result;
+	return { message: result, mentions: [...mentions.values()] };
+}
+
+export function expandMcpMentions(text: string, servers: readonly McpMentionServer[]): string {
+	return prepareMcpPrompt(text, servers).message;
 }

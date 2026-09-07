@@ -21,6 +21,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createAllTools } from "../src/core/tools/index.ts";
 import { KlermConfigStore } from "../src/klerm/config.ts";
+import { normalizeProfileState } from "../src/klerm/profiles.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
 import {
 	KlermRoutingController,
@@ -136,6 +137,26 @@ describe("Klerm routing runtime", () => {
 			completionOwner: "local",
 			reason: "auto mode starts local orchestrator to assess the task and delegate when needed",
 		});
+	});
+
+	it("injects the assigned profile and active role into the routed agent identity", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			localRole: "builder",
+		});
+		const scout = normalizeProfileState({}).profiles.find((profile) => profile.id === "scout")!;
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store, undefined, (lane) =>
+			lane === "local" ? scout : undefined,
+		);
+
+		await (await controller.routePrompt("Inspect the project"))?.commit();
+		const systemPrompt = controller.getSystemPromptContribution();
+		expect(systemPrompt).toContain("Agent 1 is using profile Scout (face fox, level 1/5)");
+		expect(systemPrompt).toContain("Profile behaviour:");
+		expect(systemPrompt).toContain("Profile work plan:");
+		expect(systemPrompt).toContain("Profile builder mode:");
+		expect(systemPrompt).not.toContain("Profile planner mode:");
 	});
 
 	it("lets Agent 1 and Agent 2 use mixed or two local models, but not the same one", async () => {

@@ -250,6 +250,47 @@ describe("RPC prompt response semantics", () => {
 		}
 	});
 
+	it("rejects malformed structured MCP mentions", async () => {
+		const { lineHandler, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 0 });
+
+		try {
+			lineHandler(
+				JSON.stringify({ id: "mcp-invalid", type: "prompt", message: "Hello", mcpMentions: [{ serverName: "" }] }),
+			);
+
+			await vi.waitFor(() => {
+				expect(getPromptResponses(rpcIo.outputLines, "mcp-invalid")).toEqual([
+					expect.objectContaining({ success: false, code: "INVALID_MCP_MENTION" }),
+				]);
+			});
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("forwards structured MCP mentions into prompt preflight", async () => {
+		const { lineHandler, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 0 });
+
+		try {
+			lineHandler(
+				JSON.stringify({
+					id: "mcp-forward",
+					type: "prompt",
+					message: "Use the selected server",
+					mcpMentions: [{ serverName: "fake" }],
+				}),
+			);
+
+			await vi.waitFor(() => {
+				expect(getPromptResponses(rpcIo.outputLines, "mcp-forward")).toEqual([
+					expect.objectContaining({ success: false, error: expect.stringContaining("MCP runtime is not ready") }),
+				]);
+			});
+		} finally {
+			await cleanup();
+		}
+	});
+
 	it("emits one success response when prompt is queued during streaming", async () => {
 		const { lineHandler, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 100 });
 
