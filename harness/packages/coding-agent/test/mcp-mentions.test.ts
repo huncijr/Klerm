@@ -4,6 +4,7 @@ import {
 	filterMcpSuggestions,
 	findActiveMention,
 	mcpServerIdFromName,
+	resolveMcpTool,
 	splitMcpMentions,
 } from "../../desktop/src/lib/mcp-mentions.ts";
 
@@ -38,7 +39,20 @@ describe("MCP mentions", () => {
 		const text = "@Google Maps then @Google Maps/search";
 		expect(splitMcpMentions(text, servers).some((segment) => segment.mention?.color === "green")).toBe(true);
 		expect(expandMcpMentions(text, servers)).toBe(
-			"Use MCP server google-maps then Use MCP tool mcp_google-maps_search",
+			"Use the MCP server called google-maps then Use MCP tool mcp_google-maps_search from MCP server called google-maps",
 		);
+	});
+
+	it("uses base appearance when no custom color is selected", () => {
+		const baseServers = [{ name: "docs", color: "base" as const, tools: [] }];
+		expect(filterMcpSuggestions(baseServers, "docs")[0]).toMatchObject({ color: "base", insertText: "@docs " });
+		expect(splitMcpMentions("Use @docs", baseServers)[1]?.mention?.color).toBe("base");
+	});
+
+	it("resolves a called tool to its server appearance", () => {
+		expect(resolveMcpTool(servers, "mcp_google-maps_search")).toMatchObject({
+			server: { name: "google-maps", label: "Google Maps", color: "green" },
+			tool: { remoteName: "search" },
+		});
 	});
 });

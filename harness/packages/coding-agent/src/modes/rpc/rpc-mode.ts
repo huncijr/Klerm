@@ -39,6 +39,7 @@ import {
 } from "../../core/settings-manager.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
+import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -151,7 +152,7 @@ function getMcpTransport(settings: McpServerSettings): McpServerTransport {
 
 function sanitizeMcpError(value: string | undefined): string | undefined {
 	if (!value) return undefined;
-	return value
+	return redactMcpSecretText(value)
 		.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1********:********@")
 		.replace(/(authorization|token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=********")
 		.slice(0, 500);
@@ -174,10 +175,10 @@ function parseMcpAppearance(
 		if (trimmed.length > 64) return "MCP label must be 64 characters or fewer.";
 		label = trimmed || undefined;
 	}
-	let color = existing?.color;
+	let color = existing?.color ?? "base";
 	if (update.color !== undefined) {
 		if (typeof update.color !== "string" || !MCP_SERVER_COLORS.includes(update.color as McpServerColor)) {
-			return "MCP color must be green, blue, amber, red, purple, or teal.";
+			return "MCP color must be base, green, blue, amber, red, purple, or teal.";
 		}
 		color = update.color as McpServerColor;
 	}
@@ -1157,6 +1158,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						source: "rpc",
 						preflightResult: (didSucceed) => {
 							if (didSucceed) {
+								if (command.displayMessage && command.displayMessage !== command.message) {
+									session.sessionManager.appendCustomEntry("klerm-desktop-display-prompt", {
+										text: command.displayMessage,
+									});
+								}
 								preflightSucceeded = true;
 								output(success(id, "prompt"));
 							}
@@ -1540,13 +1546,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 			await checkShutdownRequested();
 		} catch (commandError: unknown) {
-			output(
-				error(
-					command.id,
-					command.type,
-					commandError instanceof Error ? commandError.message : String(commandError),
-				),
-			);
+			const commandErrorMessage = commandError instanceof Error ? commandError.message : String(commandError);
+			const safeCommandErrorMessage = command.type.includes("mcp")
+				? redactMcpSecretText(commandErrorMessage)
+				: commandErrorMessage;
+			output(error(command.id, command.type, safeCommandErrorMessage));
 			await waitForRawStdoutBackpressure();
 		}
 	};

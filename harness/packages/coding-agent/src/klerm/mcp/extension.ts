@@ -8,6 +8,7 @@ import type {
 	SettingsManager,
 	SettingsScope,
 } from "../../core/settings-manager.ts";
+import { redactMcpSecretText } from "./redact.ts";
 import type { McpServerStatus } from "./runtime.ts";
 import { McpRuntime } from "./runtime.ts";
 
@@ -114,7 +115,7 @@ function previewMcpServer(state: McpWizardState): string {
 		...(state.transport === "stdio"
 			? [
 					`Command: ${state.command ?? ""}`,
-					`Args: ${state.args.length > 0 ? state.args.join(" ") : "none"}`,
+					`Args: ${state.args.length > 0 ? redactMcpSecretText(state.args.join(" ")) : "none"}`,
 					"Env:",
 					...(Object.keys(state.env).length > 0 ? maskEnv(state.env) : ["  none"]),
 				]
@@ -153,6 +154,8 @@ function buildAgentMcpSettings(
 				? { env: existing.env }
 				: {}),
 			enabled: params.enabled ?? existing?.enabled ?? true,
+			...(existing?.label ? { label: existing.label } : {}),
+			color: existing?.color ?? "base",
 		};
 	}
 	if (params.command !== undefined || params.args !== undefined) {
@@ -174,6 +177,8 @@ function buildAgentMcpSettings(
 		url: url.toString(),
 		...(existing?.transport !== "stdio" && existing?.headers ? { headers: existing.headers } : {}),
 		enabled: params.enabled ?? existing?.enabled ?? true,
+		...(existing?.label ? { label: existing.label } : {}),
+		color: existing?.color ?? "base",
 	};
 }
 

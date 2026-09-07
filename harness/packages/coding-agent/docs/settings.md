@@ -341,11 +341,15 @@ as `stdio` for existing configs. Streamable HTTP and SSE servers use `url` and
 optional string-valued `headers`. Klerm exposes discovered tools as
 `mcp_<server>_<tool>`. Use `/mcp` or `/mcps` to select a connected tool,
 `/mcp status [server]` to inspect status, and `/mcpset` to update servers.
+Servers also support an optional display `label` and `color`. Supported colors
+are `base`, `green`, `blue`, `amber`, `red`, `purple`, and `teal`; omitted colors
+are persisted as the gray `base` appearance.
 Project server entries replace global entries with the same name as a
 whole object; their nested fields are never merged with global environment or
-header values. Environment values and headers are stored as plaintext; do not
-put secrets in a project settings file or commit them. Prefer a trusted wrapper
-command, process environment, or external secret store for credentials.
+header values. Environment values, headers, and credential-bearing stdio args
+are stored as plaintext; do not put secrets in a project settings file or commit
+them. Prefer a trusted wrapper command, process environment, or external secret
+store for credentials when practical.
 
 Run `/mcpset` without arguments to open the guided setup wizard. It walks
 through scope, server name, transport, connection fields, optional stdio
@@ -358,7 +362,8 @@ settings after an explicit natural-language request. It can set the server name,
 transport, scope, command and arguments or URL, and enabled state. It does not
 accept `env` or `headers`, preventing credentials from entering model tool
 arguments. Compatible credential fields from an existing server are preserved
-during updates. Project scope is rejected unless the project is trusted. Run
+during updates, as are its existing display label and color. New AI-created MCP
+servers use the gray `base` appearance. Project scope is rejected unless the project is trusted. Run
 `/reload` after the tool completes to connect the configured server.
 
 ## Example

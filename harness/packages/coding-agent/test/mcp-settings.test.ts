@@ -42,7 +42,7 @@ describe("MCP settings", () => {
 
 		const reloaded = SettingsManager.fromStorage(storage, { projectTrusted: false });
 		expect(reloaded.getMcpServers()).toEqual({
-			added: { command: "node", args: ["server.mjs"], enabled: false },
+			added: { command: "node", args: ["server.mjs"], enabled: false, color: "base" },
 		});
 	});
 
@@ -58,8 +58,8 @@ describe("MCP settings", () => {
 
 		const reloaded = SettingsManager.fromStorage(storage);
 		expect(reloaded.getMcpServers()).toEqual({
-			first: { command: "first-server" },
-			second: { command: "second-server" },
+			first: { command: "first-server", color: "base" },
+			second: { command: "second-server", color: "base" },
 		});
 	});
 });

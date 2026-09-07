@@ -1,16 +1,18 @@
 <script lang="ts">
-	import type { FeedItem } from "../lib/model.ts";
+	import type { FeedItem, McpServerStatus } from "../lib/model.ts";
 	import ChatMessage from "./ChatMessage.svelte";
 	import TimelineCard from "./TimelineCard.svelte";
 
 	let {
 		items,
 		taskActive,
+		mcpServers,
 		onrerun,
 		ontoggle,
 	}: {
 		items: FeedItem[];
 		taskActive: boolean;
+		mcpServers: McpServerStatus[];
 		onrerun: (text: string) => void;
 		ontoggle: (id: number) => void;
 	} = $props();
@@ -26,7 +28,7 @@
 <div bind:this={containerEl} class="flex flex-col pb-2">
 	{#each items as item (item.id)}
 		{#if item.type === "message"}
-			<ChatMessage message={item.message} {taskActive} {onrerun} />
+			<ChatMessage message={item.message} {taskActive} {mcpServers} {onrerun} />
 		{:else}
 			<div class="mb-2">
 				<TimelineCard item={item.activity} ontoggle={() => ontoggle(item.activity.id)} />

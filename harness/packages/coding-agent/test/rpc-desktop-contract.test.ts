@@ -269,6 +269,49 @@ describe("Klerm desktop RPC contract", () => {
 				color: "green",
 			});
 
+			const addedBaseMcp = await send({
+				id: "mcp-add-base",
+				type: "add_mcp_server",
+				server: { name: "docs", transport: "stdio", command: "node", enabled: false },
+			});
+			expect(addedBaseMcp).toMatchObject({
+				success: true,
+				data: {
+					status: { servers: expect.arrayContaining([expect.objectContaining({ name: "docs", color: "base" })]) },
+				},
+			});
+			expect(harness.settingsManager.getMcpServersForScope("global").docs).toMatchObject({ color: "base" });
+
+			const postgresUri = "postgresql://user:secret-pass@example.com:6543/postgres";
+			const addedPostgresMcp = await send({
+				id: "mcp-add-postgres",
+				type: "add_mcp_server",
+				server: {
+					name: "supabase-postgres",
+					transport: "stdio",
+					command: "npx",
+					args: ["-y", "@modelcontextprotocol/server-postgres", postgresUri],
+				},
+			});
+			expect(addedPostgresMcp).toMatchObject({
+				success: true,
+				data: {
+					status: {
+						servers: expect.arrayContaining([
+							expect.objectContaining({ name: "supabase-postgres", color: "base" }),
+						]),
+					},
+				},
+			});
+			expect(harness.settingsManager.getMcpServersForScope("global")["supabase-postgres"]).toMatchObject({
+				transport: "stdio",
+				command: "npx",
+				args: ["-y", "@modelcontextprotocol/server-postgres", postgresUri],
+				color: "base",
+			});
+			expect(JSON.stringify(parseOutputLines())).not.toContain("secret-pass");
+			expect(JSON.stringify(parseOutputLines())).not.toContain(postgresUri);
+
 			const rejectedMcpColor = await send({
 				id: "mcp-color",
 				type: "add_mcp_server",

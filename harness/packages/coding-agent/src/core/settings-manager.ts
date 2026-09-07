@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Transport } from "@earendil-works/pi-ai";
 import type { TuiMode as RendererTuiMode, ScrollViewScrollbar } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
@@ -71,8 +71,8 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
 export type TransportSetting = Transport;
 
 export type McpServerTransport = "stdio" | "http" | "sse";
-export type McpServerColor = "green" | "blue" | "amber" | "red" | "purple" | "teal";
-export const MCP_SERVER_COLORS = ["green", "blue", "amber", "red", "purple", "teal"] as const;
+export type McpServerColor = "base" | "green" | "blue" | "amber" | "red" | "purple" | "teal";
+export const MCP_SERVER_COLORS = ["base", "green", "blue", "amber", "red", "purple", "teal"] as const;
 
 export interface McpServerSettings {
 	transport?: McpServerTransport;
@@ -270,7 +270,8 @@ export class FileSettingsStorage implements SettingsStorage {
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
 				}
-				writeFileSync(path, next, "utf-8");
+				writeFileSync(path, next, { encoding: "utf-8", mode: 0o600 });
+				chmodSync(path, 0o600);
 			}
 		} finally {
 			if (release) {
@@ -741,12 +742,13 @@ export class SettingsManager {
 	}
 
 	setMcpServer(name: string, server: McpServerSettings, scope: SettingsScope = "global"): void {
+		const normalized = { ...server, color: server.color ?? "base" } satisfies McpServerSettings;
 		if (scope === "project") {
 			this.assertProjectTrustedForWrite();
 			const projectSettings = structuredClone(this.projectSettings);
 			projectSettings.mcpServers = {
 				...(projectSettings.mcpServers ?? {}),
-				[name]: structuredClone(server),
+				[name]: structuredClone(normalized),
 			};
 			this.markProjectModified("mcpServers", name);
 			this.saveProjectSettings(projectSettings);
@@ -754,7 +756,7 @@ export class SettingsManager {
 		}
 		this.globalSettings.mcpServers = {
 			...(this.globalSettings.mcpServers ?? {}),
-			[name]: structuredClone(server),
+			[name]: structuredClone(normalized),
 		};
 		this.markModified("mcpServers", name);
 		this.save();

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS } from "../lib/mcp-mentions.ts";
 	import type { TimelineItem } from "../lib/model.ts";
 
 	let { item, ontoggle }: { item: TimelineItem; ontoggle: () => void } = $props();
@@ -45,6 +46,11 @@
 							: "bg-[#5d6871]",
 	);
 	const showDetail = $derived(item.detail.length > 0 && (item.open || item.status === "error"));
+	const mcpStyle = $derived(
+		item.mcp && item.status !== "error"
+			? `border-color: ${MCP_COLOR_CSS[item.mcp.color]}; background: ${MCP_COLOR_BG_CSS[item.mcp.color]}`
+			: undefined,
+	);
 
 	function diffLineClass(line: string): string {
 		if (line.startsWith("-")) return "block bg-[rgba(85,28,28,.32)] px-2 text-[#f0aaa3]";
@@ -53,7 +59,7 @@
 	}
 </script>
 
-<article class={`rounded-lg border ${toneBorder[item.tone]} ${toneBg[item.tone]}`}>
+<article class={`rounded-lg border ${toneBorder[item.tone]} ${toneBg[item.tone]}`} style={mcpStyle}>
 	<button
 		type="button"
 		class="flex w-full cursor-pointer flex-col items-stretch gap-1.5 border-0 bg-transparent px-3 py-2.5 text-left font-mono text-[10px]/[1.4] narrow-720:px-2.5 narrow-720:py-2"
@@ -61,7 +67,7 @@
 		onclick={ontoggle}
 	>
 		<span class="flex items-center gap-2">
-			<span class={`rounded border px-[5px] py-[2px] text-[7px] tracking-[.08em] uppercase ${kindClass[item.tone]}`}>
+			<span class={`rounded border px-[5px] py-[2px] text-[7px] tracking-[.08em] uppercase ${kindClass[item.tone]}`} style={item.mcp && item.status !== "error" ? `border-color: ${MCP_COLOR_CSS[item.mcp.color]}; color: ${MCP_COLOR_CSS[item.mcp.color]}; background: ${MCP_COLOR_BG_CSS[item.mcp.color]}` : undefined}>
 				{item.kind}
 			</span>
 			<i class={`h-1.75 w-1.75 shrink-0 rounded-full ${statusDot}`}></i>

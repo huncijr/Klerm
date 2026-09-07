@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Plus } from "@lucide/svelte";
-	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName } from "../lib/mcp-mentions.ts";
+	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName } from "../lib/mcp-mentions.ts";
 	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus, StatusInfo } from "../lib/model.ts";
+	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
 
 	let {
@@ -46,13 +47,60 @@
 	let addingMcp = $state(false);
 	let mcpName = $state("");
 	let mcpLabel = $state("");
-	let mcpColor = $state<McpColor>("blue");
+	let mcpColor = $state<McpColor>("base");
 	let mcpTransport = $state<"stdio" | "http" | "sse">("stdio");
 	let mcpCommand = $state("");
 	let mcpArgs = $state("");
 	let mcpUrl = $state("");
 	let mcpHeaders = $state("");
 	let mcpFormError = $state("");
+	let mcpButtonEl = $state<HTMLButtonElement>();
+	let mcpPopoverEl = $state<HTMLDivElement>();
+	let mcpPopoverStyle = $state("");
+	let transportMenuOpen = $state(false);
+	let transportMenuEl = $state<HTMLDivElement>();
+
+	$effect(() => {
+		if (!mcpPopoverOpen || !mcpButtonEl) return;
+		const buttonEl = mcpButtonEl;
+
+		const updatePosition = () => {
+			const rect = buttonEl.getBoundingClientRect();
+			const panelWidth = Math.min(310, window.innerWidth - 16);
+			const maxHeight = Math.min(540, Math.max(180, rect.top - 16));
+			const left = Math.min(Math.max(8, rect.left + rect.width / 2 - panelWidth / 2), window.innerWidth - panelWidth - 8);
+			const bottom = window.innerHeight - rect.top + 8;
+			mcpPopoverStyle = `left: ${Math.max(8, left)}px; bottom: ${bottom}px; width: ${panelWidth}px; max-height: ${maxHeight}px;`;
+		};
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target instanceof Node ? event.target : undefined;
+			if (target && mcpButtonEl?.contains(target)) return;
+			if (target && mcpPopoverEl?.contains(target)) {
+				if (!transportMenuEl?.contains(target)) transportMenuOpen = false;
+				return;
+			}
+			transportMenuOpen = false;
+			mcpPopoverOpen = false;
+		};
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			if (transportMenuOpen) transportMenuOpen = false;
+			else mcpPopoverOpen = false;
+		};
+
+		updatePosition();
+		window.addEventListener("resize", updatePosition);
+		window.addEventListener("scroll", updatePosition, true);
+		document.addEventListener("pointerdown", handlePointerDown, true);
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			window.removeEventListener("resize", updatePosition);
+			window.removeEventListener("scroll", updatePosition, true);
+			document.removeEventListener("pointerdown", handlePointerDown, true);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	});
 
 	const dotClass = $derived(
 		status.state === "online"
@@ -104,8 +152,12 @@
 	}
 
 	function mcpBadgeStyle(server: McpServerStatus): string {
-		const color = server.color ? MCP_COLOR_CSS[server.color] : "#9cc0f2";
-		return `border-color: ${color}; color: ${color}`;
+		const color = server.color ?? "base";
+		return `border-color: ${MCP_COLOR_CSS[color]}; color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}`;
+	}
+
+	function mcpColorStyle(color: McpColor): string {
+		return `border-color: ${MCP_COLOR_CSS[color]}; color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}`;
 	}
 
 	async function submitMcpServer(): Promise<void> {
@@ -144,7 +196,7 @@
 		if (!saved) return;
 		mcpName = "";
 		mcpLabel = "";
-		mcpColor = "blue";
+		mcpColor = "base";
 		mcpCommand = "";
 		mcpArgs = "";
 		mcpUrl = "";
@@ -156,6 +208,7 @@
 {#snippet mcpControl(collapsedMode: boolean)}
 	<div class="relative">
 		<button
+			bind:this={mcpButtonEl}
 			type="button"
 			aria-label="MCP status"
 			aria-expanded={mcpPopoverOpen}
@@ -169,8 +222,8 @@
 			{#if !collapsedMode}<span>MCP {mcpStatus?.toolCount ?? 0}</span>{/if}
 		</button>
 		{#if mcpPopoverOpen}
-			<div class={`absolute bottom-[42px] z-30 max-h-[min(540px,72dvh)] w-[310px] overflow-y-auto rounded-xl border border-[#303a42] bg-[#0d1217] p-3 shadow-[0_18px_46px_rgba(0,0,0,.52)] ${collapsedMode ? "left-0" : "left-0"}`}>
-				<div class="mb-2 flex items-start justify-between gap-2">
+			<div bind:this={mcpPopoverEl} use:portal class="fixed z-30 flex flex-col overflow-hidden rounded-xl border border-[#303a42] bg-[#0d1217] shadow-[0_18px_46px_rgba(0,0,0,.52)]" style={mcpPopoverStyle}>
+				<div class="flex shrink-0 items-start justify-between gap-2 border-b border-[#242d35] bg-[#0d1217] p-3">
 					<div>
 						<strong class="block text-[11px] text-[#d8e0e4]">MCP</strong>
 						<span class="mt-0.5 block font-mono text-[8px] text-[#687580]">{mcpStateLabel}</span>
@@ -180,12 +233,13 @@
 						<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onrefreshmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Refresh"}</button>
 					</div>
 				</div>
-				{#if mcpServers.length === 0}
-					<p class="m-0 rounded-lg border border-[#242d35] bg-[#10161b] p-2 text-[10px]/[1.45] text-[#87929a]">No MCP servers configured yet.</p>
-				{:else}
-					<div class="space-y-2">
-						{#each mcpServers as server (server.name)}
-							<section class="rounded-lg border border-[#232c34] bg-[#10161b] p-2">
+				<div class="min-h-0 flex-1 overflow-y-auto p-3 pr-2 [scrollbar-color:#46525b_#0a0f13] [scrollbar-gutter:stable] [scrollbar-width:thin]">
+					{#if mcpServers.length === 0}
+						<p class="m-0 rounded-lg border border-[#242d35] bg-[#10161b] p-2 text-[10px]/[1.45] text-[#87929a]">No MCP servers configured yet.</p>
+					{:else}
+						<div class="space-y-2">
+							{#each mcpServers as server (server.name)}
+								<section class="rounded-lg border p-2" style={mcpBadgeStyle(server)}>
 								<div class="flex items-center gap-2">
 									<span class="h-1.75 w-1.75 shrink-0 rounded-full" style={mcpDotStyle(server)}></span>
 									<div class="min-w-0 flex-1">
@@ -203,42 +257,65 @@
 									</div>
 								{/if}
 								{#if server.error}<p class="m-0 mt-2 text-[9px]/[1.35] break-words text-[#f3a49c]">{server.error}</p>{/if}
-							</section>
-						{/each}
-					</div>
-				{/if}
-				<div class="mt-3 border-t border-[#242d35] pt-3">
+								</section>
+							{/each}
+						</div>
+					{/if}
+				</div>
+				<div class="shrink-0 border-t border-[#242d35] bg-[#0d1217] p-3">
 					{#if addingMcp}
 						<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void submitMcpServer(); }}>
 							<input bind:value={mcpName} placeholder="server name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 							<input bind:value={mcpLabel} placeholder="display label, e.g. Google Maps" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
-							<div class="grid grid-cols-6 gap-1">
+							<div class="grid grid-cols-4 gap-1">
 								{#each MCP_COLORS as color}
 									<button
 										type="button"
 										aria-label={`Use ${color} MCP color`}
-										class={`h-7 rounded-md border bg-[#0a0f13] font-mono text-[7px] capitalize ${mcpColor === color ? "border-white" : "border-[#2d3740]"}`}
-										style={`color: ${MCP_COLOR_CSS[color]}`}
+										class={`h-7 rounded-md border font-mono text-[7px] capitalize ${mcpColor === color ? "ring-1 ring-white" : ""}`}
+										style={mcpColorStyle(color)}
 										onclick={() => (mcpColor = color)}
 									>
 										{color}
 									</button>
 								{/each}
 							</div>
-							<select bind:value={mcpTransport} class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0">
-								<option value="stdio">stdio</option>
-								<option value="http">http</option>
-								<option value="sse">sse</option>
-							</select>
+							<div bind:this={transportMenuEl} class="relative">
+								<button
+									type="button"
+									aria-label="MCP transport"
+									aria-expanded={transportMenuOpen}
+									class="flex h-8 w-full items-center justify-between rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white"
+									onclick={() => (transportMenuOpen = !transportMenuOpen)}
+								>
+									<span>{mcpTransport}</span><span class="text-[#77838b]">⌄</span>
+								</button>
+								{#if transportMenuOpen}
+									<div class="absolute right-0 bottom-[36px] left-0 z-40 overflow-hidden rounded-md border border-[#303a42] bg-[#05080b] p-1 shadow-[0_12px_28px_rgba(0,0,0,.65)]">
+										{#each ["stdio", "http", "sse"] as transport}
+											<button
+												type="button"
+												class={`block h-8 w-full rounded px-2 text-left font-mono text-[10px] ${mcpTransport === transport ? "bg-[#202a31] text-white" : "bg-[#05080b] text-[#aab4ba] hover:bg-[#151d23] hover:text-white"}`}
+												onclick={() => {
+													mcpTransport = transport as "stdio" | "http" | "sse";
+													transportMenuOpen = false;
+												}}
+											>
+												{transport}
+											</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
 							{#if mcpTransport === "stdio"}
 								<input bind:value={mcpCommand} placeholder="command, e.g. npx" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
-								<input bind:value={mcpArgs} placeholder="args, space separated" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
+								<textarea bind:value={mcpArgs} rows="3" placeholder="args, space separated; e.g. -y @modelcontextprotocol/server-postgres postgresql://user:pass@host/db" class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
 							{:else}
 								<input bind:value={mcpUrl} placeholder="https://example.com/mcp" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 								<textarea bind:value={mcpHeaders} rows="2" placeholder="optional non-secret Header=value" class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
 							{/if}
 							{#if mcpFormError}<p class="m-0 text-[9px] text-[#f3a49c]">{mcpFormError}</p>{/if}
-							<p class="m-0 text-[8px]/[1.35] text-[#65717a]">Secrets are not accepted here. Use CLI setup for credentials.</p>
+							<p class="m-0 text-[8px]/[1.35] text-[#65717a]">Stdio args may contain local credentials and are saved in Klerm settings. HTTP/SSE secret URLs or headers are rejected here.</p>
 							<div class="flex gap-2">
 								<button type="button" class="h-8 flex-1 rounded-md border border-[#303a42] bg-transparent font-mono text-[9px] text-[#8c98a0]" onclick={() => (addingMcp = false)}>Cancel</button>
 								<button type="submit" class="h-8 flex-1 rounded-md border-0 bg-[#d7e7ff] font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>Save</button>

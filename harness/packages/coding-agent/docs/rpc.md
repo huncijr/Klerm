@@ -120,11 +120,20 @@ values, request headers, API keys, or OAuth tokens.
 {"id":"mcp-1","type":"get_mcp_status"}
 ```
 
-`add_mcp_server` writes a credential-free stdio, Streamable HTTP, or SSE server
-definition to global settings by default. Set `scope: "project"` only for trusted
-projects. Stdio servers use `command` and optional `args`; HTTP/SSE servers use
-`url` and optional non-secret `headers`. Credential-like URLs or headers are
-rejected with `MCP_SECRET_REJECTED` or `INVALID_MCP_SERVER`.
+`add_mcp_server` writes a stdio, Streamable HTTP, or SSE server definition to
+global settings by default. Set `scope: "project"` only for trusted projects.
+Stdio servers use `command` and optional `args`; positional stdio args may carry
+local credentials such as database connection strings and are persisted in
+settings. HTTP/SSE servers use `url` and optional non-secret `headers`.
+Credential-like HTTP/SSE URLs or headers are rejected with `MCP_SECRET_REJECTED`
+or `INVALID_MCP_SERVER`.
+Optional `label` and `color` fields control desktop appearance. Valid colors are
+`base`, `green`, `blue`, `amber`, `red`, `purple`, and `teal`; omitted colors
+default to gray `base`.
+Status responses never include command, args, URLs, headers, or environment
+values, and MCP errors redact common credential-bearing URL forms. MCP settings
+are plaintext JSON on disk; do not commit project `.klerm/settings.json` files
+that contain credentials.
 
 ```json
 {"id":"mcp-add","type":"add_mcp_server","server":{"name":"filesystem","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/project"]}}
@@ -138,6 +147,9 @@ active. The response is the same status shape as `get_mcp_status`.
 #### prompt
 
 Send a user prompt to the agent. The command response is emitted after the prompt is accepted, queued, or handled. Events continue streaming asynchronously after acceptance.
+Desktop clients may include `displayMessage` when `message` contains expanded
+MCP instructions. Klerm persists that display form for transcript rendering
+while sending only `message` to the model.
 
 ```json
 {"id": "req-1", "type": "prompt", "message": "Hello, world!"}

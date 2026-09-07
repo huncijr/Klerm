@@ -11,7 +11,8 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import { APP_NAME, VERSION } from "../../config.ts";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
-import type { McpServerSettings } from "../../core/settings-manager.ts";
+import { MCP_SERVER_COLORS, type McpServerColor, type McpServerSettings } from "../../core/settings-manager.ts";
+import { redactMcpSecretText, redactMcpSecretValue } from "./redact.ts";
 
 export type McpServerState = "disabled" | "connecting" | "connected" | "failed" | "closed";
 
@@ -75,7 +76,7 @@ function validateServer(name: string, settings: McpServerSettings): void {
 		throw new Error("server configuration must be an object");
 	}
 	const unknownKeys = Object.keys(settings).filter(
-		(key) => !["transport", "command", "args", "env", "url", "headers", "enabled"].includes(key),
+		(key) => !["transport", "command", "args", "env", "url", "headers", "enabled", "label", "color"].includes(key),
 	);
 	if (unknownKeys.length > 0) {
 		throw new Error(`unknown server setting${unknownKeys.length === 1 ? "" : "s"}: ${unknownKeys.join(", ")}`);
@@ -115,6 +116,12 @@ function validateServer(name: string, settings: McpServerSettings): void {
 	}
 	if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
 		throw new Error("enabled must be a boolean");
+	}
+	if (settings.label !== undefined && typeof settings.label !== "string") {
+		throw new Error("label must be a string");
+	}
+	if (settings.color !== undefined && !MCP_SERVER_COLORS.includes(settings.color as McpServerColor)) {
+		throw new Error("color must be one of: base, green, blue, amber, red, purple, teal");
 	}
 }
 
@@ -207,10 +214,12 @@ function formatMcpResult(result: Awaited<ReturnType<Client["callTool"]>>): {
 	if (content.length === 0) content.push({ type: "text", text: "MCP tool completed without content." });
 	if (result.isError) {
 		throw new Error(
-			content
-				.filter((item): item is TextContent => item.type === "text")
-				.map((item) => item.text)
-				.join("\n") || "MCP tool failed",
+			redactMcpSecretText(
+				content
+					.filter((item): item is TextContent => item.type === "text")
+					.map((item) => item.text)
+					.join("\n") || "MCP tool failed",
+			),
 		);
 	}
 	return { content, details: result.structuredContent };
@@ -305,7 +314,7 @@ export class McpRuntime {
 					tools: [],
 					toolDetails: [],
 					skippedTools: [],
-					error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+					error: redactMcpSecretValue(result.reason),
 				});
 				continue;
 			}
@@ -335,12 +344,16 @@ export class McpRuntime {
 						const argumentsValue =
 							typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
 						onToolUsed?.({ serverName: name, remoteToolName: remoteTool.name, toolName });
-						const callResult = await client.callTool(
-							{ name: remoteTool.name, arguments: argumentsValue },
-							undefined,
-							{ signal },
-						);
-						return formatMcpResult(callResult);
+						try {
+							const callResult = await client.callTool(
+								{ name: remoteTool.name, arguments: argumentsValue },
+								undefined,
+								{ signal },
+							);
+							return formatMcpResult(callResult);
+						} catch (error) {
+							throw new Error(redactMcpSecretValue(error));
+						}
 					},
 				};
 				registerTool(definition);

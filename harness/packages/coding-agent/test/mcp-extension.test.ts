@@ -125,9 +125,9 @@ describe("MCP extension commands", () => {
 		);
 
 		expect(settingsManager.getMcpServers()).toEqual({
-			filesystem: { transport: "stdio", command: "npx", args: ["-y", "server"], enabled: true },
-			remote: { transport: "http", url: "https://example.com/mcp", enabled: true },
-			events: { transport: "sse", url: "https://example.com/sse", enabled: false },
+			filesystem: { transport: "stdio", command: "npx", args: ["-y", "server"], enabled: true, color: "base" },
+			remote: { transport: "http", url: "https://example.com/mcp", enabled: true, color: "base" },
+			events: { transport: "sse", url: "https://example.com/sse", enabled: false, color: "base" },
 		});
 		expect(stdioResult?.content[0]).toMatchObject({
 			type: "text",
@@ -171,6 +171,8 @@ describe("MCP extension commands", () => {
 			transport: "http",
 			url: "https://old.example.com/mcp",
 			headers: { Authorization: "Bearer secret-token" },
+			label: "Remote API",
+			color: "green",
 		});
 		const tools: ToolDefinition[] = [];
 		const pi = {
@@ -209,6 +211,8 @@ describe("MCP extension commands", () => {
 				url: "https://new.example.com/mcp",
 				headers: { Authorization: "Bearer secret-token" },
 				enabled: true,
+				label: "Remote API",
+				color: "green",
 			},
 		});
 		expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -237,7 +241,7 @@ describe("MCP extension commands", () => {
 		await commands.get("mcpset")?.handler('demo stdio node "server file.mjs"', context);
 
 		expect(settingsManager.getMcpServers()).toEqual({
-			demo: { transport: "stdio", command: "node", args: ["server file.mjs"], enabled: true },
+			demo: { transport: "stdio", command: "node", args: ["server file.mjs"], enabled: true, color: "base" },
 		});
 		expect(reload).toHaveBeenCalledOnce();
 		expect(notify).toHaveBeenCalledWith('MCP server "demo" updated in global settings; reloading.');
@@ -271,12 +275,14 @@ describe("MCP extension commands", () => {
 				url: "https://example.com/mcp",
 				headers: { Authorization: "Bearer test" },
 				enabled: true,
+				color: "base",
 			},
 			events: {
 				transport: "sse",
 				url: "https://example.com/sse",
 				headers: { "X-API-Key": "secret" },
 				enabled: true,
+				color: "base",
 			},
 		});
 		expect(reload).toHaveBeenCalledTimes(2);
@@ -346,6 +352,7 @@ describe("MCP extension commands", () => {
 				args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/project"],
 				env: {},
 				enabled: true,
+				color: "base",
 			},
 		});
 		expect(reload).toHaveBeenCalledOnce();
@@ -403,6 +410,7 @@ describe("MCP extension commands", () => {
 					ORG_ID: "klerm",
 				},
 				enabled: false,
+				color: "base",
 			},
 		});
 		expect(reviewTitle).toContain("GITHUB_TOKEN=********");
@@ -447,6 +455,7 @@ describe("MCP extension commands", () => {
 				url: "https://example.com/mcp",
 				headers: { Authorization: "Bearer secret", "X-Trace": "klerm" },
 				enabled: true,
+				color: "base",
 			},
 		});
 		expect(reviewTitle).toContain("Authorization=********");
@@ -485,6 +494,7 @@ describe("MCP extension commands", () => {
 				url: "https://example.com/sse",
 				headers: {},
 				enabled: true,
+				color: "base",
 			},
 		});
 	});

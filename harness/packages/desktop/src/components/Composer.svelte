@@ -4,11 +4,12 @@
 	import {
 		filterMcpSuggestions,
 		findActiveMention,
+		MCP_COLOR_BG_CSS,
 		MCP_COLOR_CSS,
 		type McpSuggestion,
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
-	import type { McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
+	import type { McpColor, McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
@@ -114,6 +115,10 @@
 	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
 	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
+
+	function mentionStyle(color: McpColor = "base"): string {
+		return `color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[color]}55; border-radius: 4px;`;
+	}
 
 	function resizePrompt(): void {
 		if (!promptEl) return;
@@ -341,13 +346,14 @@
 						{#each filteredMcpSuggestions as suggestion, index (`${suggestion.kind}-${suggestion.serverName}-${suggestion.remoteName ?? ""}`)}
 							<button
 								type="button"
-								class={`flex w-full cursor-pointer items-start gap-2 rounded-md border-0 px-2 py-2 text-left ${index === mcpSelectedIndex ? "bg-[rgba(88,132,196,.18)]" : "bg-transparent hover:bg-[#151e28]"}`}
+								class={`flex w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-2 text-left ${index === mcpSelectedIndex ? "ring-1 ring-white/70" : "opacity-80 hover:opacity-100"}`}
+								style={mentionStyle(suggestion.color ?? "base")}
 								onmousedown={(event) => event.preventDefault()}
 								onclick={() => insertMcpSuggestion(suggestion)}
 							>
-								<span class="mt-1 h-1.75 w-1.75 shrink-0 rounded-full" style={`background: ${suggestion.color ? MCP_COLOR_CSS[suggestion.color] : "#6f96d4"}`}></span>
+								<span class="mt-1 h-1.75 w-1.75 shrink-0 rounded-full" style={`background: ${MCP_COLOR_CSS[suggestion.color ?? "base"]}`}></span>
 								<span class="min-w-0 flex-1">
-									<strong class="block truncate font-mono text-[10px] font-semibold" style={suggestion.color ? `color: ${MCP_COLOR_CSS[suggestion.color]}` : ""}>{suggestion.kind === "server" ? suggestion.displayName : `${suggestion.displayName} / ${suggestion.remoteName}`}</strong>
+									<strong class="block truncate font-mono text-[10px] font-semibold">{suggestion.kind === "server" ? suggestion.displayName : `${suggestion.displayName} / ${suggestion.remoteName}`}</strong>
 									<small class="mt-0.5 block truncate font-mono text-[8px] text-[#758ca8]">{suggestion.kind === "server" ? suggestion.serverName : suggestion.toolName}</small>
 								</span>
 							</button>
@@ -363,7 +369,7 @@
 					>
 						{#each mentionSegments as segment, index (`${index}-${segment.text}`)}
 							{#if segment.mention}
-								<span class="font-semibold" style={`color: ${segment.mention.color ? MCP_COLOR_CSS[segment.mention.color] : "#8fb7e8"}`}>{segment.text}</span>
+								<span class="font-semibold" style={mentionStyle(segment.mention.color ?? "base")}>{segment.text}</span>
 							{:else}<span class="text-white">{segment.text}</span>{/if}
 						{/each}
 					</div>

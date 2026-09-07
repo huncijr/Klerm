@@ -1,13 +1,24 @@
-export const MCP_COLORS = ["green", "blue", "amber", "red", "purple", "teal"] as const;
+export const MCP_COLORS = ["base", "green", "blue", "amber", "red", "purple", "teal"] as const;
 export type McpColor = (typeof MCP_COLORS)[number];
 
 export const MCP_COLOR_CSS: Record<McpColor, string> = {
+	base: "#98a2a9",
 	green: "#7dce8a",
 	blue: "#8fb7e8",
 	amber: "#d6b16e",
 	red: "#f09b93",
 	purple: "#c4a4e8",
 	teal: "#7ec8c0",
+};
+
+export const MCP_COLOR_BG_CSS: Record<McpColor, string> = {
+	base: "rgba(152, 162, 169, .14)",
+	green: "rgba(125, 206, 138, .14)",
+	blue: "rgba(143, 183, 232, .14)",
+	amber: "rgba(214, 177, 110, .14)",
+	red: "rgba(240, 155, 147, .14)",
+	purple: "rgba(196, 164, 232, .14)",
+	teal: "rgba(126, 200, 192, .14)",
 };
 
 export function isMcpColor(value: string | undefined): value is McpColor {
@@ -55,6 +66,17 @@ interface MentionMatcher {
 
 export function mcpDisplayName(server: Pick<McpMentionServer, "name" | "label">): string {
 	return server.label?.trim() || server.name;
+}
+
+export function resolveMcpTool(
+	servers: readonly McpMentionServer[],
+	toolName: string,
+): { server: McpMentionServer; tool: McpMentionServer["tools"][number] } | undefined {
+	for (const server of servers) {
+		const tool = server.tools.find((candidate) => candidate.name === toolName);
+		if (tool) return { server, tool };
+	}
+	return undefined;
 }
 
 export function findActiveMention(text: string, cursor: number): { start: number; query: string } | undefined {
@@ -162,7 +184,9 @@ export function expandMcpMentions(text: string, servers: readonly McpMentionServ
 			const rest = text.slice(index);
 			const match = matchers.find((candidate) => rest.toLowerCase().startsWith(candidate.token.toLowerCase()));
 			if (match) {
-				result += match.toolName ? `Use MCP tool ${match.toolName}` : `Use MCP server ${match.serverName}`;
+				result += match.toolName
+					? `Use MCP tool ${match.toolName} from MCP server called ${match.serverName}`
+					: `Use the MCP server called ${match.serverName}`;
 				index += match.token.length;
 				continue;
 			}

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
+import { redactMcpSecretText } from "../src/klerm/mcp/redact.ts";
 import { McpRuntime } from "../src/klerm/mcp/runtime.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
@@ -94,5 +95,14 @@ describe("MCP stdio runtime", () => {
 			error: "HTTP header values must be strings",
 		});
 		await runtime.close();
+	});
+
+	it("redacts credential-bearing URLs from MCP error text", () => {
+		expect(redactMcpSecretText("failed postgresql://user:secret-pass@example.com/postgres")).toBe(
+			"failed postgresql://********:********@example.com/postgres",
+		);
+		expect(redactMcpSecretText("failed https://user:secret@example.com/mcp Authorization: Bearer-token")).toBe(
+			"failed https://********:********@example.com/mcp Authorization=********",
+		);
 	});
 });

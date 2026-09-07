@@ -37,7 +37,7 @@
 		ThinkingSetting,
 		WorkspaceStatus,
 	} from "./lib/model.ts";
-	import { expandMcpMentions } from "./lib/mcp-mentions.ts";
+	import { expandMcpMentions, mcpDisplayName, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import Composer from "./components/Composer.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
@@ -416,6 +416,14 @@
 		const toolCallId = String(event.toolCallId ?? "");
 		const toolName = String(event.toolName ?? "unknown");
 		const described = describeToolCall(toolName, event.args);
+		const mcpMatch = resolveMcpTool(mcpServers, toolName);
+		const mcpServer = mcpMatch?.server;
+		const mcpTool = mcpMatch?.tool;
+		if (mcpServer) {
+			described.kind = "MCP server called";
+			described.label = `${mcpServer.name} MCP called`;
+			described.detail = `${mcpDisplayName(mcpServer)} / ${mcpTool?.remoteName ?? toolName}`;
+		}
 		const existingId = toolCards.get(toolCallId);
 		if (existingId === undefined) {
 			const item = pushTimeline(
@@ -427,6 +435,14 @@
 				`tool-${toolCallId}`,
 			);
 			item.detailType = described.detailType;
+			if (mcpServer) {
+				item.mcp = {
+					serverName: mcpServer.name,
+					displayName: mcpDisplayName(mcpServer),
+					toolName: mcpTool?.remoteName,
+					color: mcpServer.color ?? "base",
+				};
+			}
 			toolCards.set(toolCallId, item.id);
 			return;
 		}
@@ -507,7 +523,13 @@
 			cursor = cursor.parentId ? entryById.get(cursor.parentId) : undefined;
 		}
 		activeBranch.reverse();
+		let displayPrompt: string | undefined;
 		for (const entry of activeBranch) {
+			if (entry.type === "custom" && entry.customType === "klerm-desktop-display-prompt") {
+				const data = entry.data as { text?: unknown } | undefined;
+				displayPrompt = typeof data?.text === "string" ? data.text : undefined;
+				continue;
+			}
 			if (entry.type === "custom" && entry.customType === "klerm-transition") {
 				const data = entry.data as { transition?: RoutingTransition } | undefined;
 				if (data?.transition) addRoutingTransitionCard(data.transition);
@@ -516,7 +538,8 @@
 			if (entry.type !== "message" || !entry.message) continue;
 			const message = entry.message;
 			if (message.role === "user" || message.role === "assistant") {
-				const text = messageText(message);
+				const text = message.role === "user" && displayPrompt ? displayPrompt : messageText(message);
+				if (message.role === "user") displayPrompt = undefined;
 				if (text) {
 					pushMessage({
 						id: ++messageSeq,
@@ -1233,12 +1256,12 @@
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		await refreshLocalModels();
-		await Promise.all([refreshFrontierModels(), refreshThinkingLevels()]);
+		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus()]);
 		const entries = await entriesPromise;
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
 		taskActive = handshake.state.isStreaming;
-		await Promise.all([refreshWorkspace(), refreshEditors(), refreshRunningServices(), refreshMcpStatus()]);
+		await Promise.all([refreshWorkspace(), refreshEditors(), refreshRunningServices()]);
 	}
 
 	async function newSession(): Promise<void> {
@@ -1311,7 +1334,7 @@
 		activeTaskKey = ++taskSeq;
 		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, streaming: false });
 		try {
-			await bridge.send("prompt", { message: expandMcpMentions(text, mcpServers) });
+			await bridge.send("prompt", { message: expandMcpMentions(text, mcpServers), displayMessage: text });
 			if (draft.trim() === text) draft = "";
 		} catch (error) {
 			taskActive = false;
@@ -1475,7 +1498,7 @@
 						}}
 					/>
 				{/if}
-				<Feed items={feed} {taskActive} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
+				<Feed items={feed} {taskActive} {mcpServers} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
 			</div>
 		</section>
 

@@ -140,7 +140,7 @@ export interface McpToolStatus {
 	description?: string;
 }
 
-export type McpColor = "green" | "blue" | "amber" | "red" | "purple" | "teal";
+export type McpColor = "base" | "green" | "blue" | "amber" | "red" | "purple" | "teal";
 
 export interface McpServerStatus {
 	name: string;
@@ -234,6 +234,12 @@ export interface TimelineItem {
 	open: boolean;
 	detailType?: "text" | "diff" | "code";
 	dedupeId?: string;
+	mcp?: {
+		serverName: string;
+		displayName: string;
+		toolName?: string;
+		color: McpColor;
+	};
 }
 
 export interface SessionEntryRecord {

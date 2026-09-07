@@ -5,36 +5,69 @@ SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
 HARNESS="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 DESKTOP="$HARNESS/packages/desktop"
 BINARY="$DESKTOP/src-tauri/target/debug/klerm-desktop"
+DESKTOP_SOURCE_STAMP="$DESKTOP/src-tauri/target/debug/.klerm-desktop-source.sha256"
 RPC_ENTRY="$HARNESS/packages/coding-agent/dist/rpc-entry.js"
 RPC_SRC="$HARNESS/packages/coding-agent/src"
+RPC_SOURCE_STAMP="$HARNESS/packages/coding-agent/dist/.rpc-source.sha256"
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/klerm"
 LAUNCH_CWD="$PWD"
 
 mkdir -p "$LOG_DIR"
 
-if [[ ! -x "$BINARY" ]]; then
-	printf 'Klerm app is not built. Build it from %s first.\n' "$HARNESS" >&2
-	exit 1
+DESKTOP_SOURCE_HASH="$(find "$DESKTOP/src-tauri" -path "$DESKTOP/src-tauri/target" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+DESKTOP_BUILT_HASH=""
+if [[ -f "$DESKTOP_SOURCE_STAMP" ]]; then
+	DESKTOP_BUILT_HASH="$(<"$DESKTOP_SOURCE_STAMP")"
+fi
+if [[ ! -x "$BINARY" ]] || { [[ "$DESKTOP_SOURCE_HASH" != "$DESKTOP_BUILT_HASH" ]] && [[ "${KLERM_REBUILD_DESKTOP_APP:-}" == "1" ]]; }; then
+	printf 'Rebuilding the Klerm desktop app...\n'
+	if cargo build --manifest-path "$DESKTOP/src-tauri/Cargo.toml"; then
+		printf '%s\n' "$DESKTOP_SOURCE_HASH" >"$DESKTOP_SOURCE_STAMP"
+	elif [[ -x "$BINARY" ]]; then
+		printf 'Klerm desktop app rebuild failed; using the existing debug binary. Native app icons update after the next successful Tauri rebuild.\n' >&2
+	else
+		printf 'Klerm app is not built and the rebuild failed. Install Tauri Linux build dependencies, then retry.\n' >&2
+		exit 1
+	fi
+elif [[ "$DESKTOP_SOURCE_HASH" != "$DESKTOP_BUILT_HASH" ]]; then
+	printf 'Using the existing Klerm desktop debug binary. Set KLERM_REBUILD_DESKTOP_APP=1 to rebuild native shell/icons.\n'
 fi
 
-if [[ ! -f "$RPC_ENTRY" ]] || [[ -n "$(find "$RPC_SRC" -type f -newer "$RPC_ENTRY" -print -quit 2>/dev/null)" ]]; then
+RPC_SOURCE_HASH="$(find "$RPC_SRC" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+RPC_BUILT_HASH=""
+if [[ -f "$RPC_SOURCE_STAMP" ]]; then
+	RPC_BUILT_HASH="$(<"$RPC_SOURCE_STAMP")"
+fi
+if [[ ! -f "$RPC_ENTRY" ]] || [[ "$RPC_SOURCE_HASH" != "$RPC_BUILT_HASH" ]]; then
 	printf 'Rebuilding the Klerm desktop backend...\n'
 	npm --prefix "$HARNESS" run build:desktop-backend
+	printf '%s\n' "$RPC_SOURCE_HASH" >"$RPC_SOURCE_STAMP"
 fi
 
-if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
-	setsid nohup npm --prefix "$HARNESS" run dev --workspace=@klerm/desktop \
-		>"$LOG_DIR/vite.log" 2>&1 </dev/null &
+# Never reuse a stale Klerm frontend or desktop process from an earlier launch.
+pkill -f -- "$BINARY" 2>/dev/null || true
+pkill -f -- "$HARNESS/node_modules/.bin/vite" 2>/dev/null || true
 
-	for _ in {1..50}; do
-		if curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
-			break
-		fi
-		sleep 0.1
-	done
-fi
+for _ in {1..20}; do
+	if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 0.1
+done
 
-if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+setsid nohup npm --prefix "$HARNESS" run dev --workspace=@klerm/desktop \
+	>"$LOG_DIR/vite.log" 2>&1 </dev/null &
+VITE_PID=$!
+
+for _ in {1..50}; do
+	if curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 0.1
+done
+
+sleep 0.1
+if ! kill -0 "$VITE_PID" 2>/dev/null || ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
 	printf 'Klerm app frontend did not start. See %s/vite.log.\n' "$LOG_DIR" >&2
 	exit 1
 fi

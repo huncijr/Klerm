@@ -1,19 +1,22 @@
 <script lang="ts">
 	import { Check, PencilLine, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
-	import type { ChatMessage } from "../lib/model.ts";
+	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, splitMcpMentions } from "../lib/mcp-mentions.ts";
+	import type { ChatMessage, McpServerStatus } from "../lib/model.ts";
 	import MarkdownLite from "./MarkdownLite.svelte";
 
 	let {
 		message,
 		taskActive,
+		mcpServers,
 		onrerun,
-	}: { message: ChatMessage; taskActive: boolean; onrerun: (text: string) => void } = $props();
+	}: { message: ChatMessage; taskActive: boolean; mcpServers: McpServerStatus[]; onrerun: (text: string) => void } = $props();
 
 	let rootEl: HTMLElement | undefined = $state();
 	let editEl: HTMLTextAreaElement | undefined = $state();
 	let editing = $state(false);
 	let editValue = $state("");
+	const mentionSegments = $derived(splitMcpMentions(message.text, mcpServers));
 
 	onMount(() => {
 		rootEl?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -90,7 +93,14 @@
 		{#if message.role === "assistant"}
 			<MarkdownLite text={message.text} />
 		{:else}
-			{message.text}
+			{#each mentionSegments as segment, index (`${index}-${segment.text}`)}
+				{#if segment.mention}
+					<span
+						class="rounded px-0.5 font-semibold"
+						style={`color: ${MCP_COLOR_CSS[segment.mention.color ?? "base"]}; background: ${MCP_COLOR_BG_CSS[segment.mention.color ?? "base"]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[segment.mention.color ?? "base"]}55;`}
+					>{segment.text}</span>
+				{:else}{segment.text}{/if}
+			{/each}
 		{/if}
 		{#if message.streaming}<span class="ml-[3px] inline-block h-[13px] w-[5px] animate-pulse bg-[#8b969e] align-[-2px]"></span>{/if}
 	</div>
