@@ -14,7 +14,7 @@
 		ProviderConnect,
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
-	import { orderProviderAccounts } from "../lib/provider-cards.ts";
+	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
 	import ProviderLogo from "./ProviderLogo.svelte";
 	import { profileIcon } from "../lib/profiles.ts";
 	import { normalizeShortcut, shortcutConflicts } from "../lib/shortcuts.ts";
@@ -68,10 +68,7 @@
 	let modelError = $state("");
 	let customOpen = $state(false);
 	let connectId = $state("");
-	let connectKey = $state("");
-	let connectUrl = $state("");
-	let connectError = $state("");
-	let confirmDiscard = $state(false);
+	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
 	let profileName = $state("");
 	let profileFace = $state<KlermProfileFace>("fox");
 	let profileLevel = $state(1);
@@ -97,42 +94,50 @@
 	];
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const profiles = $derived(settings.profiles.profiles);
-	const providerCards = $derived(orderProviderAccounts(providers));
+	const providerCards = $derived(orderProviderGroups(groupProviderAccounts(providers)));
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
-	const connectAccount = $derived(providers.find((provider) => provider.id === connectId));
+	const connectGroup = $derived(providerCards.find((group) => group.id === connectId));
+
+	function formFor(id: string): { key: string; url: string; error: string; confirmDiscard: boolean } {
+		return connectForms[id] ?? { key: "", url: "", error: "", confirmDiscard: false };
+	}
+
+	function setForm(id: string, patch: Partial<{ key: string; url: string; error: string; confirmDiscard: boolean }>): void {
+		connectForms = { ...connectForms, [id]: { ...formFor(id), ...patch } };
+	}
 
 	function openConnect(id: string): void {
 		connectId = id;
-		connectKey = "";
-		connectUrl = "";
-		connectError = "";
-		confirmDiscard = false;
+		connectForms = {};
 	}
 
-	async function saveConnect(): Promise<void> {
-		connectError = "";
+	async function saveConnect(memberId: string): Promise<void> {
+		const form = formFor(memberId);
+		setForm(memberId, { error: "" });
 		const saved = await onconnectprovider({
-			provider: connectId,
-			apiKey: connectKey.trim() || undefined,
-			baseUrl: connectUrl.trim() || undefined,
+			provider: memberId,
+			apiKey: form.key.trim() || undefined,
+			baseUrl: form.url.trim() || undefined,
 		});
-		if (saved) {
-			connectKey = "";
-			connectUrl = "";
-		} else {
-			connectError = "Could not connect this provider.";
-		}
+		if (saved) setForm(memberId, { key: "", url: "" });
+		else setForm(memberId, { error: "Could not connect this provider." });
 	}
 
-	async function discardConnect(): Promise<void> {
-		connectError = "";
-		const removed = await ondisconnectprovider(connectId);
-		if (removed) {
-			confirmDiscard = false;
-			connectId = "";
-		} else {
-			connectError = "Could not discard this provider.";
+	async function discardConnect(memberId: string): Promise<void> {
+		setForm(memberId, { error: "" });
+		const removed = await ondisconnectprovider(memberId);
+		if (removed) setForm(memberId, { confirmDiscard: false });
+		else setForm(memberId, { error: "Could not discard this provider." });
+	}
+
+	function groupSubtitle(members: ProviderAccount[]): string {
+		const configured = members.filter((member) => member.configured);
+		if (configured.length > 0) {
+			const count = configured.reduce((total, member) => total + member.models.length, 0);
+			return `connected · ${count} model${count === 1 ? "" : "s"}`;
 		}
+		if (members.every((member) => member.local)) return members[0]?.detected ?? "not detected";
+		return "not connected";
 	}
 
 	$effect(() => {
@@ -305,15 +310,13 @@
 					{#each providerCards as card (card.id)}
 						<button
 							type="button"
-							class={`flex min-h-[108px] flex-col items-start justify-between rounded-xl border bg-[#0a0f13] p-4 text-left hover:border-[#4a5861] ${card.configured ? "border-[#2c4a34]" : "border-[#232c34]"}`}
+							class={`flex min-h-[108px] flex-col items-start justify-between rounded-xl border bg-[#0a0f13] p-4 text-left hover:border-[#4a5861] ${card.members.some((member) => member.configured) ? "border-[#2c4a34]" : "border-[#232c34]"}`}
 							onclick={() => openConnect(card.id)}
 						>
 							<ProviderLogo id={card.id} label={card.label} size={36} />
 							<span>
 								<strong class="block text-[13px] text-white">{card.label}</strong>
-								<small class="mt-1 block font-mono text-[9px] text-[#7b868e]">
-									{#if card.configured}{card.models.length} model{card.models.length === 1 ? "" : "s"}{card.source ? ` · ${card.source}` : ""}{:else if card.local}{card.detected ?? "not detected"}{:else}not connected{/if}
-								</small>
+								<small class="mt-1 block font-mono text-[9px] text-[#7b868e]">{groupSubtitle(card.members)}</small>
 							</span>
 						</button>
 					{/each}
@@ -429,48 +432,60 @@
 			</div>
 		{/if}
 	</div>
-	{#if connectAccount}
+	{#if connectGroup}
 		<div class="absolute inset-0 z-20 grid place-items-center bg-black/70 p-4">
 			<div class="max-h-full w-[min(420px,100%)] overflow-y-auto rounded-xl border border-[#2a3239] bg-[#05080b] p-4">
 				<div class="flex items-center gap-2">
 					<button type="button" aria-label="Back to providers" class="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#8b969e] hover:bg-[#141a1f] hover:text-white" onclick={() => (connectId = "")}>←</button>
-					<ProviderLogo id={connectAccount.id} label={connectAccount.label} size={28} />
-					<p class="m-0 font-mono text-[12px] text-white">{connectAccount.label}</p>
-					{#if connectAccount.configured}
+					<ProviderLogo id={connectGroup.id} label={connectGroup.label} size={28} />
+					<p class="m-0 font-mono text-[12px] text-white">{connectGroup.label}</p>
+					{#if connectGroup.members.some((member) => member.configured)}
 						<span class="ml-auto rounded-full border border-[#2c4a34] bg-[#0d1510] px-2 py-0.5 font-mono text-[8px] text-[#81c995]">connected</span>
 					{/if}
 				</div>
-				{#if connectAccount.local}
-					<p class="mt-2 font-mono text-[9px] text-[#7b868e]">Local runtime{connectAccount.detected ? ` · ${connectAccount.detected}` : ""}. No key needed.</p>
-				{:else}
-					<form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(); }}>
-						<input bind:value={connectKey} type="password" placeholder={connectAccount.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
-						<input bind:value={connectUrl} placeholder="endpoint override (optional)" autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
-						{#if connectError}<p class="m-0 text-[9px] text-[#f3a49c]">{connectError}</p>{/if}
-						<button type="submit" class="h-8 w-full rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
-							{providerBusy ? "Working..." : connectAccount.configured ? "Save" : "Connect"}
-						</button>
-					</form>
-					{#if connectAccount.configured && !connectAccount.local}
-						{#if confirmDiscard}
-							<div class="mt-2 flex gap-2">
-								<button type="button" class="h-8 flex-1 rounded-md border border-[#5a3434] bg-[#170d0d] font-mono text-[10px] text-[#f3a49c]" onclick={() => void discardConnect()} disabled={providerBusy}>Confirm discard</button>
-								<button type="button" class="h-8 flex-1 rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#d6dde1]" onclick={() => (confirmDiscard = false)}>Keep</button>
-							</div>
+				{#each connectGroup.members as member (member.id)}
+					{@const form = formFor(member.id)}
+					<section class="mt-3 rounded-lg border border-[#232c34] bg-[#0a0f13] p-3">
+						<div class="flex items-center gap-2">
+							<strong class="font-mono text-[10px] text-white">{member.label}</strong>
+							{#if member.configured}
+								<span class="ml-auto font-mono text-[8px] text-[#81c995]">connected{member.source ? ` · ${member.source}` : ""}</span>
+							{:else}
+								<span class="ml-auto font-mono text-[8px] text-[#66747d]">{member.local ? (member.detected ?? "not detected") : "not connected"}</span>
+							{/if}
+						</div>
+						{#if member.local}
+							<p class="m-0 mt-2 font-mono text-[9px] text-[#7b868e]">Local runtime. No key needed.</p>
 						{:else}
-							<button type="button" class="mt-2 h-8 w-full rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#f3a49c]" onclick={() => (confirmDiscard = true)}>Discard</button>
+							<form class="mt-2 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(member.id); }}>
+								<input value={form.key} oninput={(event) => setForm(member.id, { key: (event.currentTarget as HTMLInputElement).value })} type="password" placeholder={member.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+								<input value={form.url} oninput={(event) => setForm(member.id, { url: (event.currentTarget as HTMLInputElement).value })} placeholder="endpoint override (optional)" autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+								{#if form.error}<p class="m-0 text-[9px] text-[#f3a49c]">{form.error}</p>{/if}
+								<button type="submit" class="h-8 w-full rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
+									{providerBusy ? "Working..." : member.configured ? "Save" : "Connect"}
+								</button>
+							</form>
+							{#if member.configured}
+								{#if form.confirmDiscard}
+									<div class="mt-2 flex gap-2">
+										<button type="button" class="h-8 flex-1 rounded-md border border-[#5a3434] bg-[#170d0d] font-mono text-[10px] text-[#f3a49c]" onclick={() => void discardConnect(member.id)} disabled={providerBusy}>Confirm discard</button>
+										<button type="button" class="h-8 flex-1 rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#d6dde1]" onclick={() => setForm(member.id, { confirmDiscard: false })}>Keep</button>
+									</div>
+								{:else}
+									<button type="button" class="mt-2 h-8 w-full rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#f3a49c]" onclick={() => setForm(member.id, { confirmDiscard: true })}>Discard</button>
+								{/if}
+							{/if}
 						{/if}
-					{/if}
-				{/if}
-				<p class="mt-3 font-mono text-[9px] text-[#7b868e]">Models</p>
-				<div class="mt-1 max-h-[180px] space-y-1 overflow-y-auto">
-					{#each connectAccount.models as model}
-						<p class="m-0 rounded-md bg-[#0d1217] px-2 py-2 font-mono text-[10px] text-[#d7dfe2]">{model}</p>
-					{/each}
-					{#if connectAccount.models.length === 0}
-						<p class="m-0 font-mono text-[9px] text-[#66747d]">No models listed for this provider yet.</p>
-					{/if}
-				</div>
+						<div class="mt-2 max-h-[140px] space-y-1 overflow-y-auto">
+							{#each member.models as model}
+								<p class="m-0 rounded-md bg-[#0d1217] px-2 py-1.5 font-mono text-[9px] text-[#d7dfe2]">{model}</p>
+							{/each}
+							{#if member.models.length === 0}
+								<p class="m-0 font-mono text-[9px] text-[#66747d]">No models listed yet.</p>
+							{/if}
+						</div>
+					</section>
+				{/each}
 			</div>
 		</div>
 	{/if}

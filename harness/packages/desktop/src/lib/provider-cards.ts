@@ -63,6 +63,50 @@ export function providerLabel(id: string, fallback?: string): string {
 	return PROVIDER_LABELS[id] ?? id;
 }
 
+export interface ProviderGroup {
+	id: string;
+	label: string;
+	members: ProviderAccount[];
+}
+
+/** Provider ids merged into one card (e.g. OpenAI + Codex). */
+const PROVIDER_GROUPS: Record<string, { label: string; members: string[] }> = {
+	openai: { label: "OpenAI", members: ["openai", "openai-codex"] },
+};
+
+export function groupLabel(id: string, fallback?: string): string {
+	for (const group of Object.values(PROVIDER_GROUPS)) {
+		if (group.members.includes(id)) return group.label;
+	}
+	return providerLabel(id, fallback);
+}
+
+/** Merge grouped ids (OpenAI + Codex) into single cards. */
+export function groupProviderAccounts(providers: readonly ProviderAccount[]): ProviderGroup[] {
+	const byId = new Map(providers.map((provider) => [provider.id, provider]));
+	const groups: ProviderGroup[] = [];
+	const consumed = new Set<string>();
+	for (const [groupId, group] of Object.entries(PROVIDER_GROUPS)) {
+		const members = group.members.map((id) => byId.get(id)).filter((item) => item !== undefined);
+		if (members.length === 0) continue;
+		for (const member of members) consumed.add(member.id);
+		groups.push({ id: groupId, label: group.label, members });
+	}
+	for (const provider of providers) {
+		if (!consumed.has(provider.id)) groups.push({ id: provider.id, label: provider.label, members: [provider] });
+	}
+	return groups;
+}
+
+/** Curated groups first (by first member order), then the rest alphabetically. */
+export function orderProviderGroups(groups: readonly ProviderGroup[]): ProviderGroup[] {
+	const rank = (group: ProviderGroup): number => {
+		const ranks = group.members.map((member) => PROVIDER_ORDER.indexOf(member.id)).filter((index) => index >= 0);
+		return ranks.length > 0 ? Math.min(...ranks) : PROVIDER_ORDER.length;
+	};
+	return [...groups].sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label));
+}
+
 /** Curated providers first, then the rest alphabetically, custom card last. */
 export function orderProviderAccounts(providers: readonly ProviderAccount[]): ProviderAccount[] {
 	const byId = new Map(providers.map((provider) => [provider.id, provider]));

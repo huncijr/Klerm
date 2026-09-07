@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { orderProviderAccounts, providerLabel } from "../../desktop/src/lib/provider-cards.ts";
+import {
+	groupProviderAccounts,
+	orderProviderAccounts,
+	orderProviderGroups,
+	providerLabel,
+} from "../../desktop/src/lib/provider-cards.ts";
 import { providerLogoSrc } from "../../desktop/src/lib/provider-logos.ts";
 import { shortcutConflicts } from "../../desktop/src/lib/shortcuts.ts";
 
@@ -31,6 +36,15 @@ describe("desktop settings helpers", () => {
 		]);
 		expect(ordered.map((item) => item.id)).toEqual(["anthropic", "openai", "zai"]);
 		expect(providerLabel("openai-codex")).toBe("Codex");
+	});
+
+	it("merges OpenAI and Codex into one group", () => {
+		const groups = orderProviderGroups(
+			groupProviderAccounts([account("openai-codex", false), account("zai", false), account("openai", true)]),
+		);
+		expect(groups.map((group) => group.id)).toEqual(["openai", "zai"]);
+		expect(groups[0]?.label).toBe("OpenAI");
+		expect(groups[0]?.members.map((member) => member.id).sort()).toEqual(["openai", "openai-codex"]);
 	});
 
 	it("maps every logo file on disk", () => {
