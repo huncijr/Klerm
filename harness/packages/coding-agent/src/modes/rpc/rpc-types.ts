@@ -166,6 +166,7 @@ export interface RpcProviderAccount {
 	source?: string;
 	local: boolean;
 	detected?: string;
+	defaultEndpoint?: string;
 }
 
 export interface RpcProviderConnect {

@@ -9,6 +9,7 @@ export interface ProviderAccountStatus {
 	source?: string;
 	local: boolean;
 	detected?: string;
+	defaultEndpoint?: string;
 }
 
 function labelFor(id: string, fallback?: string): string {
@@ -20,7 +21,7 @@ function labelFor(id: string, fallback?: string): string {
 }
 
 export function getProviderAccountStatus(
-	modelRuntime: Pick<ModelRuntime, "getProviders" | "getModels" | "getProviderAuthStatus">,
+	modelRuntime: Pick<ModelRuntime, "getProviders" | "getModels" | "getProvider" | "getProviderAuthStatus">,
 	runtimes: Array<{ providerId: string; name: string; models: Array<{ id: string }>; error?: string }>,
 	customProviders: Map<string, string[]>,
 ): ProviderAccountStatus[] {
@@ -35,6 +36,7 @@ export function getProviderAccountStatus(
 			configured: auth.configured,
 			source: auth.source ?? auth.label,
 			local: false,
+			defaultEndpoint: modelRuntime.getProvider(provider.id)?.baseUrl,
 		});
 	}
 	for (const runtime of runtimes) {

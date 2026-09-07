@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Maximize2, Minimize2 } from "@lucide/svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import type {
 		CustomModelEntry,
@@ -27,6 +28,8 @@
 		mcpBusy,
 		providers,
 		providerBusy,
+		fullscreen,
+		ontogglefullscreen,
 		onclose,
 		onappearance,
 		onaddmodel,
@@ -43,6 +46,8 @@
 		mcpBusy: boolean;
 		providers: ProviderAccount[];
 		providerBusy: boolean;
+		fullscreen: boolean;
+		ontogglefullscreen: () => void;
 		onclose: () => void;
 		onappearance: (value: DesktopAppearance) => void;
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
@@ -68,6 +73,7 @@
 	let modelError = $state("");
 	let customOpen = $state(false);
 	let connectId = $state("");
+	let confirmDiscardSettings = $state(false);
 	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
 	let profileName = $state("");
 	let profileFace = $state<KlermProfileFace>("fox");
@@ -260,9 +266,20 @@
 		return () => window.removeEventListener("keydown", onKey);
 	});
 
+	const dirty = $derived(
+		draftAppearance !== settings.appearance ||
+			JSON.stringify(draftShortcuts) !== JSON.stringify(settings.shortcuts),
+	);
+
 	function saveChanges(): void {
 		if (draftAppearance !== settings.appearance) onappearance(draftAppearance);
 		onclose();
+	}
+
+	function discardDrafts(): void {
+		draftAppearance = settings.appearance;
+		draftShortcuts = settings.shortcuts.map((item) => ({ ...item }));
+		confirmDiscardSettings = false;
 	}
 </script>
 
@@ -281,11 +298,31 @@
 		{/each}
 		<button
 			type="button"
-			class="ml-auto h-8 shrink-0 rounded-md border-0 bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019] uppercase"
-			onclick={saveChanges}
+			aria-label={fullscreen ? "Exit fullscreen settings" : "Fullscreen settings"}
+			aria-pressed={fullscreen}
+			class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#8b969e] hover:bg-[#141a1f] hover:text-white"
+			onclick={ontogglefullscreen}
 		>
-			Save changes
+			{#if fullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
 		</button>
+		<div class="ml-auto flex shrink-0 flex-col items-end gap-1 py-1.5">
+			<button
+				type="button"
+				class="h-8 rounded-md border-0 bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019] uppercase"
+				onclick={saveChanges}
+			>
+				Save changes
+			</button>
+			{#if dirty}
+				<button
+					type="button"
+					class="border-0 bg-transparent p-0 font-mono text-[8px] text-[#66747d] hover:text-[#d5dce0]"
+					onclick={() => (confirmDiscardSettings = true)}
+				>
+					Discard changes
+				</button>
+			{/if}
+		</div>
 	</header>
 	<div class="min-h-0 flex-1 overflow-y-auto px-7 py-6 narrow-720:px-4">
 		{#if tab === "general"}
@@ -459,7 +496,7 @@
 						{:else}
 							<form class="mt-2 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(member.id); }}>
 								<input value={form.key} oninput={(event) => setForm(member.id, { key: (event.currentTarget as HTMLInputElement).value })} type="password" placeholder={member.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
-								<input value={form.url} oninput={(event) => setForm(member.id, { url: (event.currentTarget as HTMLInputElement).value })} placeholder="endpoint override (optional)" autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+								<input value={form.url} oninput={(event) => setForm(member.id, { url: (event.currentTarget as HTMLInputElement).value })} placeholder={member.defaultEndpoint ?? "endpoint override (optional)"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
 								{#if form.error}<p class="m-0 text-[9px] text-[#f3a49c]">{form.error}</p>{/if}
 								<button type="submit" class="h-8 w-full rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
 									{providerBusy ? "Working..." : member.configured ? "Save" : "Connect"}
@@ -486,6 +523,18 @@
 						</div>
 					</section>
 				{/each}
+			</div>
+		</div>
+	{/if}
+	{#if confirmDiscardSettings}
+		<div class="absolute inset-0 z-30 grid place-items-center bg-black/70 p-4">
+			<div class="w-[min(360px,100%)] rounded-xl border border-[#2a3239] bg-[#05080b] p-4">
+				<p class="m-0 font-mono text-[11px] text-white">Are you sure you want to discard your changes?</p>
+				<p class="mt-1 font-mono text-[9px] text-[#7b868e]">Unsaved appearance and shortcut edits will be lost.</p>
+				<div class="mt-3 flex gap-2">
+					<button type="button" class="h-8 flex-1 rounded-md border border-[#5a3434] bg-[#170d0d] font-mono text-[10px] text-[#f3a49c]" onclick={discardDrafts}>Discard</button>
+					<button type="button" class="h-8 flex-1 rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#d6dde1]" onclick={() => (confirmDiscardSettings = false)}>Keep</button>
+				</div>
 			</div>
 		</div>
 	{/if}

@@ -74,24 +74,22 @@
 
 <div class="bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
 <header
-	class="grid grid-cols-[minmax(180px,1fr)_minmax(180px,1.15fr)_minmax(250px,1fr)] items-center gap-4 border-b border-line px-7 narrow-900:grid-cols-[minmax(150px,1fr)_minmax(150px,.9fr)_minmax(170px,1fr)] narrow-900:px-[18px] narrow-720:flex narrow-720:justify-between narrow-520:grid narrow-520:grid-cols-[minmax(0,1fr)_minmax(130px,1.35fr)] narrow-520:grid-rows-[auto_auto] narrow-520:gap-x-2.5 narrow-520:gap-y-[3px] narrow-520:px-3"
+	class="flex items-center gap-5 border-b border-line px-7 py-2.5 narrow-900:gap-3 narrow-900:px-[18px] narrow-720:justify-between narrow-520:gap-2.5 narrow-520:px-3"
 >
 	<button
 		type="button"
 		aria-controls="sidebar"
 		aria-expanded={sidebarOpen}
 		aria-label="Toggle navigation"
-		class="hidden h-[34px] w-[34px] cursor-pointer place-items-center rounded-md border border-line bg-[#0e1317] narrow-720:grid narrow-520:col-start-1 narrow-520:row-start-2 narrow-520:h-[22px] narrow-520:w-fit narrow-520:border-0 narrow-520:bg-transparent narrow-520:px-[7px] narrow-520:font-mono narrow-520:text-[8px] narrow-520:tracking-normal narrow-520:text-[#77828a] narrow-520:uppercase"
+		class="hidden h-[34px] w-[34px] cursor-pointer place-items-center rounded-md border border-line bg-[#0e1317] narrow-720:grid"
 		onclick={ontogglesidebar}
 	>
-		<Menu size={14} stroke-width={1.7} class="narrow-520:w-[11px]" />
-		<span class="hidden narrow-520:inline">Menu</span>
+		<Menu size={14} stroke-width={1.7} />
 	</button>
 
-	<div class="min-w-0 narrow-520:col-start-1 narrow-520:row-start-1 narrow-520:self-end">
-		<span class="block font-mono text-[8px] tracking-[.14em] text-[#536069]">WORKSPACE</span>
+	<div class="min-w-0 flex-1">
 		{#if editing}
-			<div class="mt-1 flex max-w-[340px] items-center gap-1 narrow-520:hidden">
+			<div class="flex max-w-[340px] items-center gap-1">
 				<input
 					bind:this={renameInput}
 					bind:value={renameValue}
@@ -103,40 +101,33 @@
 				<button type="button" aria-label="Cancel rename" class="grid h-6 w-6 place-items-center rounded text-[#737e85] hover:bg-[#171d22]" onclick={() => (editing = false)}><X size={13} /></button>
 			</div>
 		{:else}
-			<button type="button" class="group/title mt-1.5 flex max-w-[340px] items-center text-left narrow-520:hidden" onclick={startRename}>
+			<button type="button" class="group/title mt-0.5 flex max-w-[340px] items-center text-left" onclick={startRename}>
 				<strong class="min-w-0 truncate text-[13px] narrow-720:max-w-[180px] narrow-720:text-[11px]">{title}</strong>
 			</button>
 		{/if}
-		<small class="mt-1 block max-w-[420px] truncate font-mono text-[8px]/[1.3] text-muted narrow-720:max-w-[180px] narrow-520:hidden">{cwd}</small>
+		<small class="mt-0.5 block max-w-[420px] truncate font-mono text-[8px]/[1.3] text-muted narrow-720:max-w-[180px]">{cwd}</small>
 	</div>
 
 	<button
 		type="button"
 		aria-label="Change workspace root"
 		title={projectRoot}
-		class="mx-auto flex min-w-0 max-w-[320px] items-center gap-2 rounded-lg border border-[#273039] bg-[#0d1217] px-3 py-2 text-left hover:border-[#46525b] hover:bg-[#12181d] narrow-720:hidden"
+		class="mx-auto flex min-w-0 max-w-[300px] cursor-pointer items-center gap-2 border-0 bg-transparent px-1 py-1 text-left narrow-720:hidden"
 		onclick={onchangeroot}
 	>
 		<FolderGit2 size={14} stroke-width={1.6} class="shrink-0 text-[#8a969e]" />
 		<span class="min-w-0">
 			<span class="block font-mono text-[7px] tracking-[.12em] text-[#536069] uppercase">{isGit ? "Git root" : "Project root"}</span>
-			<strong class="mt-0.5 block truncate text-[10px] font-medium text-[#bec7cc]">{projectRoot || "Choose project"}</strong>
+			<strong class="mt-0.5 block truncate text-[11px] font-medium text-[#bec7cc]">{projectRoot || "Choose project"}</strong>
 		</span>
 	</button>
 
-	<div class="ml-auto min-w-[250px] max-w-[360px] rounded-lg border border-line bg-panel px-3 py-2 narrow-900:min-w-[170px] narrow-720:min-w-0 narrow-720:flex-1 narrow-520:col-start-2 narrow-520:row-span-2 narrow-520:row-start-1 narrow-520:min-w-0 narrow-520:px-[9px] narrow-520:py-[6px]">
-		<div class="flex items-center justify-end gap-2">
-			<span class="block font-mono text-[8px] tracking-[.14em] text-[#536069]">CURRENT MODEL</span>
-			<i class={`h-1.5 w-1.5 rounded-full ${dotClass}`}></i>
-		</div>
-		<div class="flex items-center justify-end gap-2">
-			<strong class="mt-1 min-w-0 truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</strong>
-			<b
-				class="mt-1 shrink-0 rounded-full border border-[#303941] bg-[#141a1f] px-1.5 py-[3px] font-mono text-[7px] font-semibold tracking-[.08em] text-[#8d989f] uppercase narrow-520:text-[6px]"
-			>
-				{model.badge}
-			</b>
-		</div>
+	<div class="ml-auto flex min-w-0 items-center gap-2 text-right narrow-720:flex-1 narrow-720:justify-end">
+		<i class={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}></i>
+		<span class="min-w-0">
+			<span class="block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
+			<span class="mt-0.5 block font-mono text-[7px] tracking-[.1em] text-[#536069] uppercase">{model.badge}</span>
+		</span>
 	</div>
 </header>
 	<div class="flex justify-end px-7 py-1 narrow-900:px-[18px] narrow-520:px-3">

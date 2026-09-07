@@ -43,6 +43,7 @@ export interface ProviderAccount {
 	source?: string;
 	local: boolean;
 	detected?: string;
+	defaultEndpoint?: string;
 }
 
 export interface ProviderConnect {

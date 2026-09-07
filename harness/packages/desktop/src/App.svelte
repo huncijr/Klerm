@@ -70,6 +70,7 @@
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
 	let settingsOpen = $state(false);
+	let settingsFullscreen = $state(false);
 	let desktopSettings = $state<DesktopSettings | undefined>(undefined);
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
@@ -178,7 +179,11 @@
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
 	const filesColPx = $derived(!settingsOpen && workspacePanelOpen ? filesWidth : 0);
-	const shellColumns = "grid-cols-[var(--session-col)_minmax(0,1fr)_var(--files-col)] narrow-900:grid-cols-[var(--session-col)_minmax(0,1fr)] narrow-720:grid-cols-1";
+	const shellColumns = $derived(
+		settingsOpen && settingsFullscreen
+			? "grid-cols-[minmax(0,1fr)]"
+			: "grid-cols-[var(--session-col)_minmax(0,1fr)_var(--files-col)] narrow-900:grid-cols-[var(--session-col)_minmax(0,1fr)] narrow-720:grid-cols-1",
+	);
 
 	const currentModel = $derived.by(() => {
 		const routing = currentConfig?.routing ?? "off";
@@ -209,7 +214,7 @@
 
 	const workspaceRows = $derived(
 		settingsOpen
-			? "grid-rows-[auto_minmax(0,1fr)]"
+			? "grid-rows-[minmax(0,1fr)]"
 			: bottomPanelVisible
 				? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
 				: "grid-rows-[auto_minmax(0,1fr)_auto]",
@@ -1521,7 +1526,10 @@
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape") return;
 			if (pendingDelete) pendingDelete = undefined;
-			else if (settingsOpen) settingsOpen = false;
+			else if (settingsOpen) {
+				settingsOpen = false;
+				settingsFullscreen = false;
+			}
 			else if (sidebarOpen) sidebarOpen = false;
 			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
 		};
@@ -1542,6 +1550,7 @@
 	class:opacity-0={splashVisible}
 	style={`--session-col: ${sessionColPx}px; --files-col: ${filesColPx}px;`}
 >
+	{#if !(settingsOpen && settingsFullscreen)}
 	<Sidebar
 		{sessions}
 		activeSessionId={lastState?.sessionId ?? ""}
@@ -1559,8 +1568,13 @@
 		onreloadmcp={() => void reloadMcpServers()}
 		onaddmcpserver={addMcpServer}
 		settingsOpen={settingsOpen}
-		ontogglesettings={() => (settingsOpen = !settingsOpen)}
+		ontogglesettings={() => {
+			settingsOpen = !settingsOpen;
+			if (!settingsOpen) settingsFullscreen = false;
+		}}
 	/>
+	{/if}
+	{#if !(settingsOpen && settingsFullscreen)}
 	<button
 		type="button"
 		aria-label="Resize sessions"
@@ -1568,6 +1582,7 @@
 		style={`left: calc(${sessionColPx}px - 3px);`}
 		onpointerdown={startSessionResize}
 	></button>
+	{/if}
 	{#if workspacePanelOpen}
 		<button
 			type="button"
@@ -1595,20 +1610,6 @@
 	{/if}
 
 	<main class={`grid min-h-0 min-w-0 overflow-hidden bg-[radial-gradient(circle_at_50%_30%,rgba(44,57,63,.12),transparent_34%),var(--color-bg)] ${workspaceRows}`}>
-			<Topbar
-				title={sessionTitle}
-				cwd={sessionCwd}
-				projectRoot={workspace?.projectRoot ?? sessionCwd}
-				isGit={workspace?.isGit ?? false}
-			model={currentModel}
-			{sidebarOpen}
-			ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
-			onrename={renameActiveSession}
-			onchangeroot={() => void changeRoot()}
-			{workspacePanelOpen}
-			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
-		/>
-
 		{#if settingsOpen}
 			{#if desktopSettings}
 			<SettingsView
@@ -1617,7 +1618,12 @@
 				{mcpBusy}
 				providers={providerAccounts}
 				{providerBusy}
-				onclose={() => (settingsOpen = false)}
+				fullscreen={settingsFullscreen}
+				ontogglefullscreen={() => (settingsFullscreen = !settingsFullscreen)}
+				onclose={() => {
+					settingsOpen = false;
+					settingsFullscreen = false;
+				}}
 				onappearance={(value) => void setDesktopAppearance(value)}
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
@@ -1632,6 +1638,20 @@
 				<p class="px-7 py-6 font-mono text-[11px] text-[#8b969e]">Loading settings...</p>
 			{/if}
 		{:else}
+			<Topbar
+				title={sessionTitle}
+				cwd={sessionCwd}
+				projectRoot={workspace?.projectRoot ?? sessionCwd}
+				isGit={workspace?.isGit ?? false}
+			model={currentModel}
+			{sidebarOpen}
+			ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
+			onrename={renameActiveSession}
+			onchangeroot={() => void changeRoot()}
+			{workspacePanelOpen}
+			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
+		/>
+
 		<section class="relative min-h-0 overflow-y-auto">
 			<div
 				class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]"
