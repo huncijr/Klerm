@@ -1,14 +1,6 @@
-import type { LocalRuntime, SelectOption } from "./model.ts";
+import type { ProviderAccount } from "./model.ts";
 
-export interface ProviderCard {
-	id: string;
-	label: string;
-	count: number;
-	detected?: string;
-	custom?: boolean;
-}
-
-const PROVIDER_ORDER = [
+export const PROVIDER_ORDER = [
 	"anthropic",
 	"openai",
 	"openai-codex",
@@ -26,11 +18,13 @@ const PROVIDER_ORDER = [
 	"together",
 	"amazon-bedrock",
 	"moonshotai",
+	"kimi-coding",
 	"minimax",
 	"nvidia",
 	"zai",
 	"cerebras",
 ];
+
 const PROVIDER_LABELS: Record<string, string> = {
 	anthropic: "Anthropic",
 	openai: "OpenAI",
@@ -64,50 +58,24 @@ export function providerFromRef(value: string): string {
 	return slash > 0 ? value.slice(0, slash) : value;
 }
 
-export function providerLabel(id: string): string {
+export function providerLabel(id: string, fallback?: string): string {
+	if (fallback && fallback !== id) return fallback;
 	return PROVIDER_LABELS[id] ?? id;
 }
 
-export function groupModelProviders(
-	models: readonly SelectOption[],
-	runtimes: readonly LocalRuntime[],
-): ProviderCard[] {
-	const counts = new Map<string, number>();
-	for (const model of models) {
-		if (!model.value) continue;
-		const provider = providerFromRef(model.value);
-		counts.set(provider, (counts.get(provider) ?? 0) + 1);
-	}
-	const cards: ProviderCard[] = [];
-	const seen = new Set<string>();
+/** Curated providers first, then the rest alphabetically, custom card last. */
+export function orderProviderAccounts(providers: readonly ProviderAccount[]): ProviderAccount[] {
+	const byId = new Map(providers.map((provider) => [provider.id, provider]));
+	const ordered: ProviderAccount[] = [];
 	for (const id of PROVIDER_ORDER) {
-		const runtime = runtimes.find((item) => item.providerId === id);
-		const count = counts.get(id) ?? runtime?.models.length ?? 0;
-		seen.add(id);
-		cards.push({
-			id,
-			label: providerLabel(id),
-			count,
-			detected: runtime && !runtime.error ? runtime.name : runtime?.error ? "unavailable" : undefined,
-		});
+		const provider = byId.get(id);
+		if (provider) {
+			ordered.push(provider);
+			byId.delete(id);
+		}
 	}
-	for (const id of [...counts.keys()].sort()) {
-		if (seen.has(id)) continue;
-		cards.push({ id, label: providerLabel(id), count: counts.get(id) ?? 0 });
+	for (const provider of [...byId.values()].sort((left, right) => left.label.localeCompare(right.label))) {
+		if (provider.id !== "custom") ordered.push(provider);
 	}
-	for (const runtime of runtimes) {
-		if (seen.has(runtime.providerId) || counts.has(runtime.providerId)) continue;
-		cards.push({
-			id: runtime.providerId,
-			label: runtime.name || providerLabel(runtime.providerId),
-			count: runtime.models.length,
-			detected: runtime.error ? "unavailable" : runtime.name,
-		});
-	}
-	cards.push({ id: "custom", label: "Add a custom model", count: 0, custom: true });
-	return cards;
-}
-
-export function modelsForProvider(models: readonly SelectOption[], providerId: string): SelectOption[] {
-	return models.filter((model) => providerFromRef(model.value) === providerId);
+	return ordered;
 }

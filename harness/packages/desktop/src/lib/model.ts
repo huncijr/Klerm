@@ -35,6 +35,22 @@ export interface DesktopShortcut {
 	keys: string;
 }
 
+export interface ProviderAccount {
+	id: string;
+	label: string;
+	models: string[];
+	configured: boolean;
+	source?: string;
+	local: boolean;
+	detected?: string;
+}
+
+export interface ProviderConnect {
+	provider: string;
+	apiKey?: string;
+	baseUrl?: string;
+}
+
 export interface DesktopSettings {
 	appearance: DesktopAppearance;
 	agentDir: string;

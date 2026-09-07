@@ -7,14 +7,14 @@
 		DesktopShortcut,
 		KlermProfile,
 		KlermProfileFace,
-		LocalRuntime,
 		McpServerStatus,
 		McpServerUpdate,
 		McpStatus,
-		SelectOption,
+		ProviderAccount,
+		ProviderConnect,
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
-	import { groupModelProviders, modelsForProvider, providerLabel } from "../lib/provider-cards.ts";
+	import { orderProviderAccounts } from "../lib/provider-cards.ts";
 	import ProviderLogo from "./ProviderLogo.svelte";
 	import { profileIcon } from "../lib/profiles.ts";
 	import { normalizeShortcut, shortcutConflicts } from "../lib/shortcuts.ts";
@@ -25,12 +25,13 @@
 		settings,
 		mcpStatus,
 		mcpBusy,
-		localOptions,
-		frontierOptions,
-		runtimes,
+		providers,
+		providerBusy,
 		onclose,
 		onappearance,
 		onaddmodel,
+		onconnectprovider,
+		ondisconnectprovider,
 		onupsertprofile,
 		ondeleteprofile,
 		onrefreshmcp,
@@ -40,12 +41,13 @@
 		settings: DesktopSettings;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
-		localOptions: SelectOption[];
-		frontierOptions: SelectOption[];
-		runtimes: LocalRuntime[];
+		providers: ProviderAccount[];
+		providerBusy: boolean;
 		onclose: () => void;
 		onappearance: (value: DesktopAppearance) => void;
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
+		onconnectprovider: (account: ProviderConnect) => Promise<boolean>;
+		ondisconnectprovider: (provider: string) => Promise<boolean>;
 		onupsertprofile: (profile: KlermProfile) => Promise<boolean>;
 		ondeleteprofile: (id: string) => Promise<boolean>;
 		onrefreshmcp: () => void;
@@ -66,6 +68,10 @@
 	let modelError = $state("");
 	let customOpen = $state(false);
 	let connectId = $state("");
+	let connectKey = $state("");
+	let connectUrl = $state("");
+	let connectError = $state("");
+	let confirmDiscard = $state(false);
 	let profileName = $state("");
 	let profileFace = $state<KlermProfileFace>("fox");
 	let profileLevel = $state(1);
@@ -91,13 +97,43 @@
 	];
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const profiles = $derived(settings.profiles.profiles);
-	const catalog = $derived(
-		[...localOptions, ...frontierOptions].filter(
-			(option, index, list) => option.value && list.findIndex((item) => item.value === option.value) === index,
-		),
-	);
-	const providerCards = $derived(groupModelProviders(catalog, runtimes));
+	const providerCards = $derived(orderProviderAccounts(providers));
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
+	const connectAccount = $derived(providers.find((provider) => provider.id === connectId));
+
+	function openConnect(id: string): void {
+		connectId = id;
+		connectKey = "";
+		connectUrl = "";
+		connectError = "";
+		confirmDiscard = false;
+	}
+
+	async function saveConnect(): Promise<void> {
+		connectError = "";
+		const saved = await onconnectprovider({
+			provider: connectId,
+			apiKey: connectKey.trim() || undefined,
+			baseUrl: connectUrl.trim() || undefined,
+		});
+		if (saved) {
+			connectKey = "";
+			connectUrl = "";
+		} else {
+			connectError = "Could not connect this provider.";
+		}
+	}
+
+	async function discardConnect(): Promise<void> {
+		connectError = "";
+		const removed = await ondisconnectprovider(connectId);
+		if (removed) {
+			confirmDiscard = false;
+			connectId = "";
+		} else {
+			connectError = "Could not discard this provider.";
+		}
+	}
 
 	$effect(() => {
 		draftAppearance = settings.appearance;
@@ -269,21 +305,29 @@
 					{#each providerCards as card (card.id)}
 						<button
 							type="button"
-							class="flex min-h-[108px] flex-col items-start justify-between rounded-xl border border-[#232c34] bg-[#0a0f13] p-4 text-left hover:border-[#4a5861]"
-							onclick={() => {
-								if (card.custom) customOpen = true;
-								else connectId = card.id;
-							}}
+							class={`flex min-h-[108px] flex-col items-start justify-between rounded-xl border bg-[#0a0f13] p-4 text-left hover:border-[#4a5861] ${card.configured ? "border-[#2c4a34]" : "border-[#232c34]"}`}
+							onclick={() => openConnect(card.id)}
 						>
-							<ProviderLogo id={card.id} size={36} />
+							<ProviderLogo id={card.id} label={card.label} size={36} />
 							<span>
 								<strong class="block text-[13px] text-white">{card.label}</strong>
 								<small class="mt-1 block font-mono text-[9px] text-[#7b868e]">
-									{#if card.custom}Endpoint, API key, name{:else}{card.count} model{card.count === 1 ? "" : "s"}{card.detected ? ` · ${card.detected}` : ""}{/if}
+									{#if card.configured}{card.models.length} model{card.models.length === 1 ? "" : "s"}{card.source ? ` · ${card.source}` : ""}{:else if card.local}{card.detected ?? "not detected"}{:else}not connected{/if}
 								</small>
 							</span>
 						</button>
 					{/each}
+					<button
+						type="button"
+						class="flex min-h-[108px] flex-col items-start justify-between rounded-xl border border-dashed border-[#34414a] bg-[#0a0f13] p-4 text-left hover:border-[#4a5861]"
+						onclick={() => (customOpen = true)}
+					>
+						<ProviderLogo id="custom" label="Add a custom model" size={36} />
+						<span>
+							<strong class="block text-[13px] text-white">Add a custom model</strong>
+							<small class="mt-1 block font-mono text-[9px] text-[#7b868e]">Endpoint, API key, name</small>
+						</span>
+					</button>
 				</div>
 			</div>
 		{:else if tab === "shortcuts"}
@@ -385,20 +429,48 @@
 			</div>
 		{/if}
 	</div>
-	{#if connectId}
+	{#if connectAccount}
 		<div class="absolute inset-0 z-20 grid place-items-center bg-black/70 p-4">
-			<div class="w-[min(420px,100%)] rounded-xl border border-[#2a3239] bg-[#05080b] p-4">
+			<div class="max-h-full w-[min(420px,100%)] overflow-y-auto rounded-xl border border-[#2a3239] bg-[#05080b] p-4">
 				<div class="flex items-center gap-2">
-					<ProviderLogo id={connectId} size={28} />
-					<p class="m-0 font-mono text-[12px] text-white">{providerLabel(connectId)}</p>
+					<button type="button" aria-label="Back to providers" class="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#8b969e] hover:bg-[#141a1f] hover:text-white" onclick={() => (connectId = "")}>←</button>
+					<ProviderLogo id={connectAccount.id} label={connectAccount.label} size={28} />
+					<p class="m-0 font-mono text-[12px] text-white">{connectAccount.label}</p>
+					{#if connectAccount.configured}
+						<span class="ml-auto rounded-full border border-[#2c4a34] bg-[#0d1510] px-2 py-0.5 font-mono text-[8px] text-[#81c995]">connected</span>
+					{/if}
 				</div>
-				<p class="mt-1 font-mono text-[9px] text-[#7b868e]">Connect models</p>
-				<div class="mt-3 max-h-[240px] space-y-1 overflow-y-auto">
-					{#each modelsForProvider(catalog, connectId) as model}
-						<p class="m-0 rounded-md bg-[#0d1217] px-2 py-2 font-mono text-[10px] text-[#d7dfe2]">{model.label}</p>
+				{#if connectAccount.local}
+					<p class="mt-2 font-mono text-[9px] text-[#7b868e]">Local runtime{connectAccount.detected ? ` · ${connectAccount.detected}` : ""}. No key needed.</p>
+				{:else}
+					<form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(); }}>
+						<input bind:value={connectKey} type="password" placeholder={connectAccount.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+						<input bind:value={connectUrl} placeholder="endpoint override (optional)" autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+						{#if connectError}<p class="m-0 text-[9px] text-[#f3a49c]">{connectError}</p>{/if}
+						<button type="submit" class="h-8 w-full rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
+							{providerBusy ? "Working..." : connectAccount.configured ? "Save" : "Connect"}
+						</button>
+					</form>
+					{#if connectAccount.configured && !connectAccount.local}
+						{#if confirmDiscard}
+							<div class="mt-2 flex gap-2">
+								<button type="button" class="h-8 flex-1 rounded-md border border-[#5a3434] bg-[#170d0d] font-mono text-[10px] text-[#f3a49c]" onclick={() => void discardConnect()} disabled={providerBusy}>Confirm discard</button>
+								<button type="button" class="h-8 flex-1 rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#d6dde1]" onclick={() => (confirmDiscard = false)}>Keep</button>
+							</div>
+						{:else}
+							<button type="button" class="mt-2 h-8 w-full rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#f3a49c]" onclick={() => (confirmDiscard = true)}>Discard</button>
+						{/if}
+					{/if}
+				{/if}
+				<p class="mt-3 font-mono text-[9px] text-[#7b868e]">Models</p>
+				<div class="mt-1 max-h-[180px] space-y-1 overflow-y-auto">
+					{#each connectAccount.models as model}
+						<p class="m-0 rounded-md bg-[#0d1217] px-2 py-2 font-mono text-[10px] text-[#d7dfe2]">{model}</p>
 					{/each}
+					{#if connectAccount.models.length === 0}
+						<p class="m-0 font-mono text-[9px] text-[#66747d]">No models listed for this provider yet.</p>
+					{/if}
 				</div>
-				<button type="button" class="mt-4 h-8 w-full rounded-md border border-[#34414a] bg-[#0a0f13] font-mono text-[10px] text-[#d6dde1]" onclick={() => (connectId = "")}>Close</button>
 			</div>
 		</div>
 	{/if}

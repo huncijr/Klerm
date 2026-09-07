@@ -27,6 +27,8 @@
 		LocalRuntime,
 		McpServerUpdate,
 		McpStatus,
+		ProviderAccount,
+		ProviderConnect,
 		RoutingState,
 		RoutingTransition,
 		RunningService,
@@ -112,6 +114,8 @@
 	let terminalStreamed = false;
 	let mcpStatus = $state<McpStatus | undefined>(undefined);
 	let mcpBusy = $state(false);
+	let providerAccounts = $state<ProviderAccount[]>([]);
+	let providerBusy = $state(false);
 	let backendCommands = $state<string[]>([]);
 	let mcpNeedsReload = false;
 
@@ -971,10 +975,55 @@
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("add_custom_model", { model });
 			await refreshModels();
+			await refreshProviderStatus();
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
 			return false;
+		}
+	}
+
+	async function refreshProviderStatus(): Promise<void> {
+		if (!backendReady || !supportsCommand("get_provider_status")) return;
+		try {
+			const result = await bridge.send<{ providers: ProviderAccount[] }>("get_provider_status");
+			providerAccounts = result.providers;
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function connectProvider(account: ProviderConnect): Promise<boolean> {
+		if (!supportsCommand("connect_provider") || providerBusy) return false;
+		providerBusy = true;
+		clearError();
+		try {
+			const result = await bridge.send<{ providers: ProviderAccount[] }>("connect_provider", { account });
+			providerAccounts = result.providers;
+			await refreshModels();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			providerBusy = false;
+		}
+	}
+
+	async function disconnectProvider(provider: string): Promise<boolean> {
+		if (!supportsCommand("disconnect_provider") || providerBusy) return false;
+		providerBusy = true;
+		clearError();
+		try {
+			const result = await bridge.send<{ providers: ProviderAccount[] }>("disconnect_provider", { provider });
+			providerAccounts = result.providers;
+			await refreshModels();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			providerBusy = false;
 		}
 	}
 
@@ -1331,7 +1380,7 @@
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		await refreshLocalModels();
-		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus(), refreshDesktopSettings()]);
+		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus(), refreshDesktopSettings(), refreshProviderStatus()]);
 		const entries = await entriesPromise;
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
@@ -1566,12 +1615,13 @@
 				settings={desktopSettings}
 				{mcpStatus}
 				{mcpBusy}
-				{localOptions}
-				{frontierOptions}
-				runtimes={currentLocalRuntimes}
+				providers={providerAccounts}
+				{providerBusy}
 				onclose={() => (settingsOpen = false)}
 				onappearance={(value) => void setDesktopAppearance(value)}
 				onaddmodel={addCustomModel}
+				onconnectprovider={connectProvider}
+				ondisconnectprovider={disconnectProvider}
 				onupsertprofile={upsertProfile}
 				ondeleteprofile={deleteProfile}
 				onrefreshmcp={() => void refreshMcpStatus()}

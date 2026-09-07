@@ -1,6 +1,16 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { groupModelProviders } from "../../desktop/src/lib/provider-cards.ts";
+import { orderProviderAccounts, providerLabel } from "../../desktop/src/lib/provider-cards.ts";
+import { providerLogoSrc } from "../../desktop/src/lib/provider-logos.ts";
 import { shortcutConflicts } from "../../desktop/src/lib/shortcuts.ts";
+
+const logoDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "Logo", "providers");
+
+function account(id: string, configured: boolean) {
+	return { id, label: providerLabel(id), models: ["a"], configured, local: false };
+}
 
 describe("desktop settings helpers", () => {
 	it("marks duplicate shortcut chords", () => {
@@ -13,19 +23,22 @@ describe("desktop settings helpers", () => {
 		expect(conflicts.has("escape")).toBe(false);
 	});
 
-	it("groups providers and appends a custom card", () => {
-		const cards = groupModelProviders(
-			[
-				{ value: "anthropic/claude", label: "anthropic / claude" },
-				{ value: "anthropic/haiku", label: "anthropic / haiku" },
-				{ value: "openai/gpt", label: "openai / gpt" },
-			],
-			[{ providerId: "ollama", name: "Ollama", serverUrl: "http://127.0.0.1", models: [{ id: "qwen" }] }],
-		);
-		expect(cards[0]).toMatchObject({ id: "anthropic", count: 2 });
-		expect(cards.some((card) => card.id === "openai-codex")).toBe(true);
-		expect(cards.some((card) => card.id === "qwen-token-plan")).toBe(true);
-		expect(cards.some((card) => card.id === "ollama" && card.count === 1)).toBe(true);
-		expect(cards.at(-1)?.custom).toBe(true);
+	it("orders curated providers first", () => {
+		const ordered = orderProviderAccounts([
+			account("zai", false),
+			account("openai", true),
+			account("anthropic", true),
+		]);
+		expect(ordered.map((item) => item.id)).toEqual(["anthropic", "openai", "zai"]);
+		expect(providerLabel("openai-codex")).toBe("Codex");
+	});
+
+	it("maps every logo file on disk", () => {
+		for (const id of ["anthropic", "openai", "google", "ollama", "deepseek", "mistral"]) {
+			const src = providerLogoSrc(id);
+			expect(src).toBeDefined();
+			expect(existsSync(join(logoDir, src!.replace("/providers/", "")))).toBe(true);
+		}
+		expect(providerLogoSrc("no-such-provider")).toBeUndefined();
 	});
 });

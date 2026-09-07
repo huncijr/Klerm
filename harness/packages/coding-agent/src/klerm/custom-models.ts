@@ -115,6 +115,36 @@ export async function upsertCustomModel(modelsPath: string, entry: CustomModelEn
 	return { provider, id, name: nextModel.name, api: entry.api, baseUrl };
 }
 
+export interface ModelsProviderFields {
+	baseUrl?: string;
+	apiKey?: string;
+}
+
+/** Set or clear provider-level models.json fields without touching models. */
+export async function updateModelsProviderFields(
+	modelsPath: string,
+	providerId: string,
+	fields: ModelsProviderFields,
+): Promise<void> {
+	const provider = providerId.trim();
+	if (!/^[A-Za-z0-9._-]+$/.test(provider)) throw new Error("Invalid provider id.");
+	const file = await readModelsFile(modelsPath);
+	const providers = asRecord(file.providers) ?? {};
+	const existing = asRecord(providers[provider]) ?? {};
+	if (fields.baseUrl !== undefined) {
+		if (fields.baseUrl.trim()) existing.baseUrl = fields.baseUrl.trim();
+		else delete existing.baseUrl;
+	}
+	if (fields.apiKey !== undefined) {
+		if (fields.apiKey.trim()) existing.apiKey = fields.apiKey.trim();
+		else delete existing.apiKey;
+	}
+	if (Object.keys(existing).length === 0) delete providers[provider];
+	else providers[provider] = existing;
+	file.providers = providers;
+	await writeModelsFile(modelsPath, file);
+}
+
 export async function removeCustomModel(modelsPath: string, provider: string, id: string): Promise<boolean> {
 	const file = await readModelsFile(modelsPath);
 	const providers = asRecord(file.providers);

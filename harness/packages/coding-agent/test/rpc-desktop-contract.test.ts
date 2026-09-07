@@ -201,6 +201,9 @@ describe("Klerm desktop RPC contract", () => {
 							"get_desktop_settings",
 							"set_desktop_appearance",
 							"upsert_klerm_profile",
+							"get_provider_status",
+							"connect_provider",
+							"disconnect_provider",
 							"bash",
 							"abort_bash",
 						]),
@@ -232,6 +235,19 @@ describe("Klerm desktop RPC contract", () => {
 					shortcuts: expect.arrayContaining([expect.objectContaining({ action: "Send prompt" })]),
 				},
 			});
+
+			const providerStatus = await send({ id: "provider-status", type: "get_provider_status" });
+			expect(providerStatus).toMatchObject({
+				success: true,
+				data: { providers: expect.any(Array) },
+			});
+
+			const badConnect = await send({
+				id: "provider-connect-bad",
+				type: "connect_provider",
+				account: { provider: "no-such-provider", apiKey: "x" },
+			});
+			expect(badConnect).toMatchObject({ success: false });
 
 			const emptyMcpStatus = await send({ id: "mcp-status-empty", type: "get_mcp_status" });
 			expect(emptyMcpStatus).toMatchObject({

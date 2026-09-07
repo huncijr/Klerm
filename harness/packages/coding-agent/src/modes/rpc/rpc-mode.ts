@@ -43,6 +43,12 @@ import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
 import { normalizeProfile } from "../../klerm/profiles.ts";
+import {
+	connectProviderAccount,
+	customProviderModelIds,
+	disconnectProviderAccount,
+	getProviderAccountStatus,
+} from "../../klerm/provider-accounts.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -119,6 +125,9 @@ const DESKTOP_COMMANDS = [
 	"assign_klerm_profile",
 	"add_custom_model",
 	"remove_custom_model",
+	"get_provider_status",
+	"connect_provider",
+	"disconnect_provider",
 	"bash",
 	"abort_bash",
 	"get_state",
@@ -1263,6 +1272,70 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				await removeCustomModel(modelsPath(), command.provider, command.modelId);
 				await session.modelRuntime.refresh({ allowNetwork: false });
 				return success(id, "remove_custom_model", await getDesktopSettingsPayload());
+			}
+
+			case "get_provider_status": {
+				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
+				const runtimes = await discover(undefined, AbortSignal.timeout(5000)).catch(() => []);
+				const providers = getProviderAccountStatus(
+					session.modelRuntime,
+					runtimes,
+					await customProviderModelIds(modelsPath()),
+				);
+				return success(id, "get_provider_status", { providers });
+			}
+
+			case "connect_provider": {
+				const account = command.account;
+				if (!account || typeof account !== "object") {
+					return error(id, "connect_provider", "A provider account object is required.", "INVALID_PROVIDER");
+				}
+				try {
+					await connectProviderAccount(session.modelRuntime, modelsPath(), {
+						provider: account.provider,
+						apiKey: typeof account.apiKey === "string" ? account.apiKey : undefined,
+						baseUrl: typeof account.baseUrl === "string" ? account.baseUrl : undefined,
+					});
+				} catch (providerError) {
+					return error(
+						id,
+						"connect_provider",
+						providerError instanceof Error ? providerError.message : String(providerError),
+						"INVALID_PROVIDER",
+					);
+				}
+				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
+				const runtimes = await discover(undefined, AbortSignal.timeout(5000)).catch(() => []);
+				const providers = getProviderAccountStatus(
+					session.modelRuntime,
+					runtimes,
+					await customProviderModelIds(modelsPath()),
+				);
+				return success(id, "connect_provider", { providers });
+			}
+
+			case "disconnect_provider": {
+				if (typeof command.provider !== "string" || !command.provider.trim()) {
+					return error(id, "disconnect_provider", "A provider id is required.", "INVALID_PROVIDER");
+				}
+				try {
+					await disconnectProviderAccount(session.modelRuntime, modelsPath(), command.provider);
+				} catch (providerError) {
+					return error(
+						id,
+						"disconnect_provider",
+						providerError instanceof Error ? providerError.message : String(providerError),
+						"INVALID_PROVIDER",
+					);
+				}
+				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
+				const runtimes = await discover(undefined, AbortSignal.timeout(5000)).catch(() => []);
+				const providers = getProviderAccountStatus(
+					session.modelRuntime,
+					runtimes,
+					await customProviderModelIds(modelsPath()),
+				);
+				return success(id, "disconnect_provider", { providers });
 			}
 
 			// =================================================================

@@ -158,6 +158,22 @@ export interface RpcCustomModelUpdate {
 	apiKey?: string;
 }
 
+export interface RpcProviderAccount {
+	id: string;
+	label: string;
+	models: string[];
+	configured: boolean;
+	source?: string;
+	local: boolean;
+	detected?: string;
+}
+
+export interface RpcProviderConnect {
+	provider: string;
+	apiKey?: string;
+	baseUrl?: string;
+}
+
 // ============================================================================
 // RPC Commands (stdin)
 // ============================================================================
@@ -189,6 +205,9 @@ export type RpcCommand =
 	| { id?: string; type: "assign_klerm_profile"; lane: KlermWorkerLane; profileId?: string | null }
 	| { id?: string; type: "add_custom_model"; model: RpcCustomModelUpdate }
 	| { id?: string; type: "remove_custom_model"; provider: string; modelId: string }
+	| { id?: string; type: "get_provider_status" }
+	| { id?: string; type: "connect_provider"; account: RpcProviderConnect }
+	| { id?: string; type: "disconnect_provider"; provider: string }
 
 	// Prompting
 	| {
@@ -384,6 +403,27 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "assign_klerm_profile"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "add_custom_model"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "remove_custom_model"; success: true; data: RpcDesktopSettings }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_provider_status";
+			success: true;
+			data: { providers: RpcProviderAccount[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "connect_provider";
+			success: true;
+			data: { providers: RpcProviderAccount[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "disconnect_provider";
+			success: true;
+			data: { providers: RpcProviderAccount[] };
+	  }
 	| {
 			id?: string;
 			type: "response";
