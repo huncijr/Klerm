@@ -204,6 +204,8 @@ describe("Klerm desktop RPC contract", () => {
 							"get_provider_status",
 							"connect_provider",
 							"disconnect_provider",
+							"connect_provider_oauth",
+							"cancel_provider_oauth",
 							"bash",
 							"abort_bash",
 						]),
@@ -248,6 +250,16 @@ describe("Klerm desktop RPC contract", () => {
 				account: { provider: "no-such-provider", apiKey: "x" },
 			});
 			expect(badConnect).toMatchObject({ success: false });
+
+			const oauthUnsupported = await send({
+				id: "provider-oauth-unsupported",
+				type: "connect_provider_oauth",
+				provider: "openai",
+			});
+			expect(oauthUnsupported).toMatchObject({ success: false });
+
+			const oauthCancelIdle = await send({ id: "provider-oauth-cancel-idle", type: "cancel_provider_oauth" });
+			expect(oauthCancelIdle).toMatchObject({ success: true, data: { cancelled: false } });
 
 			const emptyMcpStatus = await send({ id: "mcp-status-empty", type: "get_mcp_status" });
 			expect(emptyMcpStatus).toMatchObject({

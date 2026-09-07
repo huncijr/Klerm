@@ -14,7 +14,7 @@ import { shortcutConflicts } from "../../desktop/src/lib/shortcuts.ts";
 const logoDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "Logo", "providers");
 
 function account(id: string, configured: boolean) {
-	return { id, label: providerLabel(id), models: ["a"], configured, local: false };
+	return { id, label: providerLabel(id), models: ["a"], configured, local: false, supportsOauth: false };
 }
 
 describe("desktop settings helpers", () => {

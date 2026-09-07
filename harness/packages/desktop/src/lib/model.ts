@@ -44,6 +44,24 @@ export interface ProviderAccount {
 	local: boolean;
 	detected?: string;
 	defaultEndpoint?: string;
+	supportsOauth: boolean;
+}
+
+export interface ProviderOauthPrompt {
+	id: string;
+	promptType: string;
+	message: string;
+	options?: Array<{ id: string; label: string; description?: string }>;
+}
+
+export interface ProviderOauthStep {
+	provider: string;
+	url?: string;
+	instructions?: string;
+	userCode?: string;
+	verificationUri?: string;
+	message?: string;
+	prompt?: ProviderOauthPrompt;
 }
 
 export interface ProviderConnect {

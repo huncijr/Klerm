@@ -29,6 +29,7 @@
 		McpStatus,
 		ProviderAccount,
 		ProviderConnect,
+		ProviderOauthStep,
 		RoutingState,
 		RoutingTransition,
 		RunningService,
@@ -117,6 +118,7 @@
 	let mcpBusy = $state(false);
 	let providerAccounts = $state<ProviderAccount[]>([]);
 	let providerBusy = $state(false);
+	let oauthStep = $state<ProviderOauthStep | undefined>(undefined);
 	let backendCommands = $state<string[]>([]);
 	let mcpNeedsReload = false;
 
@@ -606,6 +608,40 @@
 						void bridge.respond({ type: "extension_ui_response", id: pendingApproval.id, confirmed: false });
 					}
 					pendingApproval = { id: event.id, title: event.title, message: event.message };
+				} else if (event.method === "provider_oauth_notify" && typeof event.id === "string") {
+					const notify = event.notify as Record<string, unknown> | undefined;
+					if (notify && oauthStep) {
+						oauthStep = {
+							...oauthStep,
+							...(typeof notify.url === "string" ? { url: notify.url } : {}),
+							...(typeof notify.instructions === "string" ? { instructions: notify.instructions } : {}),
+							...(typeof notify.userCode === "string" ? { userCode: notify.userCode } : {}),
+							...(typeof notify.verificationUri === "string" ? { verificationUri: notify.verificationUri } : {}),
+							...(typeof notify.message === "string" ? { message: notify.message } : {}),
+						};
+					}
+				} else if (event.method === "provider_oauth_prompt" && typeof event.id === "string") {
+					const prompt = event.prompt as Record<string, unknown> | undefined;
+					if (prompt && typeof prompt.message === "string" && oauthStep) {
+						const options = Array.isArray(prompt.options)
+							? (prompt.options as Array<Record<string, unknown>>)
+									.filter((option) => typeof option.id === "string" && typeof option.label === "string")
+									.map((option) => ({
+										id: option.id as string,
+										label: option.label as string,
+										description: typeof option.description === "string" ? option.description : undefined,
+									}))
+							: undefined;
+						oauthStep = {
+							...oauthStep,
+							prompt: {
+								id: event.id,
+								promptType: typeof prompt.promptType === "string" ? prompt.promptType : "text",
+								message: prompt.message,
+								options,
+							},
+						};
+					}
 				}
 				return;
 			}
@@ -1013,6 +1049,51 @@
 		} finally {
 			providerBusy = false;
 		}
+	}
+
+	async function startProviderOauth(provider: string): Promise<void> {
+		if (!supportsCommand("connect_provider_oauth") || providerBusy) return;
+		providerBusy = true;
+		clearError();
+		oauthStep = { provider };
+		try {
+			const result = await bridge.send<{ providers: ProviderAccount[] }>(
+				"connect_provider_oauth",
+				{ provider },
+				600_000,
+			);
+			providerAccounts = result.providers;
+			await refreshModels();
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			providerBusy = false;
+			oauthStep = undefined;
+		}
+	}
+
+	async function cancelProviderOauth(): Promise<void> {
+		const step = oauthStep;
+		oauthStep = undefined;
+		if (step?.prompt) {
+			void bridge.respond({ type: "extension_ui_response", id: step.prompt.id, cancelled: true });
+		}
+		if (supportsCommand("cancel_provider_oauth")) {
+			try {
+				await bridge.send("cancel_provider_oauth");
+			} catch (error) {
+				showError(toError(error).message);
+			}
+		}
+		providerBusy = false;
+	}
+
+	function submitOauthPrompt(value: string): void {
+		const step = oauthStep;
+		const prompt = step?.prompt;
+		if (!prompt) return;
+		oauthStep = step ? { ...step, prompt: undefined } : undefined;
+		void bridge.respond({ type: "extension_ui_response", id: prompt.id, value });
 	}
 
 	async function disconnectProvider(provider: string): Promise<boolean> {
@@ -1628,6 +1709,10 @@
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
 				ondisconnectprovider={disconnectProvider}
+				oauthStep={oauthStep}
+				onstartoauth={(provider) => void startProviderOauth(provider)}
+				oncanceloauth={() => void cancelProviderOauth()}
+				onoauthsubmit={submitOauthPrompt}
 				onupsertprofile={upsertProfile}
 				ondeleteprofile={deleteProfile}
 				onrefreshmcp={() => void refreshMcpStatus()}

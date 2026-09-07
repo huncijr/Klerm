@@ -167,6 +167,22 @@ export interface RpcProviderAccount {
 	local: boolean;
 	detected?: string;
 	defaultEndpoint?: string;
+	supportsOauth: boolean;
+}
+
+export interface RpcProviderOauthNotify {
+	kind: "auth_url" | "device_code" | "info" | "progress";
+	url?: string;
+	instructions?: string;
+	userCode?: string;
+	verificationUri?: string;
+	message?: string;
+}
+
+export interface RpcProviderOauthPrompt {
+	promptType: "text" | "secret" | "select" | "manual_code";
+	message: string;
+	options?: Array<{ id: string; label: string; description?: string }>;
 }
 
 export interface RpcProviderConnect {
@@ -209,6 +225,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_provider_status" }
 	| { id?: string; type: "connect_provider"; account: RpcProviderConnect }
 	| { id?: string; type: "disconnect_provider"; provider: string }
+	| { id?: string; type: "connect_provider_oauth"; provider: string }
+	| { id?: string; type: "cancel_provider_oauth" }
 
 	// Prompting
 	| {
@@ -428,6 +446,14 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "connect_provider_oauth";
+			success: true;
+			data: { providers: RpcProviderAccount[] };
+	  }
+	| { id?: string; type: "response"; command: "cancel_provider_oauth"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
 			command: "delete_session";
 			success: true;
 			data: { sessionId: string };
@@ -596,7 +622,9 @@ export type RpcExtensionUIRequest =
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
-	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string }
+	| { type: "extension_ui_request"; id: string; method: "provider_oauth_notify"; notify: RpcProviderOauthNotify }
+	| { type: "extension_ui_request"; id: string; method: "provider_oauth_prompt"; prompt: RpcProviderOauthPrompt };
 
 // ============================================================================
 // Extension UI Commands (stdin)

@@ -13,6 +13,7 @@
 		McpStatus,
 		ProviderAccount,
 		ProviderConnect,
+		ProviderOauthStep,
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
 	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
@@ -35,6 +36,10 @@
 		onaddmodel,
 		onconnectprovider,
 		ondisconnectprovider,
+		oauthStep,
+		onstartoauth,
+		oncanceloauth,
+		onoauthsubmit,
 		onupsertprofile,
 		ondeleteprofile,
 		onrefreshmcp,
@@ -46,6 +51,10 @@
 		mcpBusy: boolean;
 		providers: ProviderAccount[];
 		providerBusy: boolean;
+		oauthStep: ProviderOauthStep | undefined;
+		onstartoauth: (provider: string) => void;
+		oncanceloauth: () => void;
+		onoauthsubmit: (value: string) => void;
 		fullscreen: boolean;
 		ontogglefullscreen: () => void;
 		onclose: () => void;
@@ -73,6 +82,8 @@
 	let modelError = $state("");
 	let customOpen = $state(false);
 	let connectId = $state("");
+	let oauthInput = $state("");
+	let copiedUrl = $state("");
 	let confirmDiscardSettings = $state(false);
 	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
 	let profileName = $state("");
@@ -494,14 +505,67 @@
 						{#if member.local}
 							<p class="m-0 mt-2 font-mono text-[9px] text-[#7b868e]">Local runtime. No key needed.</p>
 						{:else}
+							{#if oauthStep?.provider === member.id}
+								{@const step = oauthStep}
+								<div class="mt-2 space-y-2 rounded-md border border-[#2c4a34] bg-[#0d1510] p-2.5">
+									{#if step.message}<p class="m-0 font-mono text-[9px] text-[#a9c94d]">{step.message}</p>{/if}
+									{#if step.url}
+										<p class="m-0 font-mono text-[9px] text-[#7b868e]">Complete login in your browser:</p>
+										<div class="flex gap-1.5">
+											<code class="min-w-0 flex-1 truncate rounded bg-[#000] px-2 py-1.5 font-mono text-[9px] text-[#9cc0f2]">{step.url}</code>
+											<button type="button" class="h-7 shrink-0 rounded border border-[#34414a] px-2 font-mono text-[9px] text-[#d6dde1]" onclick={() => {
+												void navigator.clipboard.writeText(step.url ?? "");
+												copiedUrl = member.id;
+												setTimeout(() => {
+													if (copiedUrl === member.id) copiedUrl = "";
+												}, 1500);
+											}}>
+												{copiedUrl === member.id ? "Copied" : "Copy"}
+											</button>
+										</div>
+										{#if step.instructions}<p class="m-0 font-mono text-[8px] text-[#66747d]">{step.instructions}</p>{/if}
+									{/if}
+									{#if step.userCode}
+										<div class="flex items-center gap-2">
+											<code class="rounded bg-[#000] px-2 py-1.5 font-mono text-[12px] font-bold tracking-[.2em] text-[#e8eef2]">{step.userCode}</code>
+											{#if step.verificationUri}<span class="truncate font-mono text-[8px] text-[#66747d]">{step.verificationUri}</span>{/if}
+										</div>
+									{/if}
+									{#if step.prompt}
+										{#if step.prompt.options}
+											<div class="space-y-1.5">
+												{#each step.prompt.options as option (option.id)}
+													<button type="button" class="block w-full rounded-md border border-[#34414a] bg-[#0a0f13] px-2 py-2 text-left font-mono text-[10px] text-[#d6dde1] hover:border-[#4a5861]" onclick={() => onoauthsubmit(option.id)}>
+														<strong class="block">{option.label}</strong>
+														{#if option.description}<small class="mt-0.5 block text-[8px] text-[#66747d]">{option.description}</small>{/if}
+													</button>
+												{/each}
+											</div>
+										{:else}
+											<form class="flex gap-1.5" onsubmit={(event) => { event.preventDefault(); onoauthsubmit(oauthInput); oauthInput = ""; }}>
+												<input bind:value={oauthInput} placeholder={step.prompt.message} autocomplete="off" class="h-8 min-w-0 flex-1 rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
+												<button type="submit" class="h-8 shrink-0 rounded-md bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019]">Send</button>
+											</form>
+											<p class="m-0 font-mono text-[8px] text-[#66747d]">{step.prompt.message}</p>
+										{/if}
+									{/if}
+									<button type="button" class="h-7 w-full rounded-md border border-[#34414a] bg-transparent font-mono text-[9px] text-[#8b969e]" onclick={oncanceloauth}>Cancel login</button>
+								</div>
+							{:else}
 							<form class="mt-2 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(member.id); }}>
 								<input value={form.key} oninput={(event) => setForm(member.id, { key: (event.currentTarget as HTMLInputElement).value })} type="password" placeholder={member.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
 								<input value={form.url} oninput={(event) => setForm(member.id, { url: (event.currentTarget as HTMLInputElement).value })} placeholder={member.defaultEndpoint ?? "endpoint override (optional)"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
 								{#if form.error}<p class="m-0 text-[9px] text-[#f3a49c]">{form.error}</p>{/if}
-								<button type="submit" class="h-8 w-full rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
-									{providerBusy ? "Working..." : member.configured ? "Save" : "Connect"}
-								</button>
+								<div class="flex gap-1.5">
+									<button type="submit" class="h-8 flex-1 rounded-md bg-[#e8eef2] font-mono text-[10px] text-[#091019]" disabled={providerBusy}>
+										{providerBusy ? "Working..." : member.configured ? "Save" : "Connect"}
+									</button>
+									{#if member.supportsOauth}
+										<button type="button" class="h-8 flex-1 rounded-md border border-[#2c4a34] bg-[#0d1510] font-mono text-[10px] text-[#81c995]" disabled={providerBusy} onclick={() => onstartoauth(member.id)}>OAuth</button>
+									{/if}
+								</div>
 							</form>
+							{/if}
 							{#if member.configured}
 								{#if form.confirmDiscard}
 									<div class="mt-2 flex gap-2">

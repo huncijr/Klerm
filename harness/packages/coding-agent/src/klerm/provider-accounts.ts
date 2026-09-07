@@ -10,6 +10,7 @@ export interface ProviderAccountStatus {
 	local: boolean;
 	detected?: string;
 	defaultEndpoint?: string;
+	supportsOauth: boolean;
 }
 
 function labelFor(id: string, fallback?: string): string {
@@ -29,6 +30,7 @@ export function getProviderAccountStatus(
 	for (const provider of modelRuntime.getProviders()) {
 		const models = modelRuntime.getModels(provider.id).map((model) => model.id);
 		const auth = modelRuntime.getProviderAuthStatus(provider.id);
+		const full = modelRuntime.getProvider(provider.id);
 		byId.set(provider.id, {
 			id: provider.id,
 			label: provider.name || labelFor(provider.id),
@@ -36,7 +38,8 @@ export function getProviderAccountStatus(
 			configured: auth.configured,
 			source: auth.source ?? auth.label,
 			local: false,
-			defaultEndpoint: modelRuntime.getProvider(provider.id)?.baseUrl,
+			defaultEndpoint: full?.baseUrl,
+			supportsOauth: full?.auth.oauth?.login !== undefined,
 		});
 	}
 	for (const runtime of runtimes) {
@@ -59,6 +62,7 @@ export function getProviderAccountStatus(
 			source: runtime.error ? undefined : "local runtime",
 			local: true,
 			detected,
+			supportsOauth: false,
 		});
 	}
 	for (const [providerId, models] of customProviders) {
@@ -76,6 +80,7 @@ export function getProviderAccountStatus(
 			configured: true,
 			source: "models.json",
 			local: false,
+			supportsOauth: false,
 		});
 	}
 	return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label));

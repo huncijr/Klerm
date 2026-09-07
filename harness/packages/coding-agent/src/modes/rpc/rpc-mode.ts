@@ -15,6 +15,7 @@ import * as crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { constants as errnoConstants } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
@@ -128,6 +129,8 @@ const DESKTOP_COMMANDS = [
 	"get_provider_status",
 	"connect_provider",
 	"disconnect_provider",
+	"connect_provider_oauth",
+	"cancel_provider_oauth",
 	"bash",
 	"abort_bash",
 	"get_state",
@@ -309,6 +312,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	};
 
 	const modelsPath = () => join(session.settingsManager.getAgentDir(), "models.json");
+
+	let oauthAbort: AbortController | undefined;
+	const refreshProviderAccounts = async () => {
+		const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
+		const runtimes = await discover(undefined, AbortSignal.timeout(5000)).catch(() => []);
+		return getProviderAccountStatus(session.modelRuntime, runtimes, await customProviderModelIds(modelsPath()));
+	};
 
 	const getDesktopSettingsPayload = async (): Promise<RpcDesktopSettings> => ({
 		appearance: session.settingsManager.getDesktopAppearance(),
@@ -1328,14 +1338,141 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"INVALID_PROVIDER",
 					);
 				}
-				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
-				const runtimes = await discover(undefined, AbortSignal.timeout(5000)).catch(() => []);
-				const providers = getProviderAccountStatus(
-					session.modelRuntime,
-					runtimes,
-					await customProviderModelIds(modelsPath()),
-				);
-				return success(id, "disconnect_provider", { providers });
+				return success(id, "disconnect_provider", { providers: await refreshProviderAccounts() });
+			}
+
+			case "connect_provider_oauth": {
+				if (typeof command.provider !== "string" || !command.provider.trim()) {
+					return error(id, "connect_provider_oauth", "A provider id is required.", "INVALID_PROVIDER");
+				}
+				const providerId = command.provider.trim();
+				const provider = session.modelRuntime.getProvider(providerId);
+				if (!provider) {
+					return error(id, "connect_provider_oauth", `Unknown provider: ${providerId}`, "INVALID_PROVIDER");
+				}
+				if (!provider.auth.oauth?.login) {
+					return error(
+						id,
+						"connect_provider_oauth",
+						`${provider.name} does not support OAuth login. Use an API key instead.`,
+						"OAUTH_UNSUPPORTED",
+					);
+				}
+				if (oauthAbort) {
+					return error(id, "connect_provider_oauth", "An OAuth login is already running.", "OAUTH_BUSY");
+				}
+				const controller = new AbortController();
+				oauthAbort = controller;
+				const signal = controller.signal;
+				const oauthNotify = (event: AuthEvent): void => {
+					if (event.type === "auth_url") {
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "provider_oauth_notify",
+							notify: { kind: "auth_url", url: event.url, instructions: event.instructions },
+						} as RpcExtensionUIRequest);
+					} else if (event.type === "device_code") {
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "provider_oauth_notify",
+							notify: {
+								kind: "device_code",
+								userCode: event.userCode,
+								verificationUri: event.verificationUri,
+								message: `Expires in ${event.expiresInSeconds ?? "?"}s.`,
+							},
+						} as RpcExtensionUIRequest);
+					} else if (event.type === "info") {
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "provider_oauth_notify",
+							notify: { kind: "info", message: event.message },
+						} as RpcExtensionUIRequest);
+					} else {
+						output({
+							type: "extension_ui_request",
+							id: crypto.randomUUID(),
+							method: "provider_oauth_notify",
+							notify: { kind: "progress", message: event.message },
+						} as RpcExtensionUIRequest);
+					}
+				};
+				const oauthPrompt = (prompt: AuthPrompt): Promise<string> => {
+					const requestId = crypto.randomUUID();
+					return new Promise<string>((resolve, reject) => {
+						if (signal.aborted) {
+							reject(signal.reason);
+							return;
+						}
+						const onAbort = (): void => {
+							pendingExtensionRequests.delete(requestId);
+							reject(signal.reason);
+						};
+						signal.addEventListener("abort", onAbort, { once: true });
+						pendingExtensionRequests.set(requestId, {
+							resolve: (response: RpcExtensionUIResponse) => {
+								signal.removeEventListener("abort", onAbort);
+								if ("cancelled" in response && response.cancelled) reject(new Error("Login cancelled"));
+								else if ("value" in response) resolve(response.value);
+								else reject(new Error("Login cancelled"));
+							},
+							reject: (cause: Error) => {
+								signal.removeEventListener("abort", onAbort);
+								reject(cause);
+							},
+						});
+						output({
+							type: "extension_ui_request",
+							id: requestId,
+							method: "provider_oauth_prompt",
+							prompt: {
+								promptType: prompt.type,
+								message: prompt.message,
+								options:
+									prompt.type === "select"
+										? prompt.options.map((option) => ({
+												id: option.id,
+												label: option.label,
+												description: option.description,
+											}))
+										: undefined,
+							},
+						} as RpcExtensionUIRequest);
+					});
+				};
+				try {
+					await session.modelRuntime.login(providerId, "oauth", {
+						signal,
+						prompt: oauthPrompt,
+						notify: oauthNotify,
+					});
+					await session.modelRuntime.refresh({ allowNetwork: false });
+				} catch (oauthError) {
+					if (signal.aborted) {
+						return error(id, "connect_provider_oauth", "OAuth login cancelled.", "OAUTH_CANCELLED");
+					}
+					return error(
+						id,
+						"connect_provider_oauth",
+						oauthError instanceof Error ? oauthError.message : String(oauthError),
+						"OAUTH_FAILED",
+					);
+				} finally {
+					if (oauthAbort === controller) oauthAbort = undefined;
+				}
+				return success(id, "connect_provider_oauth", { providers: await refreshProviderAccounts() });
+			}
+
+			case "cancel_provider_oauth": {
+				if (oauthAbort) {
+					oauthAbort.abort(new Error("Login cancelled"));
+					oauthAbort = undefined;
+					return success(id, "cancel_provider_oauth", { cancelled: true });
+				}
+				return success(id, "cancel_provider_oauth", { cancelled: false });
 			}
 
 			// =================================================================
