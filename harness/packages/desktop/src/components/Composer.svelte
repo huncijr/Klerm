@@ -9,7 +9,15 @@
 		type McpSuggestion,
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
-	import type { KlermProfile, McpColor, McpServerStatus, SelectOption, ThinkingLevel, WorkerRole } from "../lib/model.ts";
+	import type {
+		ApprovalMode,
+		KlermProfile,
+		McpColor,
+		McpServerStatus,
+		SelectOption,
+		ThinkingLevel,
+		WorkerRole,
+	} from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
@@ -45,6 +53,8 @@
 		profileDisabled,
 		localRole,
 		frontierRole,
+		localApprovalMode,
+		frontierApprovalMode,
 		activeAgent,
 		roleDisabled,
 		onsend,
@@ -56,6 +66,8 @@
 		onfrontierthinkingchange,
 		onlocalrolechange,
 		onfrontierrolechange,
+		onlocalapprovalchange,
+		onfrontierapprovalchange,
 		onlocalprofilechange,
 		onfrontierprofilechange,
 	}: {
@@ -90,6 +102,8 @@
 		profileDisabled: boolean;
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
+		localApprovalMode: ApprovalMode;
+		frontierApprovalMode: ApprovalMode;
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
 		onsend: (text: string) => void;
@@ -101,6 +115,8 @@
 		onfrontierthinkingchange: (level: ThinkingLevel) => void;
 		onlocalrolechange: (role: WorkerRole) => void;
 		onfrontierrolechange: (role: WorkerRole) => void;
+		onlocalapprovalchange: (mode: ApprovalMode) => void;
+		onfrontierapprovalchange: (mode: ApprovalMode) => void;
 		onlocalprofilechange: (id: string) => void;
 		onfrontierprofilechange: (id: string) => void;
 	} = $props();
@@ -124,6 +140,11 @@
 	let mcpSelectedIndex = $state(0);
 	const activeAgentLabel = $derived(activeAgent === "agent1" ? "Agent 1" : "Agent 2");
 	const activeRole = $derived(activeAgent === "agent1" ? localRole : frontierRole);
+	const activeApprovalMode = $derived(activeAgent === "agent1" ? localApprovalMode : frontierApprovalMode);
+	const approvalModes: ApprovalMode[] = ["never", "risky", "always"];
+	const approvalLabel = $derived(
+		activeApprovalMode === "always" ? "Always allow" : activeApprovalMode === "never" ? "Block risky" : "Ask risky",
+	);
 	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
 	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
@@ -488,8 +509,29 @@
 			</div>
 		</div>
 	</form>
+	<div class="mx-auto mt-1.5 flex w-[min(820px,100%)] justify-end px-1">
+		<label class="flex items-center gap-2 font-mono text-[8px] text-[#66727b]">
+			<span>{activeAgentLabel} approval</span>
+			<input
+				type="range"
+				min="0"
+				max="2"
+				step="1"
+				value={approvalModes.indexOf(activeApprovalMode)}
+				disabled={roleDisabled || activeRole !== "builder"}
+				aria-label={`${activeAgentLabel} builder approval mode`}
+				class="h-1 w-20 cursor-pointer accent-[#d6ff3f] disabled:cursor-not-allowed disabled:opacity-40"
+				oninput={(event) => {
+					const mode = approvalModes[Number(event.currentTarget.value)] ?? "risky";
+					if (activeAgent === "agent1") onlocalapprovalchange(mode);
+					else onfrontierapprovalchange(mode);
+				}}
+			/>
+			<strong class="min-w-[66px] text-right font-medium text-[#aab4bb]">{activeRole === "builder" ? approvalLabel : "Plan locked"}</strong>
+		</label>
+	</div>
 
-	<div class="mx-auto mt-2 grid w-[min(820px,100%)] grid-cols-3 gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px]">
+	<div class="mx-auto mt-1.5 grid w-[min(820px,100%)] grid-cols-3 gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px]">
 		<div class="min-w-0">
 			<ModelSelect
 				label="Agent 1 model"

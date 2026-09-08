@@ -823,6 +823,13 @@ export class SettingsManager {
 		this.save();
 	}
 
+	setKlermSharedMemory(sharedMemory: string): KlermProfileState {
+		const next = this.getKlermProfiles();
+		next.sharedMemory = sharedMemory.slice(0, 8000);
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
 	upsertKlermProfile(profile: KlermProfile): KlermProfileState {
 		const next = this.getKlermProfiles();
 		const normalized = normalizeProfile(profile);

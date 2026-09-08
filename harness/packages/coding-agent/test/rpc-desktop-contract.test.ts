@@ -93,6 +93,8 @@ describe("Klerm desktop RPC contract", () => {
 			frontierModel: undefined,
 			localRole: "builder",
 			frontierRole: "builder",
+			localApprovalMode: "risky",
+			frontierApprovalMode: "risky",
 			allowFrontierFallback: false,
 			handbackEnabled: true,
 			maxDelegationCycles: 3,
@@ -127,6 +129,13 @@ describe("Klerm desktop RPC contract", () => {
 				if (lane === "local") config.localRole = role;
 				else config.frontierRole = role;
 			}),
+			setBuilderApprovalMode: vi.fn(async (lane: "local" | "frontier", mode: "always" | "risky" | "never") => {
+				if (lane === "local") config.localApprovalMode = mode;
+				else config.frontierApprovalMode = mode;
+			}),
+			setMaxDelegationCycles: vi.fn(async (cycles: number) => {
+				config.maxDelegationCycles = cycles;
+			}),
 			filterToolsForActiveRole: vi.fn(<T>(tools: T[]) => tools),
 			getSystemPromptContribution: vi.fn(() => undefined),
 		} as unknown as KlermRoutingController;
@@ -145,9 +154,10 @@ describe("Klerm desktop RPC contract", () => {
 				level,
 				levels: lane === "local" ? ["off", "low"] : ["low", "high"],
 			}));
+		const runtimeHost = createRuntimeHost(harness);
 
 		try {
-			void runRpcMode(createRuntimeHost(harness), {
+			void runRpcMode(runtimeHost, {
 				discoverLocalRuntimes: async () => [
 					{
 						providerId: "ollama",
@@ -323,6 +333,30 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(harness.settingsManager.getMcpServersForScope("global").docs).toMatchObject({ color: "base" });
 
+			const configuredMcpEnv = await send({
+				id: "mcp-edit-env",
+				type: "add_mcp_server",
+				server: {
+					name: "filesystem",
+					transport: "stdio",
+					command: "node",
+					args: ["server.js"],
+					env: { NOTION_TOKEN: "secret-token" },
+					enabled: false,
+					label: "Notion",
+				},
+			});
+			expect(configuredMcpEnv).toMatchObject({
+				success: true,
+				data: {
+					status: { servers: expect.arrayContaining([expect.objectContaining({ envKeys: ["NOTION_TOKEN"] })]) },
+				},
+			});
+			expect(harness.settingsManager.getMcpServersForScope("global").filesystem?.env).toEqual({
+				NOTION_TOKEN: "secret-token",
+			});
+			expect(JSON.stringify(parseOutputLines())).not.toContain("secret-token");
+
 			const postgresUri = "postgresql://user:secret-pass@example.com:6543/postgres";
 			const addedPostgresMcp = await send({
 				id: "mcp-add-postgres",
@@ -478,12 +512,52 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(controller.setWorkerRole).toHaveBeenCalledWith("local", "planner");
 
+			const approvalUpdate = await send({
+				id: "approval",
+				type: "set_klerm_config",
+				update: { localApprovalMode: "always", frontierApprovalMode: "never" },
+			});
+			expect(approvalUpdate).toMatchObject({
+				success: true,
+				data: { config: { localApprovalMode: "always", frontierApprovalMode: "never" } },
+			});
+			expect(controller.setBuilderApprovalMode).toHaveBeenCalledWith("local", "always");
+			expect(controller.setBuilderApprovalMode).toHaveBeenCalledWith("frontier", "never");
+
+			const cycleUpdate = await send({
+				id: "cycles",
+				type: "set_klerm_config",
+				update: { maxDelegationCycles: 100 },
+			});
+			expect(cycleUpdate).toMatchObject({ success: true, data: { config: { maxDelegationCycles: 100 } } });
+			expect(controller.setMaxDelegationCycles).toHaveBeenCalledWith(100);
+
+			const unlimitedCycles = await send({
+				id: "cycles-unlimited",
+				type: "set_klerm_config",
+				update: { maxDelegationCycles: 0 },
+			});
+			expect(unlimitedCycles).toMatchObject({ success: true, data: { config: { maxDelegationCycles: 0 } } });
+
+			const invalidCycles = await send({
+				id: "cycles-invalid",
+				type: "set_klerm_config",
+				update: { maxDelegationCycles: 101 },
+			});
+			expect(invalidCycles).toMatchObject({ success: false, code: "INVALID_CONFIG" });
+
 			const invalidRole = await send({
 				id: "invalid-role",
 				type: "set_klerm_config",
 				update: { localRole: "writer" },
 			});
 			expect(invalidRole).toMatchObject({ success: false, code: "INVALID_CONFIG" });
+			const invalidApproval = await send({
+				id: "invalid-approval",
+				type: "set_klerm_config",
+				update: { localApprovalMode: "sometimes" },
+			});
+			expect(invalidApproval).toMatchObject({ success: false, code: "INVALID_CONFIG" });
 
 			const frontierRouting = await send({
 				id: "frontier-routing",
@@ -530,6 +604,22 @@ describe("Klerm desktop RPC contract", () => {
 				},
 			});
 			expect(JSON.stringify(sessions)).not.toContain("allMessagesText");
+
+			const switched = await send({
+				id: "switch-session",
+				type: "switch_session",
+				sessionPath: "/private/session.jsonl",
+			});
+			expect(switched).toMatchObject({ success: true });
+			expect(runtimeHost.switchSession).toHaveBeenCalledOnce();
+			expect(runtimeHost.switchSession).toHaveBeenCalledWith("/private/session.jsonl");
+
+			const invalidSwitch = await send({
+				id: "invalid-switch-session",
+				type: "switch_session",
+				sessionPath: "/private/not-listed.jsonl",
+			});
+			expect(invalidSwitch).toMatchObject({ success: false, code: "SESSION_NOT_FOUND" });
 
 			const renamed = await send({
 				id: "rename-session",

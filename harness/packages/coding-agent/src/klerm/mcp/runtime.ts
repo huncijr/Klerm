@@ -16,6 +16,8 @@ import { redactMcpSecretText, redactMcpSecretValue } from "./redact.ts";
 import { normalizeStdioArgs } from "./stdio-args.ts";
 
 export type McpServerState = "disabled" | "connecting" | "connected" | "failed" | "closed";
+export type McpErrorKind = "authentication" | "configuration" | "connection";
+export type McpToolCapability = "read" | "write" | "unknown";
 
 export interface McpServerStatus {
 	name: string;
@@ -23,9 +25,16 @@ export interface McpServerStatus {
 	enabled: boolean;
 	state: McpServerState;
 	tools: string[];
-	toolDetails: Array<{ name: string; remoteName: string; title?: string; description?: string }>;
+	toolDetails: Array<{
+		name: string;
+		remoteName: string;
+		title?: string;
+		description?: string;
+		capability: McpToolCapability;
+	}>;
 	skippedTools: string[];
 	error?: string;
+	errorKind?: McpErrorKind;
 }
 
 export interface McpToolUseEvent {
@@ -56,6 +65,23 @@ const STDIO_EXTRA_ENV_KEYS = [
 	"NPM_CONFIG_CACHE",
 	"NPM_CONFIG_PREFIX",
 ] as const;
+
+export function classifyMcpError(value: unknown): McpErrorKind {
+	const message = redactMcpSecretValue(value);
+	if (
+		/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|credentials?|access token|invalid token|expired token)\b/i.test(
+			message,
+		)
+	) {
+		return "authentication";
+	}
+	if (
+		/\b(?:must|cannot|unknown server setting|required|valid (?:http|https|url)|unsupported protocol)\b/i.test(message)
+	) {
+		return "configuration";
+	}
+	return "connection";
+}
 
 function getTransport(settings: McpServerSettings): "stdio" | "http" | "sse" {
 	return settings.transport ?? "stdio";
@@ -313,7 +339,8 @@ export class McpRuntime {
 				tools: status?.tools ?? [],
 				toolDetails: status?.toolDetails ?? [],
 				skippedTools: status?.skippedTools ?? [],
-				error: "server transport disconnected",
+				error: status?.errorKind === "authentication" ? status.error : "server transport disconnected",
+				errorKind: status?.errorKind === "authentication" ? "authentication" : "connection",
 			});
 		};
 		const readStderr = transport instanceof StdioClientTransport ? collectStdioStderr(transport) : () => "";
@@ -365,6 +392,7 @@ export class McpRuntime {
 					toolDetails: [],
 					skippedTools: [],
 					error: redactMcpSecretValue(result.reason),
+					errorKind: classifyMcpError(result.reason),
 				});
 				continue;
 			}
@@ -385,11 +413,18 @@ export class McpRuntime {
 					continue;
 				}
 				toolNames.add(toolName);
+				const capability: McpToolCapability =
+					remoteTool.annotations?.readOnlyHint === true
+						? "read"
+						: remoteTool.annotations?.readOnlyHint === false
+							? "write"
+							: "unknown";
 				const definition: ToolDefinition = {
 					name: toolName,
 					label: remoteTool.title ?? remoteTool.name,
 					description: remoteTool.description ?? `MCP tool ${remoteTool.name} from ${name}`,
 					parameters: remoteTool.inputSchema as TSchema,
+					klermCapability: capability,
 					execute: async (_toolCallId, params, signal) => {
 						const argumentsValue =
 							typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
@@ -402,6 +437,20 @@ export class McpRuntime {
 							);
 							return formatMcpResult(callResult);
 						} catch (error) {
+							const status = this.statuses.get(name);
+							this.statuses.set(name, {
+								...(status ?? {
+									name,
+									transport: getTransport(settings),
+									enabled: true,
+									state: "failed",
+									tools: [],
+									toolDetails: [],
+									skippedTools: [],
+								}),
+								error: redactMcpSecretValue(error),
+								errorKind: classifyMcpError(error),
+							});
 							throw new Error(redactMcpSecretValue(error));
 						}
 					},
@@ -413,6 +462,7 @@ export class McpRuntime {
 					remoteName: remoteTool.name,
 					title: remoteTool.title,
 					description: remoteTool.description,
+					capability,
 				});
 			}
 			const settings = enabledServers[index]?.[1];
@@ -443,7 +493,12 @@ export class McpRuntime {
 				const lines = [`${status.name}: ${status.state}`];
 				if (status.tools.length > 0) lines.push(`Tools: ${status.tools.join(", ")}`);
 				if (status.skippedTools.length > 0) lines.push(`Skipped: ${status.skippedTools.join(", ")}`);
-				if (status.error) lines.push(`Error: ${status.error}`);
+				if (status.error) lines.push(`Error (${status.errorKind ?? "connection"}): ${status.error}`);
+				if (status.errorKind === "authentication") {
+					lines.push(
+						"Action: ask the user to replace this server's credential; never infer or expose the secret.",
+					);
+				}
 				return lines;
 			})
 			.join("\n");

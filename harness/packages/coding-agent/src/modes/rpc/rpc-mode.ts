@@ -50,6 +50,7 @@ import {
 	disconnectProviderAccount,
 	getProviderAccountStatus,
 } from "../../klerm/provider-accounts.ts";
+import { createSessionTitle } from "../../klerm/session-title.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -287,6 +288,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				remoteName: "remoteName" in tool && typeof tool.remoteName === "string" ? tool.remoteName : tool.name,
 				title: "title" in tool && typeof tool.title === "string" ? tool.title : undefined,
 				description: "description" in tool && typeof tool.description === "string" ? tool.description : undefined,
+				capability:
+					"capability" in tool &&
+					(tool.capability === "read" || tool.capability === "write" || tool.capability === "unknown")
+						? tool.capability
+						: "unknown",
 			}));
 			return {
 				name,
@@ -296,8 +302,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				tools: toolDetails,
 				skippedTools: status?.skippedTools ?? [],
 				error: sanitizeMcpError(status?.error),
+				errorKind: status?.errorKind,
 				...(settings.label ? { label: settings.label } : {}),
 				...(settings.color ? { color: settings.color } : {}),
+				...(typeof settings.command === "string" ? { command: settings.command } : {}),
+				...(settings.args ? { args: settings.args.map((argument) => redactMcpSecretText(argument)) } : {}),
+				...(typeof settings.url === "string" ? { url: settings.url } : {}),
+				...(settings.env ? { envKeys: Object.keys(settings.env).sort() } : {}),
 			};
 		});
 		const runtimeNames = [...runtimeStatuses.keys()].sort();
@@ -776,13 +787,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 							key !== "localModel" &&
 							key !== "frontierModel" &&
 							key !== "localRole" &&
-							key !== "frontierRole",
+							key !== "frontierRole" &&
+							key !== "localApprovalMode" &&
+							key !== "frontierApprovalMode" &&
+							key !== "maxDelegationCycles",
 					)
 				) {
 					return error(
 						id,
 						"set_klerm_config",
-						"Only routing, activeStartLane, localModel, frontierModel, localRole, and frontierRole can be updated.",
+						"Only routing, activeStartLane, localModel, frontierModel, localRole, frontierRole, localApprovalMode, frontierApprovalMode, and maxDelegationCycles can be updated.",
 						"INVALID_CONFIG",
 					);
 				}
@@ -793,6 +807,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					frontierModel?: unknown;
 					localRole?: unknown;
 					frontierRole?: unknown;
+					localApprovalMode?: unknown;
+					frontierApprovalMode?: unknown;
+					maxDelegationCycles?: unknown;
 				};
 				if (
 					typedUpdate.routing !== undefined &&
@@ -821,6 +838,32 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						typedUpdate.frontierRole !== "builder")
 				) {
 					return error(id, "set_klerm_config", "Invalid worker role.", "INVALID_CONFIG");
+				}
+				if (
+					(typedUpdate.localApprovalMode !== undefined &&
+						typedUpdate.localApprovalMode !== "always" &&
+						typedUpdate.localApprovalMode !== "risky" &&
+						typedUpdate.localApprovalMode !== "never") ||
+					(typedUpdate.frontierApprovalMode !== undefined &&
+						typedUpdate.frontierApprovalMode !== "always" &&
+						typedUpdate.frontierApprovalMode !== "risky" &&
+						typedUpdate.frontierApprovalMode !== "never")
+				) {
+					return error(id, "set_klerm_config", "Invalid builder approval mode.", "INVALID_CONFIG");
+				}
+				const maxDelegationCycles = typedUpdate.maxDelegationCycles;
+				if (
+					maxDelegationCycles !== undefined &&
+					(typeof maxDelegationCycles !== "number" ||
+						!Number.isSafeInteger(maxDelegationCycles) ||
+						(maxDelegationCycles !== 0 && (maxDelegationCycles < 3 || maxDelegationCycles > 100)))
+				) {
+					return error(
+						id,
+						"set_klerm_config",
+						"Delegation cycles must be 3 through 100; use 0 for unlimited.",
+						"INVALID_CONFIG",
+					);
 				}
 				if (
 					"localModel" in typedUpdate &&
@@ -857,6 +900,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					if (typedUpdate.frontierRole === "planner" || typedUpdate.frontierRole === "builder") {
 						await controller.setWorkerRole("frontier", typedUpdate.frontierRole);
 					}
+					if (
+						typedUpdate.localApprovalMode === "always" ||
+						typedUpdate.localApprovalMode === "risky" ||
+						typedUpdate.localApprovalMode === "never"
+					) {
+						await controller.setBuilderApprovalMode("local", typedUpdate.localApprovalMode);
+					}
+					if (
+						typedUpdate.frontierApprovalMode === "always" ||
+						typedUpdate.frontierApprovalMode === "risky" ||
+						typedUpdate.frontierApprovalMode === "never"
+					) {
+						await controller.setBuilderApprovalMode("frontier", typedUpdate.frontierApprovalMode);
+					}
+					if (typeof typedUpdate.maxDelegationCycles === "number") {
+						await controller.setMaxDelegationCycles(typedUpdate.maxDelegationCycles);
+					}
 				} catch (configError) {
 					return error(
 						id,
@@ -876,7 +936,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				const desktopSessions: RpcDesktopSessionInfo[] = sessions.map((storedSession) => ({
 					id: storedSession.id,
 					sessionToken: storedSession.path,
-					name: storedSession.name,
+					name: storedSession.name ?? createSessionTitle(storedSession.firstMessage),
 					cwd: storedSession.cwd,
 					created: storedSession.created.toISOString(),
 					modified: storedSession.modified.toISOString(),
@@ -1104,22 +1164,45 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					) {
 						return error(id, "add_mcp_server", "MCP stdio args must be strings.", "INVALID_MCP_SERVER");
 					}
+					if (
+						update.env !== undefined &&
+						(update.env === null ||
+							typeof update.env !== "object" ||
+							Array.isArray(update.env) ||
+							Object.entries(update.env).some(
+								([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string",
+							))
+					) {
+						return error(
+							id,
+							"add_mcp_server",
+							"MCP environment names and values must be strings.",
+							"INVALID_MCP_SERVER",
+						);
+					}
 					server = {
 						transport: "stdio",
 						command: commandValue,
 						args: normalizeStdioArgs(update.args ?? []),
-						...(existing?.transport !== "http" && existing?.transport !== "sse" && existing?.env
-							? { env: existing.env }
-							: {}),
+						...(update.env !== undefined
+							? {
+									env: {
+										...(existing?.transport !== "http" && existing?.transport !== "sse" ? existing.env : {}),
+										...Object.fromEntries(Object.entries(update.env).filter(([, value]) => value.length > 0)),
+									},
+								}
+							: existing?.transport !== "http" && existing?.transport !== "sse" && existing?.env
+								? { env: existing.env }
+								: {}),
 						enabled,
 						...appearance,
 					};
 				} else {
-					if (update.command !== undefined || update.args !== undefined) {
+					if (update.command !== undefined || update.args !== undefined || update.env !== undefined) {
 						return error(
 							id,
 							"add_mcp_server",
-							"HTTP and SSE MCP servers cannot set command or args.",
+							"HTTP and SSE MCP servers cannot set command, args, or environment.",
 							"INVALID_MCP_SERVER",
 						);
 					}
@@ -1545,9 +1628,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			case "new_session": {
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "new_session", result);
 			}
 
@@ -1710,18 +1790,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "switch_session": {
-				const result = await runtimeHost.switchSession(command.sessionPath);
-				if (!result.cancelled) {
-					await rebindSession();
+				if (typeof command.sessionPath !== "string" || command.sessionPath.trim().length === 0) {
+					return error(id, "switch_session", "A valid session token is required.", "INVALID_SESSION");
 				}
+				const sessions = await (options.listSessions?.() ?? SessionManager.listAll());
+				const requestedPath = canonicalizePath(resolve(command.sessionPath));
+				const storedSession = sessions.find(
+					(candidate) => canonicalizePath(resolve(candidate.path)) === requestedPath,
+				);
+				if (!storedSession) {
+					return error(id, "switch_session", "Session not found.", "SESSION_NOT_FOUND");
+				}
+				const result = await runtimeHost.switchSession(storedSession.path);
 				return success(id, "switch_session", result);
 			}
 
 			case "fork": {
 				const result = await runtimeHost.fork(command.entryId);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
 			}
 
@@ -1731,9 +1816,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(id, "clone", "Cannot clone session: no current entry selected");
 				}
 				const result = await runtimeHost.fork(leafId, { position: "at" });
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "clone", { cancelled: result.cancelled });
 			}
 

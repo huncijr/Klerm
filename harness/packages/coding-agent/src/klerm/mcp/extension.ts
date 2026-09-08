@@ -31,7 +31,39 @@ export function resolveMcpPromptMentions(
 	mentions: readonly McpPromptMention[],
 	availableToolNames: ReadonlySet<string>,
 ): string | undefined {
-	if (mentions.length === 0) return undefined;
+	const selected = resolveMcpPromptSelection(settingsManager, mentions, availableToolNames);
+	if (selected.length === 0) return undefined;
+	return [
+		"<klerm_mcp_selection>",
+		"The user explicitly selected the MCP servers below. You MUST call at least one listed MCP tool from each selected server before answering the user.",
+		"Do not answer from memory, do not claim the MCP is unavailable, and do not substitute workspace or shell tools for the selected MCP.",
+		...selected.map(
+			(selection) => `- ${selection.label} (server id: ${selection.serverName}): ${selection.tools.join(", ")}`,
+		),
+		"After the required MCP calls complete, answer from their actual results and report any tool error accurately.",
+		"</klerm_mcp_selection>",
+	].join("\n");
+}
+
+export interface McpPromptSelection {
+	serverName: string;
+	label: string;
+	tools: string[];
+}
+
+export function findMissingMcpSelections(
+	selections: readonly Pick<McpPromptSelection, "serverName" | "tools">[],
+	calledToolNames: ReadonlySet<string>,
+): Array<Pick<McpPromptSelection, "serverName" | "tools">> {
+	return selections.filter((selection) => !selection.tools.some((tool) => calledToolNames.has(tool)));
+}
+
+export function resolveMcpPromptSelection(
+	settingsManager: SettingsManager,
+	mentions: readonly McpPromptMention[],
+	availableToolNames: ReadonlySet<string>,
+): McpPromptSelection[] {
+	if (mentions.length === 0) return [];
 	const statuses = getMcpRuntimeStatus(settingsManager);
 	if (!statuses) throw new Error("MCP runtime is not ready. Reload MCP servers and retry the prompt.");
 	const settings = settingsManager.getMcpServers();
@@ -43,8 +75,14 @@ export function resolveMcpPromptMentions(
 			throw new Error(`Mentioned MCP server "${mention.serverName}" is not configured.`);
 		}
 		if (status.state !== "connected") {
+			const guidance =
+				status.errorKind === "authentication"
+					? " Its authentication failed. Ask the user to replace the credential, then reload; do not infer or expose the secret."
+					: status.error
+						? ` ${status.error}`
+						: "";
 			throw new Error(
-				`Mentioned MCP server "${mention.serverName}" is ${status.state}. Reload or fix this MCP server before retrying.`,
+				`Mentioned MCP server "${mention.serverName}" is ${status.state}.${guidance} Reload or fix this MCP server before retrying.`,
 			);
 		}
 		const serverTools = mention.toolName
@@ -67,17 +105,7 @@ export function resolveMcpPromptMentions(
 		});
 	}
 
-	return [
-		"<klerm_mcp_selection>",
-		"The user explicitly selected the MCP servers below. You MUST call at least one listed MCP tool from each selected server before answering the user.",
-		"Do not answer from memory, do not claim the MCP is unavailable, and do not substitute workspace or shell tools for the selected MCP.",
-		...Array.from(
-			selected,
-			([serverName, selection]) => `- ${selection.label} (server id: ${serverName}): ${selection.tools.join(", ")}`,
-		),
-		"After the required MCP calls complete, answer from their actual results and report any tool error accurately.",
-		"</klerm_mcp_selection>",
-	].join("\n");
+	return Array.from(selected, ([serverName, selection]) => ({ serverName, ...selection }));
 }
 
 function formatMcpInventory(settingsManager: SettingsManager): string | undefined {
@@ -92,9 +120,11 @@ function formatMcpInventory(settingsManager: SettingsManager): string | undefine
 			const status = statuses.get(name);
 			const label = settings[name]?.label?.trim() || name;
 			const tools = status?.tools.length ? status.tools.join(", ") : "none";
-			return `- ${label} (server id: ${name}): ${status?.state ?? "closed"}; tools: ${tools}`;
+			const issue = status?.errorKind ? `; issue: ${status.errorKind}` : "";
+			return `- ${label} (server id: ${name}): ${status?.state ?? "closed"}; tools: ${tools}${issue}`;
 		}),
 		"Use the exact exposed tool names above. Builder agents may use configure_mcp_server when the user explicitly asks to create or update an MCP server.",
+		"If a server has an authentication issue, ask the user to replace its credential. Never guess, request in chat, print, or expose credential values.",
 		"</klerm_mcp_inventory>",
 	].join("\n");
 }
@@ -625,6 +655,7 @@ export function createMcpExtension(settingsManager: SettingsManager, cwd: string
 				"Never request or place API keys, tokens, passwords, environment values, or HTTP headers in configure_mcp_server arguments.",
 				"After configuration, the desktop reloads MCP tools when the task settles. In CLI mode, tell the user to run /reload. If credentials are needed, direct the user to MCP settings or /mcpset.",
 			],
+			klermCapability: "write",
 			parameters: configureMcpServerSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {

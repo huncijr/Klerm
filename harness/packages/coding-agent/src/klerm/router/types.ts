@@ -3,6 +3,7 @@ import type { KlermActiveStartLane } from "../config.ts";
 export type KlermRouteMode = "mock";
 export type KlermRoute = "SELF" | "LOCAL" | "FRONTIER";
 export type KlermPromptRoutingOverride = "local" | "frontier";
+export type KlermTaskIntent = "answer" | "review" | "workspace-change";
 export type KlermDecisionSource = "local-model" | "deterministic-fallback" | "deterministic-policy";
 export type KlermCostSource = "model-catalog" | "unavailable";
 export type KlermWorkerLane = "local" | "frontier";
@@ -93,6 +94,7 @@ export interface KlermRouteDecision {
 	policyTriggers?: string[];
 	decisionSource?: KlermDecisionSource;
 	delegationRecommended?: boolean;
+	taskIntent?: KlermTaskIntent;
 	fallbackReason?: string;
 	completionOwner?: KlermCompletionOwner;
 	handbackEnabled?: boolean;
@@ -154,4 +156,5 @@ export interface KlermRoutingState {
 	transitionSequence?: number;
 	lastTransition?: KlermTransitionState;
 	explicitFrontierRequestSatisfied?: boolean;
+	taskIntent?: KlermTaskIntent;
 }

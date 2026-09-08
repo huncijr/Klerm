@@ -23,6 +23,7 @@ export interface KlermProfile {
 export interface KlermProfileState {
 	localProfileId?: string;
 	frontierProfileId?: string;
+	sharedMemory: string;
 	profiles: KlermProfile[];
 }
 
@@ -50,10 +51,9 @@ const SCOUT_WORK_PLAN = [
 ].join("\n");
 
 const SCOUT_PLAN_MODE = [
-	"Structure-only: list file and directory names, reason from that inventory, and",
-	"produce a high-level plan or a precise delegation handoff. Do not read or",
-	"search file contents, do not modify files, do not run shell commands. Explain",
-	"the plan calmly in a few short sentences.",
+	"Read-only: inspect relevant files, search results, directory structure, safe",
+	"command output, read-only MCP data, and shared memory. Produce a high-level plan",
+	"or a precise delegation handoff. Do not modify files or external state.",
 ].join("\n");
 
 const SCOUT_BUILD_MODE = [
@@ -79,8 +79,9 @@ const SAGE_WORK_PLAN = [
 ].join("\n");
 
 const SAGE_PLAN_MODE = [
-	"Structure-only: inventory names, high-level direction, delegate or return when",
-	"appropriate. No file contents, no modifications, no shell. Terse output.",
+	"Read-only: inspect files, searches, safe command output, read-only MCP data, and",
+	"shared memory. Give high-level direction, delegate, or return when appropriate.",
+	"No modifications. Terse output.",
 ].join("\n");
 
 const SAGE_BUILD_MODE = [
@@ -172,7 +173,7 @@ export function normalizeProfile(value: unknown): KlermProfile | undefined {
 
 export function normalizeProfileState(value: unknown): KlermProfileState {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		return { profiles: DEFAULT_KLERM_PROFILES.map((profile) => ({ ...profile })) };
+		return { sharedMemory: "", profiles: DEFAULT_KLERM_PROFILES.map((profile) => ({ ...profile })) };
 	}
 	const record = value as Record<string, unknown>;
 	const profiles = Array.isArray(record.profiles)
@@ -186,7 +187,7 @@ export function normalizeProfileState(value: unknown): KlermProfileState {
 		typeof record.frontierProfileId === "string" && ids.has(record.frontierProfileId)
 			? record.frontierProfileId
 			: undefined;
-	return { localProfileId, frontierProfileId, profiles: resolved };
+	return { localProfileId, frontierProfileId, sharedMemory: textField(record.sharedMemory), profiles: resolved };
 }
 
 export function assignedProfile(state: KlermProfileState, lane: "local" | "frontier"): KlermProfile | undefined {

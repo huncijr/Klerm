@@ -378,7 +378,9 @@
 		const meta: string[] = [];
 		if (transition.trigger) meta.push(`trigger: ${transition.trigger}`);
 		if (delegate && typeof transition.cycle === "number") {
-			meta.push(`cycle ${transition.cycle}${typeof transition.maxCycles === "number" ? `/${transition.maxCycles}` : ""}`);
+			meta.push(
+				`cycle ${transition.cycle}${typeof transition.maxCycles === "number" ? `/${transition.maxCycles === 0 ? "unlimited" : transition.maxCycles}` : ""}`,
+			);
 		}
 		const detail = [transition.reason, ...meta].filter((line) => line).join("\n");
 		const failed = transition.trigger === "provider-failure";
@@ -1192,9 +1194,9 @@
 			clearFeed();
 			renderSessionEntries(entries.entries ?? [], entries.leafId);
 			await refreshThinkingLevels();
-			sessionTitle = session.name ?? session.firstMessage;
-			sessionCwd = session.cwd;
-			resetTerminal(session.cwd);
+			sessionTitle = state.sessionName ?? session.name ?? session.firstMessage;
+			sessionCwd = state.cwd;
+			resetTerminal(state.cwd);
 			await refreshWorkspace();
 			void refreshSessions();
 			sidebarOpen = false;
@@ -1207,7 +1209,7 @@
 
 	async function deleteConversation(session: DesktopSession): Promise<void> {
 		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
-		const isActive = session.id === lastState?.sessionId;
+		const isActive = session.sessionToken === lastState?.sessionFile;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -1251,7 +1253,7 @@
 	}
 
 	async function renameSession(session: DesktopSession, name: string): Promise<boolean> {
-		if (session.id === lastState?.sessionId) return renameActiveSession(name);
+		if (session.sessionToken === lastState?.sessionFile) return renameActiveSession(name);
 		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return false;
 		sessionTransitionActive = true;
 		clearError();
@@ -1410,6 +1412,9 @@
 		activeStartLane?: KlermConfig["activeStartLane"];
 		localRole?: KlermConfig["localRole"];
 		frontierRole?: KlermConfig["frontierRole"];
+		localApprovalMode?: KlermConfig["localApprovalMode"];
+		frontierApprovalMode?: KlermConfig["frontierApprovalMode"];
+		maxDelegationCycles?: KlermConfig["maxDelegationCycles"];
 	}): void {
 		if (configBusy) return;
 		const operation = (async () => {
@@ -1535,6 +1540,7 @@
 
 	async function sendMessage(text: string): Promise<void> {
 		if (!text || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		bottomPanelOpen = false;
 		clearError();
 		taskActive = true;
 		taskStopping = false;
@@ -1639,7 +1645,7 @@
 	{#if !(settingsOpen && settingsFullscreen)}
 	<Sidebar
 		{sessions}
-		activeSessionId={lastState?.sessionId ?? ""}
+		activeSessionToken={lastState?.sessionFile ?? ""}
 		{mcpStatus}
 		{mcpBusy}
 		open={sidebarOpen}
@@ -1700,6 +1706,7 @@
 			{#if desktopSettings}
 			<SettingsView
 				settings={desktopSettings}
+				klermConfig={currentConfig}
 				{mcpStatus}
 				{mcpBusy}
 				providers={providerAccounts}
@@ -1711,6 +1718,7 @@
 					settingsFullscreen = false;
 				}}
 				onappearance={(value) => void setDesktopAppearance(value)}
+				onmaxdelegationcycles={(value) => applyConfigUpdate({ maxDelegationCycles: value })}
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
 				ondisconnectprovider={disconnectProvider}
@@ -1792,6 +1800,8 @@
 			profileDisabled={!backendReady || interactionActive}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
+			localApprovalMode={currentConfig?.localApprovalMode ?? "risky"}
+			frontierApprovalMode={currentConfig?.frontierApprovalMode ?? "risky"}
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			onsend={(text) => void sendMessage(text)}
@@ -1803,6 +1813,8 @@
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
 			onlocalrolechange={(role) => applyConfigUpdate({ localRole: role })}
 			onfrontierrolechange={(role) => applyConfigUpdate({ frontierRole: role })}
+			onlocalapprovalchange={(mode) => applyConfigUpdate({ localApprovalMode: mode })}
+			onfrontierapprovalchange={(mode) => applyConfigUpdate({ frontierApprovalMode: mode })}
 			onlocalprofilechange={(id) => void assignProfile("local", id)}
 			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
 		/>

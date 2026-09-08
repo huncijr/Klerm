@@ -446,6 +446,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 /**
  * Tool definition for registerTool().
  */
+export type ToolCapability = "read" | "write" | "unknown";
+
 export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
 	/** Tool name (used in LLM tool calls) */
 	name: string;
@@ -457,6 +459,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	promptSnippet?: string;
 	/** Optional guideline bullets appended to the default system prompt Guidelines section when this tool is active. */
 	promptGuidelines?: string[];
+	/** Klerm role-policy capability. Unknown tools remain Builder-only. */
+	klermCapability?: ToolCapability;
 	/** Parameter schema (TypeBox) */
 	parameters: TParams;
 	/** Optional provider-side constrained sampling request for this tool. Set false to explicitly disable it, equivalent to leaving it undefined. */

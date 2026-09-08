@@ -2,6 +2,7 @@ export type JsonObject = Record<string, unknown>;
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type WorkerRole = "planner" | "builder";
+export type ApprovalMode = "always" | "risky" | "never";
 export type DesktopAppearance = "dark" | "light" | "system";
 export const KLERM_PROFILE_FACES = ["fox", "owl", "wolf", "cat", "bear", "otter"] as const;
 export type KlermProfileFace = (typeof KLERM_PROFILE_FACES)[number];
@@ -27,6 +28,7 @@ export interface KlermProfile {
 export interface KlermProfileState {
 	localProfileId?: string;
 	frontierProfileId?: string;
+	sharedMemory: string;
 	profiles: KlermProfile[];
 }
 
@@ -96,6 +98,7 @@ export interface ThinkingSetting {
 
 export interface SessionState {
 	sessionId: string;
+	sessionFile?: string;
 	sessionName?: string;
 	cwd: string;
 	isStreaming: boolean;
@@ -161,8 +164,11 @@ export interface KlermConfig {
 	frontierModel?: string;
 	localRole: WorkerRole;
 	frontierRole: WorkerRole;
+	localApprovalMode: ApprovalMode;
+	frontierApprovalMode: ApprovalMode;
 	localThinkingLevel?: ThinkingLevel;
 	frontierThinkingLevel?: ThinkingLevel;
+	maxDelegationCycles: number;
 }
 
 export interface DesktopSession {
@@ -224,6 +230,7 @@ export interface McpToolStatus {
 	remoteName: string;
 	title?: string;
 	description?: string;
+	capability: "read" | "write" | "unknown";
 }
 
 export type McpColor = "base" | "green" | "blue" | "amber" | "red" | "purple" | "teal";
@@ -236,8 +243,13 @@ export interface McpServerStatus {
 	tools: McpToolStatus[];
 	skippedTools: string[];
 	error?: string;
+	errorKind?: "authentication" | "configuration" | "connection";
 	label?: string;
 	color?: McpColor;
+	command?: string;
+	args?: string[];
+	url?: string;
+	envKeys?: string[];
 }
 
 export interface McpStatus {
@@ -252,6 +264,7 @@ export interface McpServerUpdate {
 	scope?: "global" | "project";
 	command?: string;
 	args?: string[];
+	env?: Record<string, string>;
 	url?: string;
 	headers?: Record<string, string>;
 	enabled?: boolean;

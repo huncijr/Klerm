@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import type { AgentMessage, PrepareNextTurnContext, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { defineTool, type ToolDefinition } from "../../core/extensions/types.ts";
+import { defineTool, type ToolCapability, type ToolDefinition } from "../../core/extensions/types.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { agentLaneLabel, routingValueLabel } from "../agent-labels.ts";
 import type {
 	KlermActiveStartLane,
+	KlermBuilderApprovalMode,
 	KlermConfig,
 	KlermConfigStore,
 	KlermRoutingMode,
@@ -16,6 +17,7 @@ import type {
 import { compareStrength, describeModelProfile, formatPeerLookup } from "../model-profile.ts";
 import { formatProfilePrompt, type KlermProfile } from "../profiles.ts";
 import { hasKlermResponseUsage } from "../response-usage.ts";
+import { isSensitiveToolCall } from "../tool-policy.ts";
 import { appendKlermRouteDecision } from "./decision-log.ts";
 import type {
 	KlermCompletionOwner,
@@ -23,13 +25,17 @@ import type {
 	KlermPromptRoutingOverride,
 	KlermRouteDecision,
 	KlermRoutingState,
+	KlermTaskIntent,
 	KlermTransitionState,
 	KlermWorkerLane,
 } from "./types.ts";
 
 const PLANNER_TOOL_NAMES = new Set([
 	"find",
+	"read",
+	"grep",
 	"ls",
+	"bash",
 	"delegate_frontier",
 	"delegate_local",
 	"return_to_local",
@@ -266,22 +272,45 @@ export function projectKlermHandoffContext(
 
 const PLANNER_VISIBLE_TOOL_RESULTS = new Set([
 	"find",
+	"read",
+	"grep",
 	"ls",
+	"bash",
 	"delegate_frontier",
 	"delegate_local",
 	"return_to_local",
 	"return_to_frontier",
 ]);
 
-/** Keep transcript structure valid while hiding file contents and command output from planners. */
-export function projectKlermPlannerContext(messages: AgentMessage[]): AgentMessage[] {
+/** Keep transcript structure valid while hiding results from tools a Planner cannot call. */
+export function projectKlermPlannerContext(
+	messages: AgentMessage[],
+	capabilityForTool?: (toolName: string) => ToolCapability | undefined,
+): AgentMessage[] {
+	const sensitiveToolCallIds = new Set<string>();
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type === "toolCall" && isSensitiveToolCall(part.name, part.arguments)) {
+				sensitiveToolCallIds.add(part.id);
+			}
+		}
+	}
 	let changed = false;
 	const projected = messages.map((message): AgentMessage => {
-		if (message.role !== "toolResult" || PLANNER_VISIBLE_TOOL_RESULTS.has(message.toolName)) return message;
+		const sensitive =
+			message.role === "toolResult" &&
+			(sensitiveToolCallIds.has(message.toolCallId) || isSensitiveToolCall(message.toolName, message.details));
+		if (
+			message.role !== "toolResult" ||
+			(!sensitive &&
+				(PLANNER_VISIBLE_TOOL_RESULTS.has(message.toolName) || capabilityForTool?.(message.toolName) === "read"))
+		)
+			return message;
 		changed = true;
 		return {
 			...message,
-			content: [{ type: "text", text: `[${message.toolName} output omitted in structure-only Planner mode]` }],
+			content: [{ type: "text", text: `[${message.toolName} output omitted in read-only Planner mode]` }],
 			details: undefined,
 		};
 	});
@@ -294,6 +323,34 @@ function explicitlyRequestsFrontier(task: string): boolean {
 	const action =
 		/\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|h[ií]v\w*|hand\s*off)\b|(?:^|\s)(?:add|adjad|adja)\s+(?:át|at)(?:\s|$)/iu;
 	return target.test(task) && action.test(task);
+}
+
+export function classifyKlermTaskIntent(task: string, previousIntent?: KlermTaskIntent): KlermTaskIntent {
+	const normalized = task.trim();
+	if (/^(?:continue|proceed|go on|folytasd|mehet tovább|mehet tovabb)[.!\s]*$/iu.test(normalized)) {
+		return previousIntent ?? "answer";
+	}
+	if (
+		/\b(?:do not|don't|without)\s+(?:implementing|editing|changing|modifying|writing)\b|\b(?:plan|proposal|guide|example|snippet)s?\s+only\b|\bcsak\s+(?:terv|javaslat|példa|pelda)\b|\bne\s+(?:implementáld|implementald|módosítsd|modositsd)\b/iu.test(
+			normalized,
+		) ||
+		/^(?:how|what|why|when|where|which|hogyan|miért|miert|mit|mikor|hol|melyik)\b/iu.test(normalized) ||
+		/^(?:plan|design|explain|describe|review|audit|analy[sz]e|inspect|tervezd|magyarázd|magyarazd|elemezd|vizsgáld|vizsgald)\b/iu.test(
+			normalized,
+		)
+	) {
+		return /\b(?:review|audit|analy[sz]e|inspect|elemezd|vizsgáld|vizsgald)\b/iu.test(normalized)
+			? "review"
+			: "answer";
+	}
+	if (
+		/\b(?:implement|fix|add|remove|create|update|change|modify|refactor|write|edit|install|configure|migrate|rename|delete|scaffold|set up|make)\b|\b(?:implementáld|implementald|javítsd|javitsd|add hozzá|add hozza|távolítsd|tavolitsd|hozz létre|hozz letre|frissítsd|frissitsd|módosítsd|modositsd|írd meg|ird meg|szerkeszd|telepítsd|telepitsd|konfiguráld|konfigurald|migráld|migrad|nevezd át|nevezd at|töröld|torold|csináld meg|csinald meg)\b/iu.test(
+			normalized,
+		)
+	) {
+		return "workspace-change";
+	}
+	return "answer";
 }
 
 function assessDelegationRecommendation(
@@ -388,6 +445,7 @@ export class KlermRoutingController {
 	private explicitFrontierRequest = false;
 	private readonly getSessionId?: () => string | undefined;
 	private readonly profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined;
+	private readonly sharedMemory?: () => string;
 
 	constructor(
 		cwd: string,
@@ -395,12 +453,14 @@ export class KlermRoutingController {
 		configStore: KlermConfigStore,
 		getSessionId?: () => string | undefined,
 		profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined,
+		sharedMemory?: () => string,
 	) {
 		this.cwd = cwd;
 		this.modelRuntime = modelRuntime;
 		this.configStore = configStore;
 		this.getSessionId = getSessionId;
 		this.profileForLane = profileForLane;
+		this.sharedMemory = sharedMemory;
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
@@ -431,9 +491,21 @@ export class KlermRoutingController {
 		return "builder";
 	}
 
-	filterToolsForActiveRole<T extends { name: string }>(tools: T[]): T[] {
+	get activeBuilderApprovalMode(): KlermBuilderApprovalMode {
+		return this.state.lane === "frontier" ? this.config.frontierApprovalMode : this.config.localApprovalMode;
+	}
+
+	filterToolsForActiveRole<T extends { name: string }>(
+		tools: T[],
+		capabilityForTool?: (toolName: string) => ToolCapability | undefined,
+	): T[] {
 		if (this.activeWorkerRole === "builder") return tools.slice();
-		return tools.filter((tool) => PLANNER_TOOL_NAMES.has(tool.name));
+		return tools.filter((tool) => PLANNER_TOOL_NAMES.has(tool.name) || capabilityForTool?.(tool.name) === "read");
+	}
+
+	isToolAllowedForActiveRole(toolName: string, capability?: ToolCapability): boolean {
+		if (this.activeWorkerRole === "builder") return true;
+		return PLANNER_TOOL_NAMES.has(toolName) || capability === "read";
 	}
 
 	private handbackRequired(toLane: KlermWorkerLane): boolean {
@@ -485,7 +557,11 @@ export class KlermRoutingController {
 		);
 		const profile = this.profileForLane?.(lane);
 		const role = lane === "local" ? this.config.localRole : this.config.frontierRole;
-		return profile ? `${identity}\n\n${formatProfilePrompt(agent, profile, role)}` : identity;
+		const identityWithProfile = profile ? `${identity}\n\n${formatProfilePrompt(agent, profile, role)}` : identity;
+		const memory = this.sharedMemory?.().trim();
+		return memory
+			? `${identityWithProfile}\n\n<klerm_shared_memory>\nShared durable workspace facts for Agent 1 and Agent 2:\n${memory}\n</klerm_shared_memory>`
+			: identityWithProfile;
 	}
 
 	getSystemPromptContribution(): string | undefined {
@@ -514,12 +590,19 @@ export class KlermRoutingController {
 				`Configured Agent 2 model: ${frontierModel}`,
 				...(role === "planner"
 					? [
-							"Planner mode is structure-only: list file and directory names, reason from that inventory, and produce a high-level plan or delegate when appropriate.",
-							"Do not read or search file contents. Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+							"Planner mode is read-only: inspect files with read/search/list tools, use only non-mutating shell commands and read-only MCP tools, then produce a plan or delegate when appropriate.",
+							"Do not create, edit, delete, rename, or otherwise modify files, external systems, MCP configuration, profiles, or shared memory.",
 						]
 					: [
-							"Builder mode may inspect and modify the workspace to complete the task. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
+							"Builder mode must inspect and modify the workspace when the task intent is workspace-change. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
 						]),
+				`Task intent: ${this.state.taskIntent ?? "answer"}`,
+				...(role === "builder" && this.state.taskIntent === "workspace-change"
+					? [
+							"Execution contract: use tools to implement the requested change. Do not stop after a plan or code snippet.",
+							"After modifying the workspace, run a relevant verification tool. If implementation is blocked, state the concrete blocker instead of claiming completion.",
+						]
+					: []),
 				`Agent 2 delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
 				...(this.state.mode === "auto" && !returnedFromFrontier && !mustReturn
 					? role === "planner"
@@ -584,12 +667,19 @@ export class KlermRoutingController {
 				`Current Agent 2 role: ${role}`,
 				...(role === "planner"
 					? [
-							"Planner mode is structure-only: list file and directory names, reason from that inventory, and produce a high-level plan or delegate when appropriate.",
-							"Do not read or search file contents. Do not create, edit, delete, rename, or otherwise modify files, and do not run shell commands.",
+							"Planner mode is read-only: inspect files with read/search/list tools, use only non-mutating shell commands and read-only MCP tools, then produce a plan or delegate when appropriate.",
+							"Do not create, edit, delete, rename, or otherwise modify files, external systems, MCP configuration, profiles, or shared memory.",
 						]
 					: [
-							"Builder mode may inspect and modify the workspace to complete the task. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
+							"Builder mode must inspect and modify the workspace when the task intent is workspace-change. Klerm will request user approval before sensitive, broad, external, or potentially destructive actions.",
 						]),
+				`Task intent: ${this.state.taskIntent ?? "answer"}`,
+				...(role === "builder" && this.state.taskIntent === "workspace-change"
+					? [
+							"Execution contract: use tools to implement the requested change. Do not stop after a plan or code snippet.",
+							"After modifying the workspace, run a relevant verification tool. If implementation is blocked, state the concrete blocker instead of claiming completion.",
+						]
+					: []),
 				"Treat [Cross-model handoff] sections as instructions and context supplied by Agent 1.",
 				`When the user asks which model you are, identify the current Agent 2 model exactly as ${frontierModel}.`,
 				canDelegateLocal
@@ -646,6 +736,10 @@ export class KlermRoutingController {
 		await this.configStore.update(lane === "local" ? { localRole: role } : { frontierRole: role });
 	}
 
+	async setBuilderApprovalMode(lane: KlermWorkerLane, mode: KlermBuilderApprovalMode): Promise<void> {
+		await this.configStore.update(lane === "local" ? { localApprovalMode: mode } : { frontierApprovalMode: mode });
+	}
+
 	async setAllowFrontierFallback(enabled: boolean): Promise<void> {
 		await this.configStore.update({ allowFrontierFallback: enabled });
 	}
@@ -657,8 +751,11 @@ export class KlermRoutingController {
 	}
 
 	async setMaxDelegationCycles(maxDelegationCycles: number): Promise<void> {
-		if (!Number.isSafeInteger(maxDelegationCycles) || maxDelegationCycles < 0) {
-			throw new Error("Delegation cycles must be a non-negative safe integer; use 0 for unlimited.");
+		if (
+			!Number.isSafeInteger(maxDelegationCycles) ||
+			(maxDelegationCycles !== 0 && (maxDelegationCycles < 3 || maxDelegationCycles > 100))
+		) {
+			throw new Error("Delegation cycles must be 3 through 100; use 0 for unlimited.");
 		}
 		await this.configStore.update({ maxDelegationCycles });
 		this.state = { ...this.state, maxDelegationCycles };
@@ -807,6 +904,7 @@ export class KlermRoutingController {
 			policyTriggers: this.state.policyTriggers,
 			decisionSource: this.state.decisionSource,
 			delegationRecommended: this.state.delegationRecommended,
+			taskIntent: this.state.taskIntent,
 			fallbackReason: this.state.fallbackReason,
 			completionOwner: effectiveCompletionOwner,
 			handbackEnabled: this.handbackEnabledForCurrentTask(),
@@ -974,6 +1072,7 @@ export class KlermRoutingController {
 		task: string,
 		routingOverride?: KlermPromptRoutingOverride,
 	): Promise<KlermModelTransition | undefined> {
+		const taskIntent = classifyKlermTaskIntent(task, this.state.taskIntent);
 		this.task = task;
 		this.pendingDelegation = undefined;
 		this.pendingLocalDelegation = undefined;
@@ -1005,6 +1104,7 @@ export class KlermRoutingController {
 				policyTriggers: undefined,
 				decisionSource: undefined,
 				delegationRecommended: undefined,
+				taskIntent,
 				fallbackReason: undefined,
 				completionOwner: "direct",
 				handbackEnabled: config.handbackEnabled,
@@ -1111,6 +1211,7 @@ export class KlermRoutingController {
 			policyTriggers: delegationAssessment?.policyTriggers,
 			decisionSource: delegationAssessment ? "deterministic-policy" : undefined,
 			delegationRecommended: delegationAssessment?.delegationRecommended,
+			taskIntent,
 			fallbackReason: undefined,
 			completionOwner,
 			handbackEnabled: initialHandbackEnabled,
@@ -1135,6 +1236,7 @@ export class KlermRoutingController {
 			policyTriggers: delegationAssessment?.policyTriggers,
 			decisionSource: delegationAssessment ? "deterministic-policy" : undefined,
 			delegationRecommended: delegationAssessment?.delegationRecommended,
+			taskIntent,
 			completionOwner,
 			handbackEnabled: initialHandbackEnabled,
 			delegationCycle: initialCycle,
@@ -1986,7 +2088,10 @@ export class KlermRoutingController {
 		};
 	}
 
-	async recordCompletion(success: boolean): Promise<void> {
+	async recordCompletion(
+		success: boolean,
+		details?: { reason?: string; changedFileCount?: number; verificationCount?: number; openIssueCount?: number },
+	): Promise<void> {
 		try {
 			if (!this.state.taskId) return;
 			await this.log({
@@ -1997,7 +2102,7 @@ export class KlermRoutingController {
 				route: this.state.lane === "local" ? "LOCAL" : this.state.lane === "frontier" ? "FRONTIER" : "SELF",
 				routerModel: this.config.localModel,
 				selectedTarget: this.state.selectedTarget ?? "direct",
-				reason: success ? "agent run completed" : "agent run failed",
+				reason: details?.reason ?? (success ? "agent run completed" : "agent run failed"),
 				complexity: this.state.complexity,
 				score: this.state.score,
 				confidence: this.state.confidence,
@@ -2006,12 +2111,16 @@ export class KlermRoutingController {
 				policyTriggers: this.state.policyTriggers,
 				decisionSource: this.state.decisionSource,
 				delegationRecommended: this.state.delegationRecommended,
+				taskIntent: this.state.taskIntent,
 				fallbackReason: this.state.fallbackReason,
 				completionOwner: this.state.completionOwner,
 				handbackEnabled: this.handbackEnabledForCurrentTask(),
 				delegationCycle: this.state.delegationCycle,
 				maxDelegationCycles: this.state.maxDelegationCycles,
 				transcriptHash: this.state.lastTransition?.transcriptHash,
+				changedFileCount: details?.changedFileCount,
+				verificationCount: details?.verificationCount,
+				openIssueCount: details?.openIssueCount,
 				registryProfileHash: this.profileHash(),
 				mode: this.config.routing,
 				activeStartLane: this.state.activeStartLane,
@@ -2040,6 +2149,7 @@ export class KlermRoutingController {
 				transitionSequence,
 				lastTransition,
 				explicitFrontierRequestSatisfied,
+				taskIntent,
 			} = this.state;
 			this.state = {
 				task,
@@ -2068,6 +2178,7 @@ export class KlermRoutingController {
 				transitionSequence,
 				lastTransition,
 				explicitFrontierRequestSatisfied,
+				taskIntent,
 			};
 			this.pendingDelegation = undefined;
 			this.pendingLocalDelegation = undefined;
@@ -2099,6 +2210,7 @@ export class KlermRoutingController {
 			policyTriggers: this.state.policyTriggers,
 			decisionSource: this.state.decisionSource,
 			delegationRecommended: this.state.delegationRecommended,
+			taskIntent: this.state.taskIntent,
 			fallbackReason: this.state.fallbackReason,
 			completionOwner: this.state.completionOwner,
 			handbackEnabled: this.handbackEnabledForCurrentTask(),
@@ -2141,6 +2253,7 @@ export class KlermRoutingController {
 				: `A2A cycles started: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles} (per-task safety limit)`,
 			`Other model called: ${this.state.otherModelCalled ?? "none"}`,
 			`Task: ${this.state.task ?? "none"}`,
+			`Task intent: ${this.state.taskIntent ?? "none"}`,
 			`Last decision: ${this.state.reason ?? "none"}`,
 			`Capability score: ${this.state.score === undefined ? "none" : this.state.score.toFixed(2)}`,
 			`Confidence: ${this.state.confidence === undefined ? "none" : this.state.confidence.toFixed(2)}`,

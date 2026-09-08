@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type AgentMessage, type PrepareNextTurnContext } from "@earendil-works/pi-agent-core";
@@ -24,6 +24,7 @@ import { KlermConfigStore } from "../src/klerm/config.ts";
 import { normalizeProfileState } from "../src/klerm/profiles.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
 import {
+	classifyKlermTaskIntent,
 	KlermRoutingController,
 	projectKlermHandoffContext,
 	projectKlermPlannerContext,
@@ -222,17 +223,28 @@ describe("Klerm routing runtime", () => {
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
 		await (await controller.routePrompt("Plan this change"))?.commit();
-		const tools = ["read", "grep", "find", "ls", "bash", "edit", "write", "mcp_mutate", "delegate_frontier"].map(
-			(name) => ({ name }),
-		);
-
-		expect(controller.activeWorkerRole).toBe("planner");
-		expect(controller.filterToolsForActiveRole(tools).map((tool) => tool.name)).toEqual([
+		const tools = [
+			"read",
+			"grep",
 			"find",
 			"ls",
+			"bash",
+			"edit",
+			"write",
+			"mcp_read",
+			"mcp_mutate",
 			"delegate_frontier",
-		]);
-		expect(controller.getSystemPromptContribution()).toContain("Planner mode is structure-only");
+		].map((name) => ({ name }));
+
+		expect(controller.activeWorkerRole).toBe("planner");
+		expect(
+			controller
+				.filterToolsForActiveRole(tools, (name) =>
+					name === "mcp_read" ? "read" : name === "mcp_mutate" ? "write" : undefined,
+				)
+				.map((tool) => tool.name),
+		).toEqual(["read", "grep", "find", "ls", "bash", "mcp_read", "delegate_frontier"]);
+		expect(controller.getSystemPromptContribution()).toContain("Planner mode is read-only");
 
 		await controller.setWorkerRole("local", "builder");
 		expect(controller.filterToolsForActiveRole(tools)).toEqual(tools);
@@ -277,8 +289,8 @@ describe("Klerm routing runtime", () => {
 			localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
 			await session.prompt("Plan the implementation");
 
-			expect(requestToolNames).toEqual(expect.arrayContaining(["find", "ls"]));
-			expect(requestToolNames).not.toEqual(expect.arrayContaining(["read", "grep", "bash", "edit", "write"]));
+			expect(requestToolNames).toEqual(expect.arrayContaining(["read", "grep", "find", "ls", "bash"]));
+			expect(requestToolNames).not.toEqual(expect.arrayContaining(["edit", "write"]));
 			expect(agent.state.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["bash", "edit", "write"]));
 		} finally {
 			session.dispose();
@@ -286,7 +298,7 @@ describe("Klerm routing runtime", () => {
 		}
 	});
 
-	it("hides prior file and command output from planner context", () => {
+	it("keeps normal read-only output and hides sensitive or mutating output from planner context", () => {
 		const messages: AgentMessage[] = [
 			{
 				role: "toolResult",
@@ -299,19 +311,216 @@ describe("Klerm routing runtime", () => {
 			},
 			{
 				role: "toolResult",
+				toolCallId: "read-2",
+				toolName: "read",
+				content: [{ type: "text", text: "normal source contents" }],
+				details: { path: "src/config.ts" },
+				isError: false,
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
 				toolCallId: "find-1",
 				toolName: "find",
 				content: [{ type: "text", text: "src/app.ts" }],
 				details: {},
 				isError: false,
-				timestamp: 2,
+				timestamp: 3,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "write-1",
+				toolName: "write",
+				content: [{ type: "text", text: "sensitive mutation output" }],
+				details: { path: "src/app.ts" },
+				isError: false,
+				timestamp: 4,
 			},
 		];
 
 		const projected = projectKlermPlannerContext(messages);
 		expect(JSON.stringify(projected[0])).not.toContain("secret file contents");
-		expect(JSON.stringify(projected[0])).not.toContain(".env");
-		expect(JSON.stringify(projected[1])).toContain("src/app.ts");
+		expect(JSON.stringify(projected[1])).toContain("normal source contents");
+		expect(JSON.stringify(projected[2])).toContain("src/app.ts");
+		expect(JSON.stringify(projected[3])).not.toContain("sensitive mutation output");
+	});
+
+	it("classifies implementation, review, planning, and continuation intents deterministically", () => {
+		expect(classifyKlermTaskIntent("Implement OAuth login in the existing app")).toBe("workspace-change");
+		expect(classifyKlermTaskIntent("Review the OAuth implementation")).toBe("review");
+		expect(classifyKlermTaskIntent("Plan an OAuth implementation and provide starter snippets")).toBe("answer");
+		expect(classifyKlermTaskIntent("folytasd", "workspace-change")).toBe("workspace-change");
+	});
+
+	it("corrects a plan-only Builder response and records tool-backed completion", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:executor" }] });
+		const localModel = localFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:executor",
+			localRole: "builder",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: {
+				model: localModel,
+				systemPrompt: "test",
+				tools: Object.values(createAllTools(tempDir)),
+				thinkingLevel: "off",
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage("I will first provide an implementation plan."),
+				fauxAssistantMessage([fauxToolCall("write", { path: "implemented.txt", content: "implemented\n" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage([fauxToolCall("read", { path: "implemented.txt" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Implemented and verified."),
+			]);
+			await session.prompt("Implement the requested workspace change");
+
+			expect(localFaux.state.callCount).toBe(4);
+			expect(readFileSync(join(tempDir, "implemented.txt"), "utf8")).toBe("implemented\n");
+			const completion = (await readKlermRouteDecisionLog(tempDir))
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as Record<string, unknown>)
+				.at(-1);
+			expect(completion).toMatchObject({
+				event: "TASK_COMPLETED",
+				taskIntent: "workspace-change",
+				changedFileCount: 1,
+				verificationCount: 1,
+			});
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+		}
+	});
+
+	it("fails a workspace-change task after one ignored execution correction", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:plan-only" }] });
+		const localModel = localFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:plan-only",
+			localRole: "builder",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: { model: localModel, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage("Implementation plan only."),
+				fauxAssistantMessage("Another plan without implementation."),
+			]);
+			await session.prompt("Implement a new feature");
+
+			expect(localFaux.state.callCount).toBe(2);
+			const log = await readKlermRouteDecisionLog(tempDir);
+			expect(log).toContain('"event":"TASK_FAILED"');
+			expect(log).toContain("workspace-change task ended without a successful mutation");
+			expect(log).not.toContain('"event":"TASK_COMPLETED"');
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+		}
+	});
+
+	it("blocks a mutating shell call even if a Planner emits a stale tool request", async () => {
+		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:safe-planner" }] });
+		const localModel = localFaux.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [localModel],
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen:safe-planner",
+			localRole: "planner",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		const agent = new Agent({
+			streamFn: streamSimple,
+			initialState: {
+				model: localModel,
+				systemPrompt: "test",
+				tools: Object.values(createAllTools(tempDir)),
+				thinkingLevel: "off",
+			},
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+		writeFileSync(join(tempDir, "keep.txt"), "keep");
+
+		try {
+			localFaux.setResponses([
+				fauxAssistantMessage([fauxToolCall("bash", { command: "rm keep.txt" })], { stopReason: "toolUse" }),
+				fauxAssistantMessage("The mutation was blocked in Planner mode."),
+			]);
+			await session.prompt("Plan how to remove the generated file");
+
+			expect(readFileSync(join(tempDir, "keep.txt"), "utf8")).toBe("keep");
+			expect(
+				agent.state.messages.some(
+					(message) =>
+						message.role === "toolResult" &&
+						message.toolName === "bash" &&
+						message.isError &&
+						JSON.stringify(message.content).includes("Planner mode blocked"),
+				),
+			).toBe(true);
+		} finally {
+			session.dispose();
+			localFaux.unregister();
+		}
 	});
 
 	it("blocks risky builder tools when interactive approval is denied", async () => {
@@ -377,8 +586,44 @@ describe("Klerm routing runtime", () => {
 					.filter((entry) => entry.type === "custom" && entry.customType === "klerm-tool-approval"),
 			).toEqual([
 				expect.objectContaining({
-					data: expect.objectContaining({ category: "shell-mutation", toolName: "bash", approved: false }),
+					data: expect.objectContaining({
+						category: "shell-mutation",
+						toolName: "bash",
+						approved: false,
+						mode: "risky",
+						source: "interactive",
+					}),
 				}),
+			]);
+
+			await controller.setBuilderApprovalMode("local", "always");
+			localFaux.setResponses([
+				fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" }),
+				fauxAssistantMessage([fauxToolCall("bash", { command: "pwd" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("The automatically approved command completed and was verified."),
+			]);
+			await session.prompt("Remove generated output without asking");
+			expect(confirm).toHaveBeenCalledOnce();
+
+			await controller.setBuilderApprovalMode("local", "never");
+			localFaux.setResponses([
+				fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" }),
+				fauxAssistantMessage("The command was blocked automatically."),
+			]);
+			await session.prompt("Try to remove generated output");
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(
+				sessionManager
+					.getEntries()
+					.flatMap((entry) =>
+						entry.type === "custom" && entry.customType === "klerm-tool-approval" ? [entry.data] : [],
+					),
+			).toEqual([
+				expect.objectContaining({ approved: false, mode: "risky", source: "interactive" }),
+				expect.objectContaining({ approved: true, mode: "always", source: "automatic" }),
+				expect.objectContaining({ approved: false, mode: "never", source: "automatic" }),
 			]);
 		} finally {
 			session.dispose();
@@ -1002,7 +1247,7 @@ describe("Klerm routing runtime", () => {
 			]);
 
 			await session.prompt(
-				"Create a React and Tailwind project with multiple components and files, including build and dev setup.",
+				"Plan a React and Tailwind project with multiple components and files, including build and dev setup.",
 			);
 
 			expect(firstLocalSystemPrompt).toContain(
@@ -1113,21 +1358,28 @@ describe("Klerm routing runtime", () => {
 		await controller.setHandbackEnabled(false);
 		await controller.setActiveStartLane("frontier-local");
 		await controller.setMaxDelegationCycles(99);
+		await controller.setBuilderApprovalMode("local", "always");
+		await controller.setBuilderApprovalMode("frontier", "never");
 		expect(JSON.parse(readFileSync(store.path, "utf8"))).toMatchObject({
 			handbackEnabled: false,
 			activeStartLane: "frontier-local",
 			maxDelegationCycles: 99,
+			localApprovalMode: "always",
+			frontierApprovalMode: "never",
 		});
 		const policyReloaded = await KlermConfigStore.load(tempDir);
 		expect(policyReloaded.get()).toMatchObject({
 			handbackEnabled: false,
 			activeStartLane: "frontier-local",
 			maxDelegationCycles: 99,
+			localApprovalMode: "always",
+			frontierApprovalMode: "never",
 		});
 		await controller.setMaxDelegationCycles(0);
 		expect((await KlermConfigStore.load(tempDir)).get().maxDelegationCycles).toBe(0);
 		expect(controller.describe()).toContain("A2A cycles started: 0/unlimited (no cycle limit)");
-		await expect(controller.setMaxDelegationCycles(-1)).rejects.toThrow("use 0 for unlimited");
+		await expect(controller.setMaxDelegationCycles(2)).rejects.toThrow("3 through 100");
+		await expect(controller.setMaxDelegationCycles(101)).rejects.toThrow("3 through 100");
 		await store.update({ maxDelegationCycles: -1 });
 		expect((await KlermConfigStore.load(tempDir)).get().maxDelegationCycles).toBe(3);
 	});
@@ -1549,33 +1801,35 @@ describe("Klerm routing runtime", () => {
 			routing: "local",
 			localModel: "ollama/qwen2.5-coder:7b",
 			frontierModel: "google/gemini-3.5-flash-lite",
-			maxDelegationCycles: 1,
+			maxDelegationCycles: 3,
 		});
 		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
-		await (await controller.routePrompt("Use at most one specialist pass"))?.commit();
-		controller.requestFrontierDelegation({ reason: "first", summary: "ready", remainingWork: "work" });
+		await (await controller.routePrompt("Use at most three specialist passes"))?.commit();
 		const localTurn = {
 			message: assistantMessage([], local),
 			toolResults: [],
 			context: { systemPrompt: "", messages: [], tools: [] },
 			newMessages: [],
 		} as PrepareNextTurnContext;
-		await (await controller.prepareNextTurn(localTurn))?.commit();
-		controller.requestReturnToLocal({
-			reason: "done",
-			frontierSummary: "done",
-			frontierAnswer: "done",
-			changedFiles: [],
-			verification: [],
-			openIssues: [],
-			recommendedNextAction: "finalize",
-		});
 		const frontierTurn = { ...localTurn, message: assistantMessage([], frontier) } as PrepareNextTurnContext;
-		await (await controller.prepareNextTurn(frontierTurn))?.commit();
-		controller.requestFrontierDelegation({ reason: "second", summary: "again", remainingWork: "more" });
+		for (let cycle = 1; cycle <= 3; cycle++) {
+			controller.requestFrontierDelegation({ reason: `cycle ${cycle}`, summary: "ready", remainingWork: "work" });
+			await (await controller.prepareNextTurn(localTurn))?.commit();
+			controller.requestReturnToLocal({
+				reason: "done",
+				frontierSummary: "done",
+				frontierAnswer: "done",
+				changedFiles: [],
+				verification: [],
+				openIssues: [],
+				recommendedNextAction: "finalize",
+			});
+			await (await controller.prepareNextTurn(frontierTurn))?.commit();
+		}
+		controller.requestFrontierDelegation({ reason: "fourth", summary: "again", remainingWork: "more" });
 
 		expect(await controller.prepareNextTurn(localTurn)).toBeUndefined();
-		expect(controller.routingState).toMatchObject({ lane: "local", delegationCycle: 1 });
+		expect(controller.routingState).toMatchObject({ lane: "local", delegationCycle: 3 });
 		expect(await readKlermRouteDecisionLog(tempDir)).toContain('"event":"HANDOFF_REJECTED"');
 
 		await controller.setMaxDelegationCycles(0);
@@ -1585,7 +1839,7 @@ describe("Klerm routing runtime", () => {
 		await unlimitedTransition?.commit();
 		expect(controller.routingState).toMatchObject({
 			lane: "frontier",
-			delegationCycle: 2,
+			delegationCycle: 4,
 			maxDelegationCycles: 0,
 		});
 	});

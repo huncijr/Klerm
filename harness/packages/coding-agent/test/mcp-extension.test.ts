@@ -9,11 +9,20 @@ import type {
 	ToolDefinition,
 } from "../src/core/extensions/types.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { createMcpExtension, resolveMcpPromptMentions } from "../src/klerm/mcp/extension.ts";
+import { createMcpExtension, findMissingMcpSelections, resolveMcpPromptMentions } from "../src/klerm/mcp/extension.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
 
 describe("MCP extension commands", () => {
+	it("requires at least one actual tool call from every selected server", () => {
+		const selections = [
+			{ serverName: "maps", tools: ["mcp_maps_search", "mcp_maps_route"] },
+			{ serverName: "docs", tools: ["mcp_docs_read"] },
+		];
+		expect(findMissingMcpSelections(selections, new Set(["mcp_maps_route"]))).toEqual([selections[1]]);
+		expect(findMissingMcpSelections(selections, new Set(["mcp_maps_search", "mcp_docs_read"]))).toEqual([]);
+	});
+
 	it("exposes live inventory and resolves selected servers to exact usable tools", async () => {
 		const settingsManager = SettingsManager.inMemory();
 		settingsManager.setMcpServer("fake", {

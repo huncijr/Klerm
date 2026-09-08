@@ -18,10 +18,16 @@ import type {
 	SettingsScope,
 } from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
-import type { KlermActiveStartLane, KlermConfig, KlermRoutingMode, KlermWorkerRole } from "../../klerm/config.ts";
+import type {
+	KlermActiveStartLane,
+	KlermBuilderApprovalMode,
+	KlermConfig,
+	KlermRoutingMode,
+	KlermWorkerRole,
+} from "../../klerm/config.ts";
 import type { CustomModelEntry } from "../../klerm/custom-models.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
-import type { McpPromptMention, McpServerState } from "../../klerm/mcp/runtime.ts";
+import type { McpErrorKind, McpPromptMention, McpServerState, McpToolCapability } from "../../klerm/mcp/runtime.ts";
 import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
@@ -97,6 +103,7 @@ export interface RpcMcpToolStatus {
 	remoteName: string;
 	title?: string;
 	description?: string;
+	capability: McpToolCapability;
 }
 
 export interface RpcMcpServerStatus {
@@ -107,8 +114,13 @@ export interface RpcMcpServerStatus {
 	tools: RpcMcpToolStatus[];
 	skippedTools: string[];
 	error?: string;
+	errorKind?: McpErrorKind;
 	label?: string;
 	color?: McpServerColor;
+	command?: string;
+	args?: string[];
+	url?: string;
+	envKeys?: string[];
 }
 
 export interface RpcMcpStatus {
@@ -123,6 +135,7 @@ export interface RpcMcpServerUpdate {
 	scope?: SettingsScope;
 	command?: string;
 	args?: string[];
+	env?: Record<string, string>;
 	url?: string;
 	headers?: Record<string, string>;
 	enabled?: boolean;
@@ -137,6 +150,9 @@ export interface RpcKlermConfigUpdate {
 	frontierModel?: string | null;
 	localRole?: KlermWorkerRole;
 	frontierRole?: KlermWorkerRole;
+	localApprovalMode?: KlermBuilderApprovalMode;
+	frontierApprovalMode?: KlermBuilderApprovalMode;
+	maxDelegationCycles?: number;
 }
 
 export interface RpcDesktopSettings {

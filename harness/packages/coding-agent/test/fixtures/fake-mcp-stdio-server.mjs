@@ -35,6 +35,7 @@ input.on("line", (line) => {
 				{
 					name: "echo-text",
 					description: "Echo text",
+					annotations: { readOnlyHint: true },
 					inputSchema: {
 						type: "object",
 						properties: { text: { type: "string" } },

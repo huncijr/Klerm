@@ -53,7 +53,12 @@ describe("Klerm config commands", () => {
 			stdout: (message) => output.push(message),
 		});
 
-		expect(JSON.parse(output[0])).toMatchObject({ mode: "off", localModel: "ollama/qwen3", handbackEnabled: true });
+		expect(JSON.parse(output[0])).toMatchObject({
+			mode: "off",
+			localModel: "ollama/qwen3",
+			handbackEnabled: true,
+			maxDelegationCycles: 0,
+		});
 	});
 
 	it("persists and reports Agent 1/2 worker roles", async () => {

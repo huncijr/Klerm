@@ -821,6 +821,7 @@ export async function main(args: string[], options?: MainOptions) {
 				const id = lane === "local" ? state.localProfileId : state.frontierProfileId;
 				return state.profiles.find((profile) => profile.id === id);
 			},
+			() => settingsManager.getKlermProfiles().sharedMemory,
 		);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,

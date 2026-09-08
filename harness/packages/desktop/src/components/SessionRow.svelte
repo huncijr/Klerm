@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2 } from "@lucide/svelte";
+	import { PencilLine, Trash2 } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import type { DesktopSession } from "../lib/model.ts";
 
@@ -91,7 +91,7 @@
 		</div>
 	{:else}
 		<div class="min-w-0 flex-1 py-2.5 pr-9 pl-[11px] text-left short-650:py-2">
-			<button type="button" class="block max-w-full truncate border-0 bg-transparent p-0 text-left text-[11px] font-semibold text-[#b5bec5]" onclick={startRename}>{session.name ?? session.firstMessage}</button>
+			<button type="button" class="block max-w-full truncate border-0 bg-transparent p-0 text-left text-[11px] font-semibold text-[#b5bec5]" onclick={onswitch}>{session.name ?? session.firstMessage}</button>
 			<button type="button" class="mt-1 block border-0 bg-transparent p-0 font-mono text-[9px] text-[#55616a]" onclick={onswitch}>{dateLabel} / {session.messageCount} messages</button>
 		</div>
 	{/if}
@@ -109,6 +109,13 @@
 		</button>
 		{#if menuOpen}
 			<div class="absolute top-[29px] right-0 z-[8] w-[154px] rounded-md border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_14px_36px_rgba(0,0,0,.48)]">
+				<button
+					type="button"
+					class="flex w-full cursor-pointer items-center gap-2 rounded border-0 bg-transparent px-[9px] py-2 text-left text-[10px] text-[#aab4bb] hover:bg-[#171e23] hover:text-white"
+					onclick={startRename}
+				>
+					<PencilLine size={12} /> Rename
+				</button>
 				<button
 					type="button"
 					class="flex w-full cursor-pointer items-center gap-2 rounded border-0 bg-transparent px-[9px] py-2 text-left text-[10px] text-[#e38780] hover:bg-[rgba(255,111,97,.1)] hover:text-[#ffada6]"

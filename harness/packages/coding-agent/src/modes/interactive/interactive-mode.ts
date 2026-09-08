@@ -5170,8 +5170,8 @@ export class InteractiveMode {
 		if (argument.startsWith("cycles ")) {
 			const value = argument.slice(7).trim().toLowerCase();
 			const count = value === "unlimited" || value === "off" || value === "none" ? 0 : Number(value);
-			if (!Number.isSafeInteger(count) || count < 0) {
-				this.showError("Usage: /routing cycles <positive integer|unlimited>");
+			if (!Number.isSafeInteger(count) || (count !== 0 && (count < 3 || count > 100))) {
+				this.showError("Usage: /routing cycles <3-100|unlimited>");
 				return;
 			}
 			await routing.setMaxDelegationCycles(count);
@@ -5180,7 +5180,7 @@ export class InteractiveMode {
 			return;
 		}
 		if (argument === "cycles") {
-			this.showError("Usage: /routing cycles <positive integer|unlimited>");
+			this.showError("Usage: /routing cycles <3-100|unlimited>");
 			return;
 		}
 		const mode = parseRoutingModeInput(argument);

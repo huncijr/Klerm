@@ -17,6 +17,10 @@ const updateProfileSchema = Type.Object({
 	level: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
 });
 
+const updateSharedMemorySchema = Type.Object({
+	memory: Type.String({ maxLength: 8000, description: "Complete replacement shared memory text" }),
+});
+
 export function createProfileExtension(settingsManager: SettingsManager): ExtensionFactory {
 	return (pi) => {
 		pi.registerTool({
@@ -29,6 +33,7 @@ export function createProfileExtension(settingsManager: SettingsManager): Extens
 				"Use update_klerm_profile only for lasting profile text, not for one-off task notes.",
 				"Never create a new profile id with this tool; only update an existing id.",
 			],
+			klermCapability: "write",
 			parameters: updateProfileSchema,
 			executionMode: "sequential",
 			execute: async (_toolCallId, params) => {
@@ -58,6 +63,29 @@ export function createProfileExtension(settingsManager: SettingsManager): Extens
 				return {
 					content: [{ type: "text", text: `Updated profile ${saved.name} (${saved.id}).` }],
 					details: { id: saved.id, name: saved.name },
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "update_klerm_shared_memory",
+			label: "Update shared Klerm memory",
+			description:
+				"Replace the concise shared memory available to both Klerm agents. Use only for durable workspace facts or explicit user requests to remember something across agents.",
+			promptSnippet: "Update durable memory shared by Agent 1 and Agent 2.",
+			promptGuidelines: [
+				"Keep shared memory concise and free of credentials or transient task output.",
+				"Preserve still-relevant existing facts because this tool replaces the complete shared memory.",
+			],
+			klermCapability: "write",
+			parameters: updateSharedMemorySchema,
+			executionMode: "sequential",
+			execute: async (_toolCallId, params) => {
+				const state = settingsManager.setKlermSharedMemory(params.memory.trim());
+				await settingsManager.flush();
+				return {
+					content: [{ type: "text", text: "Updated shared Klerm memory for Agent 1 and Agent 2." }],
+					details: { length: state.sharedMemory.length },
 				};
 			},
 		});

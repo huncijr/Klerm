@@ -27,6 +27,9 @@ const MUTATING_FIND = /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)(?:\s|$)/;
 const SENSITIVE_PATH =
 	/(?:^|[/\\])(?:\.env(?:\.|$)|\.ssh(?:[/\\]|$)|credentials?(?:\.|[/\\]|$)|secrets?(?:\.|[/\\]|$)|auth\.json$|id_(?:rsa|ed25519)$)/i;
 
+const PLANNER_READ_ONLY_SHELL_COMMAND =
+	/^(?:pwd|ls(?:\s|$)|grep(?:\s|$)|rg(?:\s|$)|find(?:\s|$)|git\s+(?:status|diff|log|show|grep|ls-files)(?:\s|$))/;
+
 function stringArgument(args: unknown, key: string): string | undefined {
 	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
 	const value = (args as Record<string, unknown>)[key];
@@ -34,10 +37,49 @@ function stringArgument(args: unknown, key: string): string | undefined {
 }
 
 export function toolPath(toolName: string, args: unknown): string | undefined {
-	if (toolName === "read" || toolName === "write" || toolName === "edit") {
+	if (toolName === "read" || toolName === "grep" || toolName === "write" || toolName === "edit") {
 		return stringArgument(args, "path");
 	}
 	return undefined;
+}
+
+export function isSensitiveToolCall(toolName: string, args: unknown): boolean {
+	const path = toolPath(toolName, args);
+	if (path && SENSITIVE_PATH.test(path)) return true;
+	if (toolName !== "bash") return false;
+	return SENSITIVE_PATH.test(stringArgument(args, "command") ?? "");
+}
+
+export function isPlannerReadOnlyShellCommand(args: unknown): boolean {
+	const command = stringArgument(args, "command")?.trim() ?? "";
+	return (
+		command.length > 0 &&
+		!UNSAFE_SHELL_SYNTAX.test(command) &&
+		!MUTATING_FIND.test(command) &&
+		!SENSITIVE_PATH.test(command) &&
+		PLANNER_READ_ONLY_SHELL_COMMAND.test(command)
+	);
+}
+
+export function isVerificationToolCall(toolName: string, args: unknown, changedPaths: ReadonlySet<string>): boolean {
+	if (toolName === "read") {
+		const path = toolPath(toolName, args);
+		return path !== undefined && changedPaths.has(path);
+	}
+	if (toolName !== "bash") return false;
+	const command = stringArgument(args, "command")?.trim() ?? "";
+	return SAFE_SHELL_COMMAND.test(command) && !UNSAFE_SHELL_SYNTAX.test(command) && !MUTATING_FIND.test(command);
+}
+
+export function isWorkspaceMutationToolCall(
+	toolName: string,
+	args: unknown,
+	capability?: "read" | "write" | "unknown",
+): boolean {
+	if (toolName === "edit" || toolName === "write" || capability === "write") return true;
+	if (toolName !== "bash") return false;
+	const command = stringArgument(args, "command")?.trim() ?? "";
+	return command.length > 0 && !isPlannerReadOnlyShellCommand(args) && !SAFE_SHELL_COMMAND.test(command);
 }
 
 export function requiresBuilderApproval(
@@ -46,7 +88,7 @@ export function requiresBuilderApproval(
 	changedFileCount: number,
 ): KlermToolApproval | undefined {
 	const path = toolPath(toolName, args);
-	if (path && SENSITIVE_PATH.test(path)) {
+	if (isSensitiveToolCall(toolName, args)) {
 		return {
 			category: "sensitive-file",
 			title: "Allow sensitive file access?",
@@ -84,6 +126,13 @@ export function requiresBuilderApproval(
 			category: "external-tool",
 			title: "Allow updating a Klerm profile?",
 			message: `Builder wants to update profile ${name}.`,
+		};
+	}
+	if (toolName === "update_klerm_shared_memory") {
+		return {
+			category: "external-tool",
+			title: "Allow updating shared memory?",
+			message: "Builder wants to replace memory shared by Agent 1 and Agent 2.",
 		};
 	}
 	if (toolName === "configure_mcp_server") {

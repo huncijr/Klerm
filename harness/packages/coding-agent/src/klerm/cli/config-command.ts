@@ -63,8 +63,10 @@ function parseConfigValue(key: ConfigCliKey, value: string): KlermConfig[keyof K
 		return undefined;
 	}
 	const number = Number(value);
-	const minimum = key === "max-delegation-cycles" ? 0 : 1;
-	return Number.isSafeInteger(number) && number >= minimum ? number : undefined;
+	if (key === "max-delegation-cycles") {
+		return Number.isSafeInteger(number) && (number === 0 || (number >= 3 && number <= 100)) ? number : undefined;
+	}
+	return Number.isSafeInteger(number) && number >= 1 ? number : undefined;
 }
 
 function printableConfig(config: Readonly<KlermConfig>): Record<ConfigCliKey, string | number | boolean | null> {

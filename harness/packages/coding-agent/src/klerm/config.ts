@@ -5,6 +5,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 export type KlermRoutingMode = "off" | "local" | "frontier" | "auto";
 export type KlermActiveStartLane = "auto" | "local" | "frontier" | "frontier-local";
 export type KlermWorkerRole = "planner" | "builder";
+export type KlermBuilderApprovalMode = "always" | "risky" | "never";
 
 export interface KlermConfig {
 	routing: KlermRoutingMode;
@@ -13,6 +14,8 @@ export interface KlermConfig {
 	frontierModel?: string;
 	localRole: KlermWorkerRole;
 	frontierRole: KlermWorkerRole;
+	localApprovalMode: KlermBuilderApprovalMode;
+	frontierApprovalMode: KlermBuilderApprovalMode;
 	localThinkingLevel?: ThinkingLevel;
 	frontierThinkingLevel?: ThinkingLevel;
 	allowFrontierFallback: boolean;
@@ -27,9 +30,11 @@ export const DEFAULT_KLERM_CONFIG: KlermConfig = {
 	activeStartLane: "auto",
 	localRole: "builder",
 	frontierRole: "builder",
+	localApprovalMode: "risky",
+	frontierApprovalMode: "risky",
 	allowFrontierFallback: false,
 	handbackEnabled: true,
-	maxDelegationCycles: 3,
+	maxDelegationCycles: 0,
 	localMaxTurns: 8,
 	localMaxToolErrors: 3,
 };
@@ -50,6 +55,10 @@ export function isKlermWorkerRole(value: unknown): value is KlermWorkerRole {
 	return value === "planner" || value === "builder";
 }
 
+export function isKlermBuilderApprovalMode(value: unknown): value is KlermBuilderApprovalMode {
+	return value === "always" || value === "risky" || value === "never";
+}
+
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
 	return (
 		value === "off" ||
@@ -64,6 +73,12 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 function integerAtLeast(value: unknown, fallback: number, minimum = 1): number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : fallback;
+}
+
+function delegationCycleLimit(value: unknown, fallback: number): number {
+	if (value === 0) return 0;
+	if (typeof value !== "number" || !Number.isSafeInteger(value)) return fallback;
+	return Math.min(100, Math.max(3, value));
 }
 
 export class KlermConfigStore {
@@ -96,6 +111,12 @@ export class KlermConfigStore {
 			frontierRole: isKlermWorkerRole(overrides.frontierRole ?? stored.frontierRole)
 				? (overrides.frontierRole ?? stored.frontierRole)!
 				: DEFAULT_KLERM_CONFIG.frontierRole,
+			localApprovalMode: isKlermBuilderApprovalMode(overrides.localApprovalMode ?? stored.localApprovalMode)
+				? (overrides.localApprovalMode ?? stored.localApprovalMode)!
+				: DEFAULT_KLERM_CONFIG.localApprovalMode,
+			frontierApprovalMode: isKlermBuilderApprovalMode(overrides.frontierApprovalMode ?? stored.frontierApprovalMode)
+				? (overrides.frontierApprovalMode ?? stored.frontierApprovalMode)!
+				: DEFAULT_KLERM_CONFIG.frontierApprovalMode,
 			localThinkingLevel: isThinkingLevel(overrides.localThinkingLevel ?? stored.localThinkingLevel)
 				? (overrides.localThinkingLevel ?? stored.localThinkingLevel)
 				: undefined,
@@ -107,10 +128,9 @@ export class KlermConfigStore {
 				stored.allowFrontierFallback ??
 				DEFAULT_KLERM_CONFIG.allowFrontierFallback,
 			handbackEnabled: overrides.handbackEnabled ?? stored.handbackEnabled ?? DEFAULT_KLERM_CONFIG.handbackEnabled,
-			maxDelegationCycles: integerAtLeast(
+			maxDelegationCycles: delegationCycleLimit(
 				overrides.maxDelegationCycles ?? stored.maxDelegationCycles,
 				DEFAULT_KLERM_CONFIG.maxDelegationCycles,
-				0,
 			),
 			localMaxTurns: integerAtLeast(
 				overrides.localMaxTurns ?? stored.localMaxTurns,

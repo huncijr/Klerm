@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { redactMcpSecretText } from "../src/klerm/mcp/redact.ts";
-import { McpRuntime } from "../src/klerm/mcp/runtime.ts";
+import { classifyMcpError, McpRuntime } from "../src/klerm/mcp/runtime.ts";
 import { normalizeStdioArgs } from "../src/klerm/mcp/stdio-args.ts";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-mcp-stdio-server.mjs");
@@ -34,10 +34,12 @@ describe("MCP stdio runtime", () => {
 		);
 
 		expect(tools.map((tool) => tool.name)).toEqual(["mcp_fake_echo_text"]);
+		expect(tools[0]?.klermCapability).toBe("read");
 		expect(runtime.getStatus("fake")).toEqual([
 			expect.objectContaining({
 				state: "connected",
 				tools: ["mcp_fake_echo_text"],
+				toolDetails: [expect.objectContaining({ name: "mcp_fake_echo_text", capability: "read" })],
 				skippedTools: ["required-task (requires MCP tasks)"],
 			}),
 		]);
@@ -132,5 +134,12 @@ describe("MCP stdio runtime", () => {
 		expect(redactMcpSecretText("failed https://user:secret@example.com/mcp Authorization: Bearer-token")).toBe(
 			"failed https://********:********@example.com/mcp Authorization=********",
 		);
+	});
+
+	it("classifies MCP failures without provider-specific rules", () => {
+		expect(classifyMcpError("HTTP 401 Unauthorized")).toBe("authentication");
+		expect(classifyMcpError("access token expired")).toBe("authentication");
+		expect(classifyMcpError("stdio command must be a non-empty string")).toBe("configuration");
+		expect(classifyMcpError("connect ECONNREFUSED 127.0.0.1:3000")).toBe("connection");
 	});
 });

@@ -8,6 +8,7 @@
 		DesktopShortcut,
 		KlermProfile,
 		KlermProfileFace,
+		KlermConfig,
 		McpServerStatus,
 		McpServerUpdate,
 		McpStatus,
@@ -25,6 +26,7 @@
 
 	let {
 		settings,
+		klermConfig,
 		mcpStatus,
 		mcpBusy,
 		providers,
@@ -33,6 +35,7 @@
 		ontogglefullscreen,
 		onclose,
 		onappearance,
+		onmaxdelegationcycles,
 		onaddmodel,
 		onconnectprovider,
 		ondisconnectprovider,
@@ -47,6 +50,7 @@
 		onaddmcpserver,
 	}: {
 		settings: DesktopSettings;
+		klermConfig: KlermConfig | undefined;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
 		providers: ProviderAccount[];
@@ -59,6 +63,7 @@
 		ontogglefullscreen: () => void;
 		onclose: () => void;
 		onappearance: (value: DesktopAppearance) => void;
+		onmaxdelegationcycles: (value: number) => void;
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
 		onconnectprovider: (account: ProviderConnect) => Promise<boolean>;
 		ondisconnectprovider: (provider: string) => Promise<boolean>;
@@ -71,6 +76,7 @@
 
 	let tab = $state<SettingsTab>("general");
 	let draftAppearance = $state<DesktopAppearance>("dark");
+	let draftMaxDelegationCycles = $state(0);
 	let draftShortcuts = $state<DesktopShortcut[]>([]);
 	let capturingIndex = $state<number | undefined>(undefined);
 	let provider = $state("custom");
@@ -164,6 +170,7 @@
 
 	$effect(() => {
 		draftAppearance = settings.appearance;
+		draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
 		draftShortcuts = settings.shortcuts.map((item) => ({ ...item }));
 	});
 
@@ -311,16 +318,21 @@
 
 	const dirty = $derived(
 		draftAppearance !== settings.appearance ||
+			draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0) ||
 			JSON.stringify(draftShortcuts) !== JSON.stringify(settings.shortcuts),
 	);
 
 	function saveChanges(): void {
 		if (draftAppearance !== settings.appearance) onappearance(draftAppearance);
+		if (draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0)) {
+			onmaxdelegationcycles(draftMaxDelegationCycles);
+		}
 		onclose();
 	}
 
 	function discardDrafts(): void {
 		draftAppearance = settings.appearance;
+		draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
 		draftShortcuts = settings.shortcuts.map((item) => ({ ...item }));
 		confirmDiscardSettings = false;
 	}
@@ -383,6 +395,27 @@
 					{/each}
 				</div>
 				<p class="m-0 text-center font-mono text-[9px] text-[#66747d]">Saved preference only. Light theme is not applied yet.</p>
+				<div class="w-full border-t border-[#232c34] pt-6">
+					<div class="mb-3 flex items-center justify-between gap-3">
+						<span class="font-mono text-[9px] tracking-[.12em] text-[#536069] uppercase">Max delegation cycles</span>
+						<strong class="font-mono text-[10px] text-[#d7e7ff]">{draftMaxDelegationCycles === 0 ? "Unlimited" : draftMaxDelegationCycles}</strong>
+					</div>
+					<input
+						type="range"
+						min="3"
+						max="101"
+						step="1"
+						value={draftMaxDelegationCycles === 0 ? 101 : draftMaxDelegationCycles}
+						aria-label="Maximum delegation cycles"
+						class="w-full accent-[#d6ff3f]"
+						oninput={(event) => {
+							const value = Number(event.currentTarget.value);
+							draftMaxDelegationCycles = value === 101 ? 0 : value;
+						}}
+					/>
+					<div class="mt-1 flex justify-between font-mono text-[8px] text-[#66747d]"><span>3</span><span>100</span><span>Unlimited</span></div>
+					<p class="m-0 mt-3 text-center font-mono text-[9px] text-[#66747d]">Limits bidirectional Agent 1 / Agent 2 delegation cycles per task.</p>
+				</div>
 			</div>
 		{:else if tab === "models"}
 			<div class="mx-auto w-[min(720px,100%)]">
@@ -455,6 +488,12 @@
 							<strong class="font-mono text-[11px] text-white">{mcpDisplayName(server)}</strong>
 						</div>
 						<p class="m-0 mt-1 font-mono text-[8px] text-[#6e7a83]">{server.name} · {server.enabled ? server.state : "disabled"}</p>
+						{#if server.error}
+							<p class="m-0 mt-2 font-mono text-[9px] text-[#f3a49c]">{server.error}</p>
+							{#if server.errorKind === "authentication"}
+								<p class="m-0 mt-1 font-mono text-[8px] text-[#9aa6ae]">Replace this server's credential with <code>/mcpset</code>, then reload. Klerm will not infer or display the secret.</p>
+							{/if}
+						{/if}
 					</section>
 				{/each}
 				{#if addingMcp}
@@ -475,6 +514,7 @@
 							<input bind:value={mcpArgs} placeholder="args" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
 						{:else}
 							<input bind:value={mcpUrl} placeholder="url" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
+							<textarea bind:value={mcpHeaders} placeholder="non-secret headers, one Header-Name=value per line" class="min-h-16 w-full rounded-md border border-[#2d3740] bg-[#05080b] p-2 font-mono text-[10px] text-white outline-0"></textarea>
 						{/if}
 						{#if mcpFormError}<p class="m-0 text-[9px] text-[#f3a49c]">{mcpFormError}</p>{/if}
 						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>Save</button>

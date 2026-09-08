@@ -444,7 +444,8 @@ describe("interactive Klerm commands", () => {
 		await prototype.handleKlermRoutingCommand.call(context, "handback on");
 		await prototype.handleKlermRoutingCommand.call(context, "handback off");
 		await prototype.handleKlermRoutingCommand.call(context, "cycles 5");
-		await prototype.handleKlermRoutingCommand.call(context, "cycles 999");
+		await prototype.handleKlermRoutingCommand.call(context, "cycles 100");
+		await prototype.handleKlermRoutingCommand.call(context, "cycles 101");
 		await prototype.handleKlermRoutingCommand.call(context, "cycles unlimited");
 		await prototype.handleKlermRoutingCommand.call(context, "status");
 
@@ -453,8 +454,9 @@ describe("interactive Klerm commands", () => {
 		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(1, true);
 		expect(routing.setHandbackEnabled).toHaveBeenNthCalledWith(2, false);
 		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(1, 5);
-		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(2, 999);
+		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(2, 100);
 		expect(routing.setMaxDelegationCycles).toHaveBeenNthCalledWith(3, 0);
+		expect(context.showError).toHaveBeenCalledWith("Usage: /routing cycles <3-100|unlimited>");
 		expect(context.showStatus).toHaveBeenLastCalledWith("Routing: Auto\nAgent 2 fallback: on");
 	});
 

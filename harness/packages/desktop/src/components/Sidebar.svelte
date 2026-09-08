@@ -1,13 +1,20 @@
 <script lang="ts">
-	import { Plus, Settings } from "@lucide/svelte";
-	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, parseStdioArgs } from "../lib/mcp-mentions.ts";
+	import { Pencil, Plus, Settings } from "@lucide/svelte";
+	import {
+		MCP_COLOR_BG_CSS,
+		MCP_COLOR_CSS,
+		MCP_COLORS,
+		mcpDisplayName,
+		mcpServerIdFromName,
+		parseStdioArgs,
+	} from "../lib/mcp-mentions.ts";
 	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus } from "../lib/model.ts";
 	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
 
 	let {
 		sessions,
-		activeSessionId,
+		activeSessionToken,
 		mcpStatus,
 		mcpBusy,
 		open,
@@ -25,7 +32,7 @@
 		ontogglesettings,
 	}: {
 		sessions: DesktopSession[];
-		activeSessionId: string;
+		activeSessionToken: string;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
 		open: boolean;
@@ -45,6 +52,7 @@
 
 	let mcpPopoverOpen = $state(false);
 	let addingMcp = $state(false);
+	let editingMcp = $state<McpServerStatus>();
 	let mcpName = $state("");
 	let mcpLabel = $state("");
 	let mcpColor = $state<McpColor>("base");
@@ -53,6 +61,7 @@
 	let mcpArgs = $state("");
 	let mcpUrl = $state("");
 	let mcpHeaders = $state("");
+	let mcpEnv = $state("");
 	let mcpFormError = $state("");
 	let mcpButtonEl = $state<HTMLButtonElement>();
 	let mcpPopoverEl = $state<HTMLDivElement>();
@@ -130,6 +139,49 @@
 		return headers;
 	}
 
+	function parseEnv(value: string): Record<string, string> | undefined {
+		const env: Record<string, string> = {};
+		for (const line of value.split("\n")) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			const separator = trimmed.indexOf("=");
+			const key = separator >= 0 ? trimmed.slice(0, separator).trim() : "";
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
+			env[key] = trimmed.slice(separator + 1);
+		}
+		return env;
+	}
+
+	function resetMcpForm(): void {
+		addingMcp = false;
+		editingMcp = undefined;
+		mcpName = "";
+		mcpLabel = "";
+		mcpColor = "base";
+		mcpTransport = "stdio";
+		mcpCommand = "";
+		mcpArgs = "";
+		mcpUrl = "";
+		mcpHeaders = "";
+		mcpEnv = "";
+		mcpFormError = "";
+	}
+
+	function startMcpEdit(server: McpServerStatus): void {
+		addingMcp = true;
+		editingMcp = server;
+		mcpName = server.name;
+		mcpLabel = server.label ?? server.name;
+		mcpColor = server.color ?? "base";
+		mcpTransport = server.transport;
+		mcpCommand = server.command ?? "";
+		mcpArgs = (server.args ?? []).join(" ");
+		mcpUrl = server.url ?? "";
+		mcpHeaders = "";
+		mcpEnv = (server.envKeys ?? []).map((key) => `${key}=`).join("\n");
+		mcpFormError = "";
+	}
+
 	function mcpDotStyle(server: McpServerStatus): string {
 		if (server.state === "failed") return "background: #f09b93";
 		if (server.state === "disabled") return "background: #59646d";
@@ -148,9 +200,10 @@
 
 	async function submitMcpServer(): Promise<void> {
 		mcpFormError = "";
-		const name = mcpName.trim();
+		const displayName = mcpLabel.trim() || mcpName.trim();
+		const name = editingMcp?.name ?? mcpServerIdFromName(displayName);
 		if (!name) {
-			mcpFormError = "Name is required.";
+			mcpFormError = "A name is required.";
 			return;
 		}
 		const headers = parseHeaders(mcpHeaders);
@@ -158,20 +211,26 @@
 			mcpFormError = "Headers must use Header-Name=value lines.";
 			return;
 		}
+		const env = parseEnv(mcpEnv);
+		if (!env) {
+			mcpFormError = "Environment must use NAME=value lines.";
+			return;
+		}
 		const server: McpServerUpdate =
 			mcpTransport === "stdio"
 				? {
 						name,
-						label: mcpLabel.trim() || undefined,
+						label: displayName || undefined,
 						color: mcpColor,
 						transport: "stdio",
 						command: mcpCommand.trim(),
 						args: parseStdioArgs(mcpArgs),
+						env,
 						enabled: true,
 					}
 				: {
 						name,
-						label: mcpLabel.trim() || undefined,
+						label: displayName || undefined,
 						color: mcpColor,
 						transport: mcpTransport,
 						url: mcpUrl.trim(),
@@ -180,14 +239,7 @@
 					};
 		const saved = await onaddmcpserver(server);
 		if (!saved) return;
-		mcpName = "";
-		mcpLabel = "";
-		mcpColor = "base";
-		mcpCommand = "";
-		mcpArgs = "";
-		mcpUrl = "";
-		mcpHeaders = "";
-		addingMcp = false;
+		resetMcpForm();
 	}
 </script>
 
@@ -205,7 +257,7 @@
 			}}
 		>
 			<span class={`h-1.75 w-1.75 shrink-0 rounded-full ${mcpDotClass}`}></span>
-			{#if !collapsedMode}<span>MCP {mcpStatus?.toolCount ?? 0}</span>{/if}
+			{#if !collapsedMode}<span>MCP {mcpServers.length}</span>{/if}
 		</button>
 		{#if mcpPopoverOpen}
 			<div bind:this={mcpPopoverEl} use:portal class="fixed z-30 flex flex-col overflow-hidden rounded-xl border border-[#303a42] bg-[#0d1217] shadow-[0_18px_46px_rgba(0,0,0,.52)]" style={mcpPopoverStyle}>
@@ -230,9 +282,9 @@
 									<span class="h-1.75 w-1.75 shrink-0 rounded-full" style={mcpDotStyle(server)}></span>
 									<div class="min-w-0 flex-1">
 										<strong class="block truncate font-mono text-[10px] text-[#d7dfe3]">{mcpDisplayName(server)}</strong>
-										{#if server.label}<small class="block truncate font-mono text-[7px] text-[#65727b]">{server.name}</small>{/if}
 									</div>
 									<span class="rounded border border-[#2f3941] px-1.5 py-0.5 font-mono text-[7px] text-[#75828b] uppercase">{server.transport}</span>
+									<button type="button" aria-label={`Edit ${mcpDisplayName(server)}`} class="grid h-5 w-5 place-items-center rounded border border-[#2f3941] text-[#9aa7ae] hover:border-[#65727b] hover:text-white" onclick={() => startMcpEdit(server)}><Pencil size={10} /></button>
 								</div>
 								<p class="m-0 mt-1 font-mono text-[8px] text-[#6e7a83]">{server.enabled ? server.state : "disabled"}</p>
 								{#if server.tools.length > 0}
@@ -251,8 +303,7 @@
 				<div class="shrink-0 border-t border-[#242d35] bg-[#0d1217] p-3">
 					{#if addingMcp}
 						<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void submitMcpServer(); }}>
-							<input bind:value={mcpName} placeholder="server name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
-							<input bind:value={mcpLabel} placeholder="display label, e.g. Google Maps" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
+							<input bind:value={mcpLabel} placeholder="MCP name, e.g. Notion" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 							<div class="grid grid-cols-4 gap-1">
 								{#each MCP_COLORS as color}
 									<button
@@ -296,19 +347,20 @@
 							{#if mcpTransport === "stdio"}
 								<input bind:value={mcpCommand} placeholder="command, e.g. npx" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 								<textarea bind:value={mcpArgs} rows="3" placeholder='-y @modelcontextprotocol/server-postgres postgresql://user:pass@host/db' class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
+								<textarea bind:value={mcpEnv} rows="2" placeholder="NOTION_TOKEN=..." class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
 							{:else}
 								<input bind:value={mcpUrl} placeholder="https://example.com/mcp" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 font-mono text-[10px] text-white outline-0" />
 								<textarea bind:value={mcpHeaders} rows="2" placeholder="optional non-secret Header=value" class="w-full resize-none rounded-md border border-[#2d3740] bg-[#0a0f13] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
 							{/if}
 							{#if mcpFormError}<p class="m-0 text-[9px] text-[#f3a49c]">{mcpFormError}</p>{/if}
-							<p class="m-0 text-[8px]/[1.35] text-[#65717a]">Stdio args may contain local credentials and are saved in Klerm settings. HTTP/SSE secret URLs or headers are rejected here.</p>
+							<p class="m-0 text-[8px]/[1.35] text-[#65717a]">STDIO environment values are saved in your local Klerm settings and are never shown after saving. HTTP/SSE secret URLs or headers are rejected here.</p>
 							<div class="flex gap-2">
-								<button type="button" class="h-8 flex-1 rounded-md border border-[#303a42] bg-transparent font-mono text-[9px] text-[#8c98a0]" onclick={() => (addingMcp = false)}>Cancel</button>
-								<button type="submit" class="h-8 flex-1 rounded-md border-0 bg-[#d7e7ff] font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>Save</button>
+								<button type="button" class="h-8 flex-1 rounded-md border border-[#303a42] bg-transparent font-mono text-[9px] text-[#8c98a0]" onclick={resetMcpForm}>Cancel</button>
+								<button type="submit" class="h-8 flex-1 rounded-md border-0 bg-[#d7e7ff] font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>{editingMcp ? "Save and reload" : "Save"}</button>
 							</div>
 						</form>
 					{:else}
-						<button type="button" class="h-9 w-full rounded-lg border border-[#34414a] bg-[#141b21] font-mono text-[10px] text-[#d6dde1] hover:border-[#56646e]" onclick={() => (addingMcp = true)}>Add more</button>
+						<button type="button" class="h-9 w-full rounded-lg border border-[#34414a] bg-[#141b21] font-mono text-[10px] text-[#d6dde1] hover:border-[#56646e]" onclick={() => { resetMcpForm(); addingMcp = true; }}>Add more</button>
 					{/if}
 				</div>
 			</div>
@@ -394,10 +446,10 @@
 				{#if sessions.length === 0}
 					<p class="px-[11px] py-2 text-[11px] text-muted">No saved sessions yet.</p>
 				{:else}
-					{#each sessions.slice(0, 30) as session (session.id)}
+					{#each sessions.slice(0, 30) as session (session.sessionToken)}
 						<SessionRow
 							{session}
-							active={session.id === activeSessionId}
+							active={session.sessionToken === activeSessionToken}
 							onswitch={() => onswitch(session)}
 							onrename={(name) => onrename(session, name)}
 							ondelete={() => ondelete(session)}

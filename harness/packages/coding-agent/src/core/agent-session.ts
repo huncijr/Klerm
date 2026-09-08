@@ -47,7 +47,11 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
-import { resolveMcpPromptMentions } from "../klerm/mcp/extension.ts";
+import {
+	findMissingMcpSelections,
+	resolveMcpPromptMentions,
+	resolveMcpPromptSelection,
+} from "../klerm/mcp/extension.ts";
 import type { McpPromptMention } from "../klerm/mcp/runtime.ts";
 import {
 	type KlermEnforcedDelegation,
@@ -62,7 +66,16 @@ import {
 	type KlermRoutingState,
 	type KlermWorkerLane,
 } from "../klerm/router/types.ts";
-import { type KlermToolApprovalCategory, requiresBuilderApproval, toolPath } from "../klerm/tool-policy.ts";
+import { createSessionTitle } from "../klerm/session-title.ts";
+import {
+	isPlannerReadOnlyShellCommand,
+	isSensitiveToolCall,
+	isVerificationToolCall,
+	isWorkspaceMutationToolCall,
+	type KlermToolApprovalCategory,
+	requiresBuilderApproval,
+	toolPath,
+} from "../klerm/tool-policy.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -398,6 +411,12 @@ export class AgentSession {
 	private _klermBuilderTools?: AgentTool[];
 	private readonly _klermBuilderApprovedCategories = new Set<KlermToolApprovalCategory>();
 	private readonly _klermBuilderChangedPaths = new Set<string>();
+	private readonly _klermSuccessfulChangedPaths = new Set<string>();
+	private _klermSuccessfulMutations = 0;
+	private _klermSuccessfulVerifications = 0;
+	private _klermBuilderParticipated = false;
+	private _klermBlockedMutation = false;
+	private _klermCompletionFailureReason?: string;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -545,6 +564,17 @@ export class AgentSession {
 					reason: "Klerm routing tools must be called alone in a model turn. Retry the routing call separately.",
 				};
 			}
+			const capability = this._toolDefinitions.get(toolCall.name)?.definition.klermCapability;
+			if (this._klermRoutingController?.activeWorkerRole === "planner") {
+				const allowed = this._klermRoutingController.isToolAllowedForActiveRole(toolCall.name, capability);
+				const safeShell = toolCall.name !== "bash" || isPlannerReadOnlyShellCommand(args);
+				if (!allowed || !safeShell || isSensitiveToolCall(toolCall.name, args)) {
+					return {
+						block: true,
+						reason: `Planner mode blocked non-read-only tool call: ${toolCall.name}.`,
+					};
+				}
+			}
 			if (this._klermRoutingController?.activeWorkerRole === "builder") {
 				const path = toolPath(toolCall.name, args);
 				const changedPath = (toolCall.name === "edit" || toolCall.name === "write") && path ? path : undefined;
@@ -554,14 +584,27 @@ export class AgentSession {
 						: this._klermBuilderChangedPaths.size;
 				const approval = requiresBuilderApproval(toolCall.name, args, changedFileCount);
 				if (approval && !this._klermBuilderApprovedCategories.has(approval.category)) {
+					const mode = this._klermRoutingController.activeBuilderApprovalMode;
+					const interactive = mode === "risky";
 					const approved =
-						this._extensionRunner.hasUI() &&
-						(await this._extensionRunner.getUIContext().confirm(approval.title, approval.message, {
-							signal,
-							timeout: 120_000,
-						}));
-					this._recordKlermToolApproval(toolCall.name, approval.category, approved);
+						mode === "always" ||
+						(interactive &&
+							this._extensionRunner.hasUI() &&
+							(await this._extensionRunner.getUIContext().confirm(approval.title, approval.message, {
+								signal,
+								timeout: 120_000,
+							})));
+					this._recordKlermToolApproval(
+						toolCall.name,
+						approval.category,
+						approved,
+						mode,
+						interactive ? "interactive" : "automatic",
+					);
 					if (!approved) {
+						if (isWorkspaceMutationToolCall(toolCall.name, args, capability)) {
+							this._klermBlockedMutation = true;
+						}
 						return {
 							block: true,
 							reason: `Builder action was not approved: ${approval.category}.`,
@@ -606,6 +649,8 @@ export class AgentSession {
 					})
 				: undefined;
 
+			const effectiveIsError = hookResult?.isError ?? isError;
+			this._recordKlermExecutionEvidence(toolCall.name, args, effectiveIsError);
 			const content = hookResult?.content ?? result.content ?? [];
 			// Runs after the extension hook so images injected or replaced by extensions are normalized too.
 			const normalizedContent = await normalizeToolResultImages(content, {
@@ -619,13 +664,36 @@ export class AgentSession {
 			return {
 				content: normalizedContent,
 				details: hookResult?.details,
-				isError: hookResult?.isError ?? isError,
+				isError: effectiveIsError,
 				usage: hookResult?.usage,
 			};
 		};
 	}
 
-	private _recordKlermToolApproval(toolName: string, category: KlermToolApprovalCategory, approved: boolean): void {
+	private _recordKlermExecutionEvidence(toolName: string, args: unknown, isError: boolean): void {
+		if (isError || this._klermRoutingController?.activeWorkerRole !== "builder") return;
+		const capability = this._toolDefinitions.get(toolName)?.definition.klermCapability;
+		if (isWorkspaceMutationToolCall(toolName, args, capability)) {
+			this._klermSuccessfulMutations++;
+			const path = toolPath(toolName, args);
+			if (path) this._klermSuccessfulChangedPaths.add(path);
+			return;
+		}
+		if (
+			this._klermSuccessfulMutations > 0 &&
+			isVerificationToolCall(toolName, args, this._klermSuccessfulChangedPaths)
+		) {
+			this._klermSuccessfulVerifications++;
+		}
+	}
+
+	private _recordKlermToolApproval(
+		toolName: string,
+		category: KlermToolApprovalCategory,
+		approved: boolean,
+		mode: "always" | "risky" | "never",
+		source: "automatic" | "interactive",
+	): void {
 		const controller = this._klermRoutingController;
 		if (!controller) return;
 		const entryId = this.sessionManager.appendCustomEntry("klerm-tool-approval", {
@@ -636,6 +704,8 @@ export class AgentSession {
 			toolName,
 			category,
 			approved,
+			mode,
+			source,
 			timestamp: new Date().toISOString(),
 		});
 		const entry = this.sessionManager.getEntry(entryId);
@@ -653,7 +723,12 @@ export class AgentSession {
 				this.agent.state.model,
 				controller.routingState,
 			);
-			return controller.activeWorkerRole === "planner" ? projectKlermPlannerContext(handoffContext) : handoffContext;
+			return controller.activeWorkerRole === "planner"
+				? projectKlermPlannerContext(
+						handoffContext,
+						(toolName) => this._toolDefinitions.get(toolName)?.definition.klermCapability,
+					)
+				: handoffContext;
 		};
 	}
 
@@ -677,8 +752,10 @@ export class AgentSession {
 					...previousContext,
 					systemPrompt,
 					tools:
-						this._klermRoutingController?.filterToolsForActiveRole(this.agent.state.tools) ??
-						this.agent.state.tools.slice(),
+						this._klermRoutingController?.filterToolsForActiveRole(
+							this.agent.state.tools,
+							(toolName) => this._toolDefinitions.get(toolName)?.definition.klermCapability,
+						) ?? this.agent.state.tools.slice(),
 				},
 				model: this.agent.state.model,
 				thinkingLevel: this.agent.state.thinkingLevel,
@@ -750,11 +827,14 @@ export class AgentSession {
 		if (controller.activeWorkerRole === "planner") {
 			this._klermBuilderTools ??= this.agent.state.tools.slice();
 			const tools = new Map(this._klermBuilderTools.map((tool) => [tool.name, tool]));
-			for (const name of ["find", "ls"]) {
+			for (const name of ["read", "grep", "find", "ls", "bash"]) {
 				const tool = this._toolRegistry.get(name);
 				if (tool) tools.set(name, tool);
 			}
-			this.agent.state.tools = controller.filterToolsForActiveRole([...tools.values()]);
+			this.agent.state.tools = controller.filterToolsForActiveRole(
+				[...tools.values()],
+				(toolName) => this._toolDefinitions.get(toolName)?.definition.klermCapability,
+			);
 			return;
 		}
 		if (this._klermBuilderTools) {
@@ -1319,7 +1399,12 @@ export class AgentSession {
 		restoreThinkingLevel?: ThinkingLevel,
 	): Promise<void> {
 		try {
-			await this._klermRoutingController?.recordCompletion(success);
+			await this._klermRoutingController?.recordCompletion(success, {
+				reason: this._klermCompletionFailureReason,
+				changedFileCount: this._klermSuccessfulChangedPaths.size,
+				verificationCount: this._klermSuccessfulVerifications,
+				openIssueCount: success ? 0 : this._klermCompletionFailureReason ? 1 : undefined,
+			});
 		} finally {
 			if (restoreModel) await this._applyRoutedModel(restoreModel, true, restoreThinkingLevel);
 			if (this._klermRoutingController) {
@@ -1330,18 +1415,40 @@ export class AgentSession {
 		}
 	}
 
+	private _klermExecutionContractIssue(): "mutation" | "verification" | undefined {
+		if (
+			this._klermRoutingController?.routingState.taskIntent !== "workspace-change" ||
+			!this._klermBuilderParticipated
+		) {
+			return undefined;
+		}
+		if (this._klermSuccessfulMutations === 0) return "mutation";
+		if (this._klermSuccessfulVerifications === 0) return "verification";
+		return undefined;
+	}
+
 	private async _runAgentPrompt(
 		messages: AgentMessage | AgentMessage[],
 		restoreModel?: Model<any>,
 		restoreThinkingLevel?: ThinkingLevel,
+		requiredMcpTools: Array<{ serverName: string; tools: string[] }> = [],
 	): Promise<void> {
 		this._isAgentRunActive = true;
 		let succeeded = false;
+		const runStartIndex = this.agent.state.messages.length;
+		let mcpCorrectionSent = false;
+		let executionCorrectionSent = false;
 		try {
 			let nextMessages = messages;
 			while (true) {
+				if (this._klermRoutingController?.activeWorkerRole === "builder") {
+					this._klermBuilderParticipated = true;
+				}
 				await this.agent.prompt(nextMessages);
 				while (await this._handlePostAgentRun()) {
+					if (this._klermRoutingController?.activeWorkerRole === "builder") {
+						this._klermBuilderParticipated = true;
+					}
 					await this.agent.continue();
 				}
 				const lastAssistant = [...this.agent.state.messages]
@@ -1365,6 +1472,62 @@ export class AgentSession {
 					enforcedDelegation ??= await this._klermRoutingController.enforceRequiredFrontierDelegation(response);
 				}
 				if (!enforcedDelegation) {
+					const calledTools = new Set(
+						this.agent.state.messages
+							.slice(runStartIndex)
+							.flatMap((message) =>
+								message.role === "assistant"
+									? message.content.filter((part) => part.type === "toolCall").map((part) => part.name)
+									: [],
+							),
+					);
+					const missingServers = findMissingMcpSelections(requiredMcpTools, calledTools);
+					if (missingServers.length > 0 && !mcpCorrectionSent) {
+						mcpCorrectionSent = true;
+						nextMessages = {
+							role: "user",
+							content: [
+								{
+									type: "text",
+									text: `You answered without using the required MCP server${missingServers.length === 1 ? "" : "s"}: ${missingServers.map((item) => item.serverName).join(", ")}. Call at least one of each server's listed MCP tools now, then answer from the actual results.`,
+								},
+							],
+							timestamp: Date.now(),
+						};
+						continue;
+					}
+					const executionIssue = this._klermExecutionContractIssue();
+					if (executionIssue && this._klermBlockedMutation && this._klermSuccessfulMutations === 0) {
+						this._klermCompletionFailureReason =
+							"workspace change was blocked because the required mutation was not approved";
+						succeeded = false;
+						break;
+					}
+					if (executionIssue && !executionCorrectionSent) {
+						executionCorrectionSent = true;
+						nextMessages = {
+							role: "user",
+							content: [
+								{
+									type: "text",
+									text:
+										executionIssue === "mutation"
+											? "This is a workspace-change task, but no successful modifying tool call occurred. Implement the requested change with the available tools now, then run a relevant verification. Do not return another plan. If a concrete blocker prevents implementation, state it precisely."
+											: "The workspace was modified, but no successful verification tool call followed. Run a relevant read, diff, check, or focused test now, then report the verified result. If verification is blocked, state the concrete blocker precisely.",
+								},
+							],
+							timestamp: Date.now(),
+						};
+						continue;
+					}
+					if (executionIssue) {
+						this._klermCompletionFailureReason =
+							executionIssue === "mutation"
+								? "workspace-change task ended without a successful mutation"
+								: "workspace-change task ended without successful verification";
+						succeeded = false;
+						break;
+					}
 					succeeded = true;
 					break;
 				}
@@ -1455,11 +1618,18 @@ export class AgentSession {
 		let routedPromptStarted = false;
 		let restoreModel: Model<any> | undefined;
 		let restoreThinkingLevel: ThinkingLevel | undefined;
+		let requiredMcpTools: Array<{ serverName: string; tools: string[] }> = [];
 
 		try {
 			if (!this.isStreaming) {
 				this._klermBuilderApprovedCategories.clear();
 				this._klermBuilderChangedPaths.clear();
+				this._klermSuccessfulChangedPaths.clear();
+				this._klermSuccessfulMutations = 0;
+				this._klermSuccessfulVerifications = 0;
+				this._klermBuilderParticipated = false;
+				this._klermBlockedMutation = false;
+				this._klermCompletionFailureReason = undefined;
 			}
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
@@ -1497,6 +1667,7 @@ export class AgentSession {
 					currentImages = inputResult.images ?? currentImages;
 				}
 			}
+			if (!this.sessionName && currentText.trim()) this.setSessionName(createSessionTitle(currentText));
 
 			// Expand skill commands (/skill:name args) and prompt templates (/template args)
 			let expandedText = currentText;
@@ -1546,6 +1717,11 @@ export class AgentSession {
 				new Set(this.agent.state.tools.map((tool) => tool.name)),
 			);
 			if (mcpInstruction) modelText = `${modelText}\n\n${mcpInstruction}`;
+			requiredMcpTools = resolveMcpPromptSelection(
+				this.settingsManager,
+				options?.mcpMentions ?? [],
+				new Set(this.agent.state.tools.map((tool) => tool.name)),
+			).map(({ serverName, tools }) => ({ serverName, tools }));
 
 			// Flush any pending bash messages before the new prompt
 			this._flushPendingBashMessages();
@@ -1638,7 +1814,7 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		await this._runAgentPrompt(messages, restoreModel, restoreThinkingLevel);
+		await this._runAgentPrompt(messages, restoreModel, restoreThinkingLevel, requiredMcpTools);
 	}
 
 	/**
