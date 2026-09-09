@@ -84,6 +84,10 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 		if (programFilesX86) {
 			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
 		}
+		const localAppData = process.env.LOCALAPPDATA;
+		if (localAppData) {
+			paths.push(`${localAppData}\\Programs\\Git\\bin\\bash.exe`);
+		}
 
 		for (const path of paths) {
 			if (existsSync(path)) {
