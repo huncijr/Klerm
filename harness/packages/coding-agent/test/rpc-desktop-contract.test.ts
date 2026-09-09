@@ -238,6 +238,14 @@ describe("Klerm desktop RPC contract", () => {
 				data: { runtimes: [{ providerId: "ollama", models: [{ id: "qwen3" }] }] },
 			});
 
+			const invalidImage = await send({
+				id: "invalid-image",
+				type: "prompt",
+				message: "describe",
+				images: [{ type: "image", mimeType: "image/png", data: "not-base64" }],
+			});
+			expect(invalidImage).toMatchObject({ success: false, code: "INVALID_IMAGE_ATTACHMENT" });
+
 			const desktopSettings = await send({ id: "desktop-settings", type: "get_desktop_settings" });
 			expect(desktopSettings).toMatchObject({
 				success: true,

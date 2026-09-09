@@ -1,4 +1,4 @@
-import type { AgentMessage, TimelineTone } from "./model.ts";
+import type { AgentContentPart, AgentMessage, ImageAttachment, TimelineTone } from "./model.ts";
 
 export const TIMELINE_PREVIEW_LINES = 24;
 const MCP_TOOL_PATTERN = /^mcp_/;
@@ -9,6 +9,37 @@ export function messageText(message: AgentMessage): string {
 		.filter((part) => part.type === "text" && typeof part.text === "string")
 		.map((part) => part.text)
 		.join("\n");
+}
+
+const DISPLAY_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+export function contentImages(content: string | AgentContentPart[] | undefined): ImageAttachment[] {
+	if (!Array.isArray(content)) return [];
+	return content.flatMap((part) =>
+		part.type === "image" &&
+		typeof part.data === "string" &&
+		typeof part.mimeType === "string" &&
+		DISPLAY_IMAGE_MIME_TYPES.has(part.mimeType)
+			? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }]
+			: [],
+	);
+}
+
+export function imageDataUrl(image: ImageAttachment): string | undefined {
+	return DISPLAY_IMAGE_MIME_TYPES.has(image.mimeType) && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data)
+		? `data:${image.mimeType};base64,${image.data}`
+		: undefined;
+}
+
+export function taskCompletionTitle(
+	taskStopping: boolean,
+	taskHadErrors: boolean,
+	outcomeTitle: string | undefined,
+	failed: boolean,
+): string {
+	if (taskStopping) return "Task stopped";
+	if (taskHadErrors && !failed) return "Task completed with errors";
+	return outcomeTitle ?? (failed ? "Task failed" : "Task completed");
 }
 
 export function toDisplayText(value: unknown): string {
@@ -80,6 +111,10 @@ export function describeToolCall(
 	if (toolName === "bash") {
 		const command = typeof record.command === "string" ? truncateText(record.command, 4) : "";
 		return { kind: "command", label: command || "Ran command", detail: command, detailType: "code", tone: "neutral" };
+	}
+	if (toolName === "generate_image") {
+		const prompt = typeof record.prompt === "string" ? truncateText(record.prompt, 4) : "";
+		return { kind: "image", label: "Generating image", detail: prompt, tone: "blue" };
 	}
 	return { kind: toolName, label: toolName, detail: "", tone: "neutral" };
 }

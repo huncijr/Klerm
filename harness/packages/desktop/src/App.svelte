@@ -3,9 +3,11 @@
 	import { open as openDialog } from "@tauri-apps/plugin-dialog";
 	import { onMount } from "svelte";
 	import {
+		contentImages,
 		describeToolCall,
 		messageText,
 		resultErrorText,
+		taskCompletionTitle,
 		toolResultDetails,
 		toDisplayText,
 		truncateText,
@@ -21,6 +23,7 @@
 		DesktopSession,
 		EditorInfo,
 		FeedItem,
+		ImageAttachment,
 		JsonObject,
 		KlermConfig,
 		KlermProfile,
@@ -84,6 +87,7 @@
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
 	let draft = $state("");
+	let attachments = $state<ImageAttachment[]>([]);
 	let sidebarOpen = $state(false);
 	let sessionsExpanded = $state(true);
 	let sessionWidth = $state(280);
@@ -513,6 +517,9 @@
 		const entry = feed.find((candidate) => candidate.type === "activity" && candidate.activity.id === existingId);
 		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (!item) return;
+		const result = event.result as { content?: AgentMessage["content"] } | undefined;
+		const images = contentImages(result?.content);
+		if (images.length > 0) item.images = images;
 		if (event.isError === true) {
 			const errorText = resultErrorText(event.result) ?? "Tool execution failed";
 			recordTaskError(errorText);
@@ -591,12 +598,14 @@
 			const message = entry.message;
 			if (message.role === "user" || message.role === "assistant") {
 				const text = message.role === "user" && displayPrompt ? displayPrompt : messageText(message);
+				const images = contentImages(message.content);
 				if (message.role === "user") displayPrompt = undefined;
-				if (text) {
+				if (text || images.length > 0) {
 					pushMessage({
 						id: ++messageSeq,
 						role: message.role,
 						text,
+						images,
 						model: message.role === "assistant" ? modelLabel(message) : undefined,
 						streaming: false,
 					});
@@ -733,9 +742,7 @@
 					pushTimeline(
 						"task",
 						failed ? "red" : taskHadErrors ? "amber" : "neutral",
-						taskHadErrors && !failed
-							? "Task completed with errors"
-							: outcomeTitle ?? (failed ? "Task failed" : taskStopping ? "Task stopped" : "Task completed"),
+						taskCompletionTitle(taskStopping, taskHadErrors, outcomeTitle, failed),
 						completionDetail,
 						failed ? "error" : "settled",
 					);
@@ -779,17 +786,20 @@
 				taskSawAssistant = true;
 				lastAssistantStopReason = completedMessage.stopReason;
 				const finalText = messageText(completedMessage);
+				const images = contentImages(completedMessage.content);
 				const item = findMessage(streamingMessageId);
 				if (item) {
 					item.text = finalText || item.text;
+					item.images = images;
 					item.streaming = false;
 					if (completedMessage.model) item.model = modelLabel(completedMessage);
-					if (!item.text) removeMessage(item.id);
-				} else if (finalText) {
+					if (!item.text && images.length === 0) removeMessage(item.id);
+				} else if (finalText || images.length > 0) {
 					pushMessage({
 						id: ++messageSeq,
 						role: "assistant",
 						text: finalText,
+						images,
 						model: modelLabel(completedMessage),
 						streaming: false,
 					});
@@ -1261,6 +1271,7 @@
 			]);
 			lastState = state;
 			clearFeed();
+			attachments = [];
 			renderSessionEntries(entries.entries ?? [], entries.leafId);
 			await refreshThinkingLevels();
 			sessionTitle = state.sessionName ?? session.name ?? session.firstMessage;
@@ -1286,6 +1297,7 @@
 				const transition = await bridge.send<{ cancelled: boolean }>("new_session");
 				if (transition.cancelled) return;
 				clearFeed();
+				attachments = [];
 				sessionTitle = "New Agent 1 session";
 				lastState = await bridge.send<SessionState>("get_state");
 				sessionCwd = lastState.cwd;
@@ -1556,6 +1568,7 @@
 			const transition = await bridge.send<{ cancelled: boolean }>("new_session");
 			if (transition.cancelled) return;
 			clearFeed();
+			attachments = [];
 			lastState = await bridge.send<SessionState>("get_state");
 			sessionTitle = "New Agent 1 session";
 			sessionCwd = lastState.cwd;
@@ -1607,8 +1620,8 @@
 		}
 	}
 
-	async function sendMessage(text: string): Promise<void> {
-		if (!text || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+	async function sendMessage(text: string, images: ImageAttachment[] = []): Promise<void> {
+		if ((!text && images.length === 0) || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
 		buildModeOffer = undefined;
 		bottomPanelOpen = false;
 		bottomPanelRevealed = true;
@@ -1621,15 +1634,17 @@
 		taskSawAssistant = false;
 		lastAssistantStopReason = undefined;
 		activeTaskKey = ++taskSeq;
-		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, streaming: false });
+		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, images: [...images], streaming: false });
 		try {
 			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
 			await bridge.send("prompt", {
 				message: preparedPrompt.message,
 				displayMessage: text,
 				mcpMentions: preparedPrompt.mentions,
+				images: images.map(({ data, mimeType }) => ({ type: "image", data, mimeType })),
 			});
 			if (draft.trim() === text) draft = "";
+			attachments = [];
 		} catch (error) {
 			taskActive = false;
 			activeTaskKey = 0;
@@ -1844,6 +1859,7 @@
 
 		<Composer
 			bind:draft
+			bind:attachments
 			sendDisabled={sendDisabled}
 			{taskActive}
 			showMeta={hasConversation}
@@ -1879,7 +1895,8 @@
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			{buildModeOffer}
-			onsend={(text) => void sendMessage(text)}
+			onsend={(text, images) => void sendMessage(text, images)}
+			onattachmenterror={showError}
 			onstop={() => void stopTask()}
 			onlocalchange={(value) => applyConfigUpdate({ localModel: value })}
 			onfrontierchange={(value) => applyConfigUpdate({ frontierModel: value })}

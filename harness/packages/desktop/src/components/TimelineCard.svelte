@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { imageDataUrl } from "../lib/helpers.ts";
 	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS } from "../lib/mcp-mentions.ts";
 	import type { TimelineItem } from "../lib/model.ts";
 
@@ -87,5 +88,13 @@
 		{:else}
 			<pre class={`m-0 overflow-hidden px-3 pb-2.5 font-mono text-[9px]/[1.55] whitespace-pre-wrap break-words ${detailClass[item.tone]}`}>{item.detail}</pre>
 		{/if}
+	{/if}
+	{#if item.images?.length}
+		<div class="grid grid-cols-2 gap-2 px-3 pb-3">
+			{#each item.images as image, index (`${index}-${image.mimeType}-${image.data.length}`)}
+				{@const src = imageDataUrl(image)}
+				{#if src}<a href={src} download={`klerm-tool-image-${index + 1}`}><img src={src} alt={`Tool result ${index + 1}`} class="max-h-72 w-full rounded-md border border-[#303940] bg-[#080b0e] object-contain" /></a>{/if}
+			{/each}
+		</div>
 	{/if}
 </article>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, Hammer, ListTodo, Send, Square } from "@lucide/svelte";
+	import { ChevronDown, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -9,8 +9,10 @@
 		type McpSuggestion,
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
+	import { imageDataUrl } from "../lib/helpers.ts";
 	import type {
 		ApprovalMode,
+		ImageAttachment,
 		KlermProfile,
 		McpColor,
 		McpServerStatus,
@@ -23,6 +25,7 @@
 
 	let {
 		draft = $bindable(""),
+		attachments = $bindable([]),
 		sendDisabled,
 		taskActive,
 		showMeta,
@@ -59,6 +62,7 @@
 		roleDisabled,
 		buildModeOffer,
 		onsend,
+		onattachmenterror,
 		onstop,
 		onlocalchange,
 		onfrontierchange,
@@ -75,6 +79,7 @@
 		onbuildofferswitch,
 	}: {
 		draft: string;
+		attachments: ImageAttachment[];
 		sendDisabled: boolean;
 		taskActive: boolean;
 		showMeta: boolean;
@@ -110,7 +115,8 @@
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
-		onsend: (text: string) => void;
+		onsend: (text: string, images: ImageAttachment[]) => void;
+		onattachmenterror: (message: string) => void;
 		onstop: () => void;
 		onlocalchange: (value: string) => void;
 		onfrontierchange: (value: string) => void;
@@ -136,6 +142,7 @@
 	];
 
 	let promptEl: HTMLTextAreaElement | undefined = $state();
+	let fileEl: HTMLInputElement | undefined = $state();
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
 	let roleMenuOpen = $state(false);
@@ -224,7 +231,7 @@
 
 	function submit(): void {
 		const text = draft.trim();
-		if (!text || sendDisabled) return;
+		if ((!text && attachments.length === 0) || sendDisabled) return;
 		if (text === "/mode") {
 			draft = "";
 			roleMenuOpen = true;
@@ -232,7 +239,44 @@
 		}
 		historyIndex = -1;
 		draftBeforeHistory = "";
-		onsend(text);
+		onsend(text, attachments);
+	}
+
+	async function attachImages(event: Event): Promise<void> {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = [...(input.files ?? [])];
+		input.value = "";
+		const available = Math.max(0, 8 - attachments.length);
+		if (files.length > available) onattachmenterror("You can attach up to 8 images.");
+		for (const file of files.slice(0, available)) {
+			if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)) {
+				onattachmenterror(`${file.name} is not a supported PNG, JPEG, GIF, or WebP image.`);
+				continue;
+			}
+			if (file.size > 10 * 1024 * 1024) {
+				onattachmenterror(`${file.name} is larger than 10 MiB.`);
+				continue;
+			}
+			let dataUrl: string;
+			try {
+				dataUrl = await new Promise<string>((resolve, reject) => {
+					const reader = new FileReader();
+					reader.onload = () => resolve(String(reader.result ?? ""));
+					reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.name}.`));
+					reader.readAsDataURL(file);
+				});
+			} catch {
+				onattachmenterror(`Could not read ${file.name}.`);
+				continue;
+			}
+			const marker = ";base64,";
+			const markerIndex = dataUrl.indexOf(marker);
+			if (markerIndex < 0) continue;
+			attachments = [
+				...attachments,
+				{ type: "image", mimeType: file.type, data: dataUrl.slice(markerIndex + marker.length), name: file.name },
+			];
+		}
 	}
 
 	function navigateHistory(direction: -1 | 1): void {
@@ -435,7 +479,21 @@
 			submit();
 		}}
 	>
-		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-4 narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[13px]">
+		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-[55px] narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[49px]">
+			<input bind:this={fileEl} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple class="hidden" onchange={(event) => void attachImages(event)} />
+			{#if attachments.length > 0}
+				<div class="flex gap-2 overflow-x-auto pt-2 pb-1">
+					{#each attachments as image, index (`${image.name ?? index}-${image.data.length}`)}
+						{@const src = imageDataUrl(image)}
+						{#if src}
+							<div class="group relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-[#364149] bg-[#080b0e]">
+								<img src={src} alt={image.name ?? `Attachment ${index + 1}`} class="h-full w-full object-cover" />
+								<button type="button" aria-label={`Remove ${image.name ?? `attachment ${index + 1}`}`} class="absolute top-0.5 right-0.5 grid h-5 w-5 place-items-center rounded bg-black/80 text-white opacity-80 hover:opacity-100" onclick={() => (attachments = attachments.filter((_, candidate) => candidate !== index))}><X size={11} /></button>
+							</div>
+						{/if}
+					{/each}
+				</div>
+			{/if}
 			{#if mcpPickerOpen}
 				<div class="absolute right-3 bottom-[56px] left-3 z-30 max-h-[220px] overflow-y-auto rounded-lg border border-[rgba(88,132,196,.45)] bg-[#0c131c] p-1.5 shadow-[0_18px_42px_rgba(0,0,0,.5)] narrow-520:bottom-[50px]">
 					{#if filteredMcpSuggestions.length === 0}
@@ -483,6 +541,15 @@
 					oninput={handleInput}
 				></textarea>
 			</div>
+			<button
+				type="button"
+				aria-label="Attach images"
+				disabled={sendDisabled || taskActive || attachments.length >= 8}
+				class="absolute bottom-2.5 left-[9px] grid h-[38px] w-[38px] cursor-pointer place-items-center rounded-lg border border-[#293239] bg-[#11171c] text-[#9ba5ac] hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 narrow-520:bottom-[7px] narrow-520:left-[7px] narrow-520:h-9 narrow-520:w-9"
+				onclick={() => fileEl?.click()}
+			>
+				<Plus size={17} stroke-width={1.7} />
+			</button>
 			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
 				<button
 					type="button"
@@ -532,7 +599,7 @@
 					<button
 						type="submit"
 						aria-label="Send task"
-						disabled={sendDisabled}
+						disabled={sendDisabled || (!draft.trim() && attachments.length === 0)}
 						class="grid h-full w-full cursor-pointer place-items-center rounded-lg border-0 bg-[#e1e6e9] text-[#0b0e10] enabled:hover:bg-white disabled:cursor-not-allowed disabled:bg-[#20272c] disabled:text-[#51585d]"
 					>
 						<Send size={17} stroke-width={1.7} />

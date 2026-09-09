@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
+import { createImageGenerationExtension } from "../klerm/image-extension.ts";
 import { createMcpExtension } from "../klerm/mcp/extension.ts";
 import { createProfileExtension } from "../klerm/profile-extension.ts";
 import type { KlermRoutingController } from "../klerm/router/runtime.ts";
@@ -155,6 +156,11 @@ export async function createAgentSessionServices(
 		extensionFactories: [
 			{ name: "klerm-mcp", factory: createMcpExtension(settingsManager, cwd), hidden: true },
 			{ name: "klerm-profiles", factory: createProfileExtension(settingsManager), hidden: true },
+			{
+				name: "klerm-images",
+				factory: createImageGenerationExtension(),
+				hidden: true,
+			},
 			...(resourceLoaderOptions.extensionFactories ?? []),
 		],
 		cwd,

@@ -317,15 +317,25 @@ export interface AgentMessage {
 export interface AgentContentPart {
 	type: string;
 	text?: string;
+	data?: string;
+	mimeType?: string;
 	id?: string;
 	name?: string;
 	arguments?: Record<string, unknown>;
+}
+
+export interface ImageAttachment {
+	type: "image";
+	data: string;
+	mimeType: string;
+	name?: string;
 }
 
 export interface ChatMessage {
 	id: number;
 	role: "user" | "assistant";
 	text: string;
+	images?: ImageAttachment[];
 	model?: string;
 	streaming: boolean;
 }
@@ -347,6 +357,7 @@ export interface TimelineItem {
 	status: TimelineStatus;
 	open: boolean;
 	detailType?: "text" | "diff" | "code";
+	images?: ImageAttachment[];
 	dedupeId?: string;
 	mcp?: {
 		serverName: string;

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Check, PencilLine, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
+	import { imageDataUrl } from "../lib/helpers.ts";
 	import { MCP_COLOR_BG_CSS, MCP_COLOR_CSS, splitMcpMentions } from "../lib/mcp-mentions.ts";
 	import type { ChatMessage, McpServerStatus } from "../lib/model.ts";
 	import MarkdownLite from "./MarkdownLite.svelte";
@@ -103,6 +104,18 @@
 			{/each}
 		{/if}
 		{#if message.streaming}<span class="ml-[3px] inline-block h-[13px] w-[5px] animate-pulse bg-[#8b969e] align-[-2px]"></span>{/if}
+		{#if message.images?.length}
+			<div class={`mt-3 grid gap-2 ${message.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+				{#each message.images as image, index (`${index}-${image.mimeType}-${image.data.length}`)}
+					{@const src = imageDataUrl(image)}
+					{#if src}
+						<a href={src} download={image.name ?? `klerm-image-${index + 1}`} class="block overflow-hidden rounded-lg border border-[#303940] bg-[#080b0e]" aria-label={`Open ${image.name ?? `image ${index + 1}`}`}>
+							<img src={src} alt={image.name ?? `Attached image ${index + 1}`} class="block max-h-[420px] w-full object-contain" />
+						</a>
+					{/if}
+				{/each}
+			</div>
+		{/if}
 	</div>
 	{/if}
 </article>

@@ -56,6 +56,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
+import { normalizeRpcImages } from "./rpc-images.ts";
 import type {
 	RpcCommand,
 	RpcDesktopSessionInfo,
@@ -1563,6 +1564,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 
 			case "prompt": {
+				const normalizedImages = await normalizeRpcImages(command.images);
+				if (!normalizedImages.ok) {
+					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
+				}
 				const mcpMentions: unknown = command.mcpMentions;
 				if (
 					mcpMentions !== undefined &&
@@ -1586,7 +1591,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				let preflightSucceeded = false;
 				void session
 					.prompt(command.message, {
-						images: command.images,
+						images: normalizedImages.images,
 						mcpMentions: command.mcpMentions,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
@@ -1611,12 +1616,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "steer": {
-				await session.steer(command.message, command.images);
+				const normalizedImages = await normalizeRpcImages(command.images);
+				if (!normalizedImages.ok) return error(id, "steer", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
+				await session.steer(command.message, normalizedImages.images);
 				return success(id, "steer");
 			}
 
 			case "follow_up": {
-				await session.followUp(command.message, command.images);
+				const normalizedImages = await normalizeRpcImages(command.images);
+				if (!normalizedImages.ok) {
+					return error(id, "follow_up", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
+				}
+				await session.followUp(command.message, normalizedImages.images);
 				return success(id, "follow_up");
 			}
 
