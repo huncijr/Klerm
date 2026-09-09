@@ -601,6 +601,7 @@ export class KlermRoutingController {
 					? [
 							"Execution contract: use tools to implement the requested change. Do not stop after a plan or code snippet.",
 							"After modifying the workspace, run a relevant verification tool. If implementation is blocked, state the concrete blocker instead of claiming completion.",
+							"If the result is a runnable website, service, or Docker application, start it in the background, verify that its local listener is reachable, and report the usable localhost URL before finishing.",
 						]
 					: []),
 				`Agent 2 delegation cycle: ${this.state.delegationCycle ?? 0}/${this.config.maxDelegationCycles || "unlimited"}`,
@@ -678,6 +679,7 @@ export class KlermRoutingController {
 					? [
 							"Execution contract: use tools to implement the requested change. Do not stop after a plan or code snippet.",
 							"After modifying the workspace, run a relevant verification tool. If implementation is blocked, state the concrete blocker instead of claiming completion.",
+							"If the result is a runnable website, service, or Docker application, start it in the background, verify that its local listener is reachable, and report the usable localhost URL before finishing.",
 						]
 					: []),
 				"Treat [Cross-model handoff] sections as instructions and context supplied by Agent 1.",

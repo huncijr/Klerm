@@ -11,12 +11,15 @@
 		terminalOutput,
 		terminalBusy,
 		terminalCurrentCommand,
+		pendingApproval,
 		ontoggle,
 		onrefresh,
 		onopenurl,
 		onruncommand,
 		onstopcommand,
 		onclearterminal,
+		onapprove,
+		onreject,
 	}: {
 		open: boolean;
 		services: RunningService[];
@@ -25,12 +28,15 @@
 		terminalOutput: string;
 		terminalBusy: boolean;
 		terminalCurrentCommand: string;
+		pendingApproval?: { title: string; message: string };
 		ontoggle: () => void;
 		onrefresh: () => void;
 		onopenurl: (url: string) => void;
 		onruncommand: (command: string) => void;
 		onstopcommand: () => void;
 		onclearterminal: () => void;
+		onapprove: () => void;
+		onreject: () => void;
 	} = $props();
 
 	let tab = $state<"terminal" | "running" | "logs">("running");
@@ -44,6 +50,10 @@
 		void tick().then(() => {
 			if (terminalEl) terminalEl.scrollTop = terminalEl.scrollHeight;
 		});
+	});
+
+	$effect(() => {
+		if (pendingApproval) tab = "running";
 	});
 
 	function selectTab(next: typeof tab): void {
@@ -77,10 +87,9 @@
 <section class={`mx-3 overflow-hidden rounded-t-lg border border-b-0 border-[#34414b] bg-[#0e151a] transition-[height] ${open ? "h-[250px]" : "h-8"}`}>
 	<header class="flex h-8 items-center gap-1 border-b border-[#2e3942] bg-[#121a20] px-1.5">
 		<button type="button" class={`flex h-7 items-center gap-1.5 rounded px-2 font-mono text-[8px] ${tab === "terminal" && open ? "bg-[rgba(48,105,151,.28)] text-[#add0ed]" : "text-[#75828b] hover:text-[#c7d0d4]"}`} onclick={() => selectTab("terminal")}><TerminalSquare size={11} /> Terminal</button>
-		<button type="button" class={`flex h-7 items-center gap-1.5 rounded px-2 font-mono text-[8px] ${tab === "running" && open ? "bg-[rgba(48,126,75,.25)] text-[#acd8b8]" : "text-[#75828b] hover:text-[#c7d0d4]"}`} onclick={() => selectTab("running")}><CircleDot size={11} /> Running <span class="rounded bg-[#26323a] px-1 text-[7px]">{services.length + (terminalBusy ? 1 : 0)}</span></button>
+		<button type="button" class={`flex h-7 items-center gap-1.5 rounded px-2 font-mono text-[8px] ${tab === "running" && open ? "bg-[rgba(48,126,75,.25)] text-[#acd8b8]" : "text-[#75828b] hover:text-[#c7d0d4]"}`} onclick={() => selectTab("running")}><CircleDot size={11} /> Running <span class="rounded bg-[#26323a] px-1 text-[7px]">{services.length + (terminalBusy ? 1 : 0) + (pendingApproval ? 1 : 0)}</span></button>
 		<button type="button" class={`flex h-7 items-center gap-1.5 rounded px-2 font-mono text-[8px] ${tab === "logs" && open ? "bg-[rgba(129,87,42,.28)] text-[#e0bc83]" : "text-[#75828b] hover:text-[#c7d0d4]"}`} onclick={() => selectTab("logs")}><ScrollText size={11} /> Logs</button>
-		<span class="ml-auto mr-2 font-mono text-[7px] text-[#64717a]">{status.label}</span>
-		<button type="button" aria-label="Refresh current workspace processes" class="grid h-7 w-7 place-items-center rounded text-[#75828b] hover:bg-[#1b252c] hover:text-[#d2d9dd]" onclick={onrefresh}><RefreshCw size={11} /></button>
+		<button type="button" aria-label="Refresh current workspace processes" class="ml-auto grid h-7 w-7 place-items-center rounded text-[#75828b] hover:bg-[#1b252c] hover:text-[#d2d9dd]" onclick={onrefresh}><RefreshCw size={11} /></button>
 		<button type="button" aria-label={open ? "Collapse bottom panel" : "Expand bottom panel"} class="grid h-7 w-7 place-items-center rounded text-[#75828b] hover:bg-[#1b252c] hover:text-[#d2d9dd]" onclick={ontoggle}>{#if open}<ChevronDown size={12} />{:else}<ChevronUp size={12} />{/if}</button>
 	</header>
 	{#if open}
@@ -88,6 +97,17 @@
 			{#if tab === "running"}
 				<div class="h-full overflow-auto bg-[#111a20] p-3 [scrollbar-width:thin]">
 					<div class="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2">
+						{#if pendingApproval}
+							<div class="col-span-full rounded-md border border-[rgba(214,166,63,.55)] bg-[linear-gradient(135deg,rgba(92,65,20,.42),rgba(22,29,34,.96))] p-3">
+								<div class="flex items-center gap-2"><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-[#e6b45f]"></span><strong class="font-mono text-[9px] text-[#f0ca8b]">Command approval required</strong></div>
+								<small class="mt-1 block font-mono text-[8px] text-[#9f8a69]">{pendingApproval.title}</small>
+								<pre class="mt-2 mb-0 overflow-x-auto rounded border border-[rgba(214,166,63,.25)] bg-[#090d11] p-2.5 font-mono text-[9px]/[1.55] whitespace-pre-wrap text-[#d9c6a4]"><code>{pendingApproval.message}</code></pre>
+								<div class="mt-2.5 flex justify-end gap-2">
+									<button type="button" class="rounded px-2.5 py-1.5 font-mono text-[8px] text-[#9da7ad] hover:bg-[#1b252c] hover:text-white" onclick={onreject}>Cancel</button>
+									<button type="button" class="rounded bg-[rgba(214,255,63,.14)] px-2.5 py-1.5 font-mono text-[8px] font-semibold text-[#d6ff3f] hover:bg-[rgba(214,255,63,.22)]" onclick={onapprove}>Approve</button>
+								</div>
+							</div>
+						{/if}
 						{#if terminalBusy}
 							<div class="rounded-md border border-[rgba(205,143,52,.42)] bg-[linear-gradient(135deg,rgba(108,70,19,.35),rgba(22,29,34,.9))] p-2.5">
 								<div class="flex items-center gap-2"><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-[#e6b45f]"></span><strong class="font-mono text-[9px] text-[#f0ca8b]">Active terminal command</strong></div>
@@ -97,8 +117,9 @@
 						{#each services as service (service.id)}
 							<div class={`rounded-md border p-2.5 ${service.kind === "backend" ? "border-[rgba(72,129,184,.42)] bg-[linear-gradient(135deg,rgba(32,73,111,.36),rgba(20,29,35,.94))]" : "border-[rgba(66,151,89,.4)] bg-[linear-gradient(135deg,rgba(30,91,48,.34),rgba(19,29,34,.94))]"}`}>
 								<div class="flex items-center gap-2"><span class={`h-1.5 w-1.5 rounded-full ${service.kind === "backend" ? "bg-[#72aee4]" : "bg-[#78ca8a]"}`}></span><strong class="min-w-0 truncate font-mono text-[9px] text-[#d1d9dd]">{service.kind === "listener" ? `localhost:${service.port}` : service.processName}</strong>{#if service.url}<button type="button" aria-label={`Open ${service.url}`} class="ml-auto text-[#82919b] hover:text-white" onclick={() => onopenurl(service.url!)}><ExternalLink size={11} /></button>{/if}</div>
-								<small class="mt-1.5 block truncate font-mono text-[7px] text-[#74828b]" title={service.cwd}>{service.kind === "listener" ? `${service.processName} / ` : "current workspace / "}pid {service.pid}</small>
+								<small class="mt-1.5 block truncate font-mono text-[7px] text-[#74828b]" title={service.cwd}>{service.kind === "listener" ? service.processName : "current workspace"}{service.pid > 0 ? ` / pid ${service.pid}` : ""}</small>
 								<small class="mt-1 block truncate font-mono text-[7px] text-[#53626c]" title={service.cwd}>{service.cwd}</small>
+								{#if service.url}<button type="button" class="mt-2 max-w-full truncate rounded border border-[rgba(87,145,194,.35)] bg-[rgba(35,86,128,.2)] px-2 py-1 font-mono text-[8px] text-[#8fc4ed] hover:bg-[rgba(35,86,128,.34)] hover:text-white" title={service.url} onclick={() => onopenurl(service.url!)}>{service.url}</button>{/if}
 							</div>
 						{/each}
 					</div>

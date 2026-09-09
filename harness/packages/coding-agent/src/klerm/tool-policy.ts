@@ -29,6 +29,8 @@ const SENSITIVE_PATH =
 
 const PLANNER_READ_ONLY_SHELL_COMMAND =
 	/^(?:pwd|ls(?:\s|$)|grep(?:\s|$)|rg(?:\s|$)|find(?:\s|$)|git\s+(?:status|diff|log|show|grep|ls-files)(?:\s|$))/;
+const VERIFICATION_SHELL_COMMAND =
+	/^(?:git\s+(?:status|diff|show)(?:\s|$)|npm\s+(?:test|run\s+(?:check|test|typecheck|build)(?::[\w-]+)?)(?:\s|$)|npx\s+(?:vitest|tsc|svelte-check)(?:\s|$)|cargo\s+(?:check|test|build)(?:\s|$)|node\s+[^;&|>`]*vitest[^;&|>`]*--run(?:\s|$))/;
 
 function stringArgument(args: unknown, key: string): string | undefined {
 	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
@@ -62,21 +64,17 @@ export function isPlannerReadOnlyShellCommand(args: unknown): boolean {
 }
 
 export function isVerificationToolCall(toolName: string, args: unknown, changedPaths: ReadonlySet<string>): boolean {
-	if (toolName === "read") {
+	if (toolName === "read" || toolName === "grep") {
 		const path = toolPath(toolName, args);
 		return path !== undefined && changedPaths.has(path);
 	}
 	if (toolName !== "bash") return false;
 	const command = stringArgument(args, "command")?.trim() ?? "";
-	return SAFE_SHELL_COMMAND.test(command) && !UNSAFE_SHELL_SYNTAX.test(command) && !MUTATING_FIND.test(command);
+	return VERIFICATION_SHELL_COMMAND.test(command) && !UNSAFE_SHELL_SYNTAX.test(command);
 }
 
-export function isWorkspaceMutationToolCall(
-	toolName: string,
-	args: unknown,
-	capability?: "read" | "write" | "unknown",
-): boolean {
-	if (toolName === "edit" || toolName === "write" || capability === "write") return true;
+export function isWorkspaceMutationToolCall(toolName: string, args: unknown): boolean {
+	if (toolName === "edit" || toolName === "write") return true;
 	if (toolName !== "bash") return false;
 	const command = stringArgument(args, "command")?.trim() ?? "";
 	return command.length > 0 && !isPlannerReadOnlyShellCommand(args) && !SAFE_SHELL_COMMAND.test(command);

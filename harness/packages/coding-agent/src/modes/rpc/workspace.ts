@@ -19,6 +19,16 @@ interface CommandResult {
 	stderr: string;
 }
 
+interface DockerComposePublisher {
+	PublishedPort?: number;
+}
+
+interface DockerComposeProcess {
+	Name?: string;
+	Service?: string;
+	Publishers?: DockerComposePublisher[];
+}
+
 function runCommand(command: string, args: string[], cwd: string, allowFailure = false): Promise<CommandResult> {
 	return new Promise((resolveCommand, rejectCommand) => {
 		execFile(command, args, { cwd, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -190,15 +200,7 @@ export async function openWorkspaceEditor(cwd: string, editor: RpcEditorInfo["id
 export async function getRunningServices(cwd: string): Promise<RpcRunningService[]> {
 	const workspace = await getWorkspaceStatus(cwd);
 	const projectRoot = canonicalizePath(resolve(workspace.projectRoot));
-	const services: RpcRunningService[] = [
-		{
-			id: `backend-${process.pid}`,
-			kind: "backend",
-			processName: "Klerm backend",
-			pid: process.pid,
-			cwd: workspace.workspaceRoot,
-		},
-	];
+	const services: RpcRunningService[] = [];
 	if (process.platform !== "linux") return services;
 	const result = await runCommand("ss", ["-ltnpH"], cwd, true);
 	const seenPorts = new Set<number>();
@@ -230,9 +232,51 @@ export async function getRunningServices(cwd: string): Promise<RpcRunningService
 			cwd: processCwd,
 		});
 	}
-	return services.sort((left, right) =>
-		left.kind === "backend" ? -1 : right.kind === "backend" ? 1 : (left.port ?? 0) - (right.port ?? 0),
-	);
+	const composeFiles = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
+	const hasComposeFile = (
+		await Promise.all(
+			composeFiles.map(async (file) => {
+				try {
+					return (await stat(resolve(projectRoot, file))).isFile();
+				} catch {
+					return false;
+				}
+			}),
+		)
+	).some(Boolean);
+	if (hasComposeFile) {
+		const compose = await runCommand("docker", ["compose", "ps", "--format", "json"], projectRoot, true);
+		const output = compose.stdout.trim();
+		let processes: DockerComposeProcess[] = [];
+		try {
+			const parsed: unknown = output.startsWith("[")
+				? JSON.parse(output)
+				: output
+						.split("\n")
+						.filter(Boolean)
+						.map((line) => JSON.parse(line));
+			if (Array.isArray(parsed)) processes = parsed as DockerComposeProcess[];
+		} catch {
+			processes = [];
+		}
+		for (const process of processes) {
+			for (const publisher of process.Publishers ?? []) {
+				const port = publisher.PublishedPort;
+				if (!Number.isInteger(port) || !port || port <= 0 || seenPorts.has(port)) continue;
+				seenPorts.add(port);
+				services.push({
+					id: `listener-docker-${process.Name ?? process.Service ?? "service"}-${port}`,
+					kind: "listener",
+					port,
+					url: `http://localhost:${port}`,
+					processName: `Docker ${process.Service ?? process.Name ?? "service"}`,
+					pid: 0,
+					cwd: projectRoot,
+				});
+			}
+		}
+	}
+	return services.sort((left, right) => (left.port ?? 0) - (right.port ?? 0));
 }
 
 export function openLocalUrl(target: string): void {

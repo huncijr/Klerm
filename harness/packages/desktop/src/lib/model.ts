@@ -117,6 +117,21 @@ export interface RoutingState {
 	handoffReason?: string;
 	fallbackReason?: string;
 	lastTransition?: RoutingTransition;
+	taskIntent?: "answer" | "review" | "workspace-change";
+}
+
+export interface TaskOutcome {
+	status:
+		| "completed"
+		| "implemented-and-verified"
+		| "blocked-before-implementation"
+		| "plan-returned-instead-of-implementation"
+		| "verification-missing"
+		| "failed";
+	taskIntent?: "answer" | "review" | "workspace-change";
+	reason?: string;
+	changedFileCount: number;
+	verificationCount: number;
 }
 
 export interface RoutingTransition {

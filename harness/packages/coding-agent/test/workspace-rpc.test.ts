@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -76,11 +76,44 @@ describe("desktop workspace RPC helpers", () => {
 		expect(() => openLocalUrl("https://example.com")).toThrow("Only local HTTP services");
 
 		const processes = await getRunningServices(nested);
-		expect(processes[0]).toMatchObject({ kind: "backend", processName: "Klerm backend", cwd: nested });
+		expect(processes).not.toContainEqual(expect.objectContaining({ kind: "backend" }));
 		expect(
 			processes
 				.filter((process) => process.kind === "listener")
 				.every((process) => process.cwd.startsWith(tempDir!)),
 		).toBe(true);
 	});
+
+	test.runIf(process.platform === "linux")(
+		"reports published Docker Compose ports as usable local services",
+		async () => {
+			tempDir = mkdtempSync(join(tmpdir(), "klerm-workspace-rpc-"));
+			writeFileSync(join(tempDir, "compose.yaml"), "services:\n  web:\n    image: example\n", "utf8");
+			const binDir = join(tempDir, "bin");
+			mkdirSync(binDir);
+			const docker = join(binDir, "docker");
+			writeFileSync(
+				docker,
+				'#!/bin/sh\nprintf \'%s\\n\' \'{"Name":"demo-web-1","Service":"web","Publishers":[{"PublishedPort":4173}]}\'\n',
+				"utf8",
+			);
+			chmodSync(docker, 0o755);
+			const originalPath = process.env.PATH;
+			process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+			try {
+				const services = await getRunningServices(tempDir);
+				expect(services).toContainEqual({
+					id: "listener-docker-demo-web-1-4173",
+					kind: "listener",
+					port: 4173,
+					url: "http://localhost:4173",
+					processName: "Docker web",
+					pid: 0,
+					cwd: tempDir,
+				});
+			} finally {
+				process.env.PATH = originalPath;
+			}
+		},
+	);
 });

@@ -118,14 +118,6 @@
 		if (mcpStatus.toolCount > 0) return "bg-accent shadow-[0_0_9px_rgba(214,255,63,.35)]";
 		return "bg-[#d6a63f]";
 	});
-	const mcpStateLabel = $derived.by(() => {
-		if (!mcpStatus || mcpServers.length === 0) return "";
-		if (mcpServers.some((server) => server.state === "failed")) return "Server failed";
-		if (mcpStatus.reloadRequired) return "Reload required";
-		if (mcpStatus.toolCount > 0) return "Tools ready";
-		return "No connected tools";
-	});
-
 	function parseHeaders(value: string): Record<string, string> | undefined {
 		const headers: Record<string, string> = {};
 		for (const line of value.split("\n")) {
@@ -262,10 +254,7 @@
 		{#if mcpPopoverOpen}
 			<div bind:this={mcpPopoverEl} use:portal class="fixed z-30 flex flex-col overflow-hidden rounded-xl border border-[#303a42] bg-[#0d1217] shadow-[0_18px_46px_rgba(0,0,0,.52)]" style={mcpPopoverStyle}>
 				<div class="flex shrink-0 items-start justify-between gap-2 border-b border-[#242d35] bg-[#0d1217] p-3">
-					<div>
-						<strong class="block text-[11px] text-[#d8e0e4]">MCP</strong>
-						<span class="mt-0.5 block font-mono text-[8px] text-[#687580]">{mcpStateLabel}</span>
-					</div>
+					<strong class="block text-[11px] text-[#d8e0e4]">MCP</strong>
 					<div class="flex shrink-0 gap-2">
 						<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onreloadmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Reload"}</button>
 						<button type="button" class="border-0 bg-transparent font-mono text-[8px] text-[#7c8992] hover:text-white" onclick={onrefreshmcp} disabled={mcpBusy}>{mcpBusy ? "..." : "Refresh"}</button>
@@ -460,10 +449,7 @@
 		</section>
 
 		<footer class="border-t border-line-soft px-4 py-3 short-650:py-2">
-			<div class="flex items-center justify-between gap-2">
-				{@render mcpControl(false)}
-				<span class="font-mono text-[8px] text-[#536069]">{mcpStateLabel}</span>
-			</div>
+			{@render mcpControl(false)}
 		</footer>
 	{/if}
 </aside>

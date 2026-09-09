@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type {
 	Agent,
 	AgentEvent,
@@ -64,6 +64,7 @@ import {
 	KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
 	type KlermPromptRoutingOverride,
 	type KlermRoutingState,
+	type KlermTaskOutcome,
 	type KlermWorkerLane,
 } from "../klerm/router/types.ts";
 import { createSessionTitle } from "../klerm/session-title.ts";
@@ -76,6 +77,11 @@ import {
 	requiresBuilderApproval,
 	toolPath,
 } from "../klerm/tool-policy.ts";
+import {
+	captureKlermWorkspaceSnapshot,
+	changedKlermWorkspacePaths,
+	type KlermWorkspaceSnapshot,
+} from "../klerm/workspace-evidence.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -177,7 +183,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| { type: "agent_settled" }
+	| { type: "agent_settled"; outcome?: KlermTaskOutcome }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -417,6 +423,9 @@ export class AgentSession {
 	private _klermBuilderParticipated = false;
 	private _klermBlockedMutation = false;
 	private _klermCompletionFailureReason?: string;
+	private _klermWorkspaceBefore?: KlermWorkspaceSnapshot;
+	private readonly _klermActualChangedPaths = new Set<string>();
+	private _klermTaskOutcome?: KlermTaskOutcome;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -602,7 +611,7 @@ export class AgentSession {
 						interactive ? "interactive" : "automatic",
 					);
 					if (!approved) {
-						if (isWorkspaceMutationToolCall(toolCall.name, args, capability)) {
+						if (isWorkspaceMutationToolCall(toolCall.name, args)) {
 							this._klermBlockedMutation = true;
 						}
 						return {
@@ -672,16 +681,17 @@ export class AgentSession {
 
 	private _recordKlermExecutionEvidence(toolName: string, args: unknown, isError: boolean): void {
 		if (isError || this._klermRoutingController?.activeWorkerRole !== "builder") return;
-		const capability = this._toolDefinitions.get(toolName)?.definition.klermCapability;
-		if (isWorkspaceMutationToolCall(toolName, args, capability)) {
+		if (isWorkspaceMutationToolCall(toolName, args)) {
 			this._klermSuccessfulMutations++;
 			const path = toolPath(toolName, args);
-			if (path) this._klermSuccessfulChangedPaths.add(path);
+			if (path) this._klermSuccessfulChangedPaths.add(resolve(this._cwd, path));
 			return;
 		}
+		const path = toolPath(toolName, args);
+		const evidenceArgs = path ? { ...(args as Record<string, unknown>), path: resolve(this._cwd, path) } : args;
 		if (
 			this._klermSuccessfulMutations > 0 &&
-			isVerificationToolCall(toolName, args, this._klermSuccessfulChangedPaths)
+			isVerificationToolCall(toolName, evidenceArgs, this._klermSuccessfulChangedPaths)
 		) {
 			this._klermSuccessfulVerifications++;
 		}
@@ -922,7 +932,8 @@ export class AgentSession {
 		this._isAgentRunActive = false;
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
-			this._emit({ type: "agent_settled" });
+			this._emit({ type: "agent_settled", outcome: this._klermTaskOutcome });
+			this._klermTaskOutcome = undefined;
 		} finally {
 			this._resolveIdleWaitIfIdle();
 		}
@@ -1399,9 +1410,29 @@ export class AgentSession {
 		restoreThinkingLevel?: ThinkingLevel,
 	): Promise<void> {
 		try {
+			await this._refreshKlermWorkspaceChanges();
+			const taskIntent = this._klermRoutingController?.routingState.taskIntent;
+			const reason = this._klermCompletionFailureReason;
+			this._klermTaskOutcome = {
+				status: success
+					? taskIntent === "workspace-change"
+						? "implemented-and-verified"
+						: "completed"
+					: reason?.includes("not approved")
+						? "blocked-before-implementation"
+						: reason?.includes("without a successful mutation")
+							? "plan-returned-instead-of-implementation"
+							: reason?.includes("without successful verification")
+								? "verification-missing"
+								: "failed",
+				taskIntent,
+				reason,
+				changedFileCount: this._klermActualChangedPaths.size,
+				verificationCount: this._klermSuccessfulVerifications,
+			};
 			await this._klermRoutingController?.recordCompletion(success, {
 				reason: this._klermCompletionFailureReason,
-				changedFileCount: this._klermSuccessfulChangedPaths.size,
+				changedFileCount: this._klermActualChangedPaths.size,
 				verificationCount: this._klermSuccessfulVerifications,
 				openIssueCount: success ? 0 : this._klermCompletionFailureReason ? 1 : undefined,
 			});
@@ -1415,14 +1446,28 @@ export class AgentSession {
 		}
 	}
 
-	private _klermExecutionContractIssue(): "mutation" | "verification" | undefined {
+	private async _refreshKlermWorkspaceChanges(): Promise<void> {
+		if (!this._klermWorkspaceBefore) {
+			for (const path of this._klermSuccessfulChangedPaths) this._klermActualChangedPaths.add(path);
+			return;
+		}
+		const after = await captureKlermWorkspaceSnapshot(this._cwd);
+		this._klermActualChangedPaths.clear();
+		if (!after) return;
+		for (const path of changedKlermWorkspacePaths(this._klermWorkspaceBefore, after)) {
+			this._klermActualChangedPaths.add(path);
+		}
+	}
+
+	private async _klermExecutionContractIssue(): Promise<"mutation" | "verification" | undefined> {
 		if (
 			this._klermRoutingController?.routingState.taskIntent !== "workspace-change" ||
 			!this._klermBuilderParticipated
 		) {
 			return undefined;
 		}
-		if (this._klermSuccessfulMutations === 0) return "mutation";
+		await this._refreshKlermWorkspaceChanges();
+		if (this._klermActualChangedPaths.size === 0) return "mutation";
 		if (this._klermSuccessfulVerifications === 0) return "verification";
 		return undefined;
 	}
@@ -1496,7 +1541,7 @@ export class AgentSession {
 						};
 						continue;
 					}
-					const executionIssue = this._klermExecutionContractIssue();
+					const executionIssue = await this._klermExecutionContractIssue();
 					if (executionIssue && this._klermBlockedMutation && this._klermSuccessfulMutations === 0) {
 						this._klermCompletionFailureReason =
 							"workspace change was blocked because the required mutation was not approved";
@@ -1625,11 +1670,14 @@ export class AgentSession {
 				this._klermBuilderApprovedCategories.clear();
 				this._klermBuilderChangedPaths.clear();
 				this._klermSuccessfulChangedPaths.clear();
+				this._klermActualChangedPaths.clear();
 				this._klermSuccessfulMutations = 0;
 				this._klermSuccessfulVerifications = 0;
 				this._klermBuilderParticipated = false;
 				this._klermBlockedMutation = false;
 				this._klermCompletionFailureReason = undefined;
+				this._klermWorkspaceBefore = undefined;
+				this._klermTaskOutcome = undefined;
 			}
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
@@ -1711,6 +1759,9 @@ export class AgentSession {
 				restoreThinkingLevel = thinkingBeforeRouting;
 			}
 			if (routedTransition) await this._applyKlermTransition(routedTransition, true);
+			if (this._klermRoutingController?.routingState.taskIntent === "workspace-change") {
+				this._klermWorkspaceBefore = await captureKlermWorkspaceSnapshot(this._cwd);
+			}
 			const mcpInstruction = resolveMcpPromptMentions(
 				this.settingsManager,
 				options?.mcpMentions ?? [],

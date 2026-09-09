@@ -29,7 +29,11 @@ import {
 	projectKlermHandoffContext,
 	projectKlermPlannerContext,
 } from "../src/klerm/router/runtime.ts";
-import { isKlermSessionTransitionData, KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
+import {
+	isKlermSessionTransitionData,
+	KLERM_SESSION_TRANSITION_CUSTOM_TYPE,
+	type KlermTaskOutcome,
+} from "../src/klerm/router/types.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
 function createModel(provider: string, id: string, api: Api): Model<Api> {
@@ -151,13 +155,14 @@ describe("Klerm routing runtime", () => {
 			lane === "local" ? scout : undefined,
 		);
 
-		await (await controller.routePrompt("Inspect the project"))?.commit();
+		await (await controller.routePrompt("Implement a runnable website"))?.commit();
 		const systemPrompt = controller.getSystemPromptContribution();
 		expect(systemPrompt).toContain("Agent 1 is using profile Scout (face fox, level 1/5)");
 		expect(systemPrompt).toContain("Profile behaviour:");
 		expect(systemPrompt).toContain("Profile work plan:");
 		expect(systemPrompt).toContain("Profile builder mode:");
 		expect(systemPrompt).not.toContain("Profile planner mode:");
+		expect(systemPrompt).toContain("start it in the background");
 	});
 
 	it("lets Agent 1 and Agent 2 use mixed or two local models, but not the same one", async () => {
@@ -284,7 +289,6 @@ describe("Klerm routing runtime", () => {
 			resourceLoader: createTestResourceLoader(),
 			klermRoutingController: controller,
 		});
-
 		try {
 			localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
 			await session.prompt("Plan the implementation");
@@ -385,6 +389,10 @@ describe("Klerm routing runtime", () => {
 			resourceLoader: createTestResourceLoader(),
 			klermRoutingController: controller,
 		});
+		let settledOutcome: KlermTaskOutcome | undefined;
+		session.subscribe((event) => {
+			if (event.type === "agent_settled") settledOutcome = event.outcome;
+		});
 
 		try {
 			localFaux.setResponses([
@@ -409,6 +417,11 @@ describe("Klerm routing runtime", () => {
 			expect(completion).toMatchObject({
 				event: "TASK_COMPLETED",
 				taskIntent: "workspace-change",
+				changedFileCount: 1,
+				verificationCount: 1,
+			});
+			expect(settledOutcome).toMatchObject({
+				status: "implemented-and-verified",
 				changedFileCount: 1,
 				verificationCount: 1,
 			});
@@ -446,6 +459,10 @@ describe("Klerm routing runtime", () => {
 			resourceLoader: createTestResourceLoader(),
 			klermRoutingController: controller,
 		});
+		let settledOutcome: KlermTaskOutcome | undefined;
+		session.subscribe((event) => {
+			if (event.type === "agent_settled") settledOutcome = event.outcome;
+		});
 
 		try {
 			localFaux.setResponses([
@@ -459,6 +476,10 @@ describe("Klerm routing runtime", () => {
 			expect(log).toContain('"event":"TASK_FAILED"');
 			expect(log).toContain("workspace-change task ended without a successful mutation");
 			expect(log).not.toContain('"event":"TASK_COMPLETED"');
+			expect(settledOutcome).toMatchObject({
+				status: "plan-returned-instead-of-implementation",
+				changedFileCount: 0,
+			});
 		} finally {
 			session.dispose();
 			localFaux.unregister();
@@ -573,7 +594,7 @@ describe("Klerm routing runtime", () => {
 				fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" }),
 				fauxAssistantMessage("The risky command was not approved."),
 			]);
-			await session.prompt("Remove generated output");
+			await session.prompt("Run the requested risky shell command");
 
 			expect(confirm).toHaveBeenCalledWith(
 				"Allow a modifying command?",
@@ -604,7 +625,7 @@ describe("Klerm routing runtime", () => {
 				}),
 				fauxAssistantMessage("The automatically approved command completed and was verified."),
 			]);
-			await session.prompt("Remove generated output without asking");
+			await session.prompt("Run the requested risky shell command without asking");
 			expect(confirm).toHaveBeenCalledOnce();
 
 			await controller.setBuilderApprovalMode("local", "never");
@@ -612,7 +633,7 @@ describe("Klerm routing runtime", () => {
 				fauxAssistantMessage([fauxToolCall("bash", { command: "rm -rf dist" })], { stopReason: "toolUse" }),
 				fauxAssistantMessage("The command was blocked automatically."),
 			]);
-			await session.prompt("Try to remove generated output");
+			await session.prompt("Try the requested risky shell command");
 			expect(confirm).toHaveBeenCalledOnce();
 			expect(
 				sessionManager

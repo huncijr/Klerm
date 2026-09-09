@@ -4,6 +4,21 @@ export type KlermRouteMode = "mock";
 export type KlermRoute = "SELF" | "LOCAL" | "FRONTIER";
 export type KlermPromptRoutingOverride = "local" | "frontier";
 export type KlermTaskIntent = "answer" | "review" | "workspace-change";
+export type KlermTaskOutcomeStatus =
+	| "completed"
+	| "implemented-and-verified"
+	| "blocked-before-implementation"
+	| "plan-returned-instead-of-implementation"
+	| "verification-missing"
+	| "failed";
+
+export interface KlermTaskOutcome {
+	status: KlermTaskOutcomeStatus;
+	taskIntent?: KlermTaskIntent;
+	reason?: string;
+	changedFileCount: number;
+	verificationCount: number;
+}
 export type KlermDecisionSource = "local-model" | "deterministic-fallback" | "deterministic-policy";
 export type KlermCostSource = "model-catalog" | "unavailable";
 export type KlermWorkerLane = "local" | "frontier";

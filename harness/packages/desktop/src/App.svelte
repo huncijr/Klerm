@@ -38,6 +38,7 @@
 		SessionEntryRecord,
 		SessionState,
 		StatusInfo,
+		TaskOutcome,
 		TimelineItem,
 		TimelineTone,
 		ThinkingLevel,
@@ -67,6 +68,8 @@
 	let taskHadErrors = false;
 	let taskSawAssistant = false;
 	let lastAssistantStopReason: string | undefined;
+	let taskHadExecution = false;
+	let taskErrorDetails: string[] = [];
 	let sessionTransitionActive = $state(false);
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
@@ -105,6 +108,7 @@
 	let workspace = $state<WorkspaceStatus | undefined>(undefined);
 	let editors = $state<EditorInfo[]>([]);
 	let runningServices = $state<RunningService[]>([]);
+	let runningServicesBusy = false;
 	let selectedFilePath = $state<string | undefined>(undefined);
 	let selectedFileDiff = $state("");
 	let selectedFileContent = $state<string | undefined>(undefined);
@@ -230,8 +234,13 @@
 		}
 		if (hasWorkspaceProcess && !bottomPanelRevealed) {
 			bottomPanelRevealed = true;
-			bottomPanelOpen = true;
 		}
+	});
+
+	$effect(() => {
+		if (!taskActive) return;
+		const timer = window.setInterval(() => void refreshRunningServices(), 2_000);
+		return () => window.clearInterval(timer);
 	});
 
 	function setStatus(state: StatusInfo["state"], label: string, detail: string): void {
@@ -244,6 +253,12 @@
 
 	function clearError(): void {
 		errorBanner = "";
+	}
+
+	function recordTaskError(message: string): void {
+		taskHadErrors = true;
+		const detail = message.trim();
+		if (detail && !taskErrorDetails.includes(detail)) taskErrorDetails.push(detail);
 	}
 
 	function appendTerminal(text: string): void {
@@ -384,7 +399,7 @@
 		}
 		const detail = [transition.reason, ...meta].filter((line) => line).join("\n");
 		const failed = transition.trigger === "provider-failure";
-		if (failed) taskHadErrors = true;
+		if (failed) recordTaskError(transition.reason ?? title);
 		pushTimeline("routing", failed ? "red" : "amber", title, detail, failed ? "error" : "settled", dedupeId);
 	}
 
@@ -431,10 +446,11 @@
 		} else {
 			pushTimeline("error", "red", "Provider request failed", finalError, "error");
 		}
-		taskHadErrors = true;
+		recordTaskError(finalError);
 	}
 
 	function handleToolStart(event: JsonObject): void {
+		taskHadExecution = true;
 		const toolCallId = String(event.toolCallId ?? "");
 		const toolName = String(event.toolName ?? "unknown");
 		const described = describeToolCall(toolName, event.args);
@@ -484,10 +500,10 @@
 		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (!item) return;
 		if (event.isError === true) {
-			taskHadErrors = true;
+			const errorText = resultErrorText(event.result) ?? "Tool execution failed";
+			recordTaskError(errorText);
 			item.status = "error";
 			item.tone = "red";
-			const errorText = resultErrorText(event.result) ?? "Tool execution failed";
 			item.detail = event.toolName === "bash" ? [item.detail, errorText].filter(Boolean).join("\n\n") : errorText;
 			item.detailType = event.toolName === "bash" ? "code" : "text";
 			return;
@@ -610,6 +626,8 @@
 						void bridge.respond({ type: "extension_ui_response", id: pendingApproval.id, confirmed: false });
 					}
 					pendingApproval = { id: event.id, title: event.title, message: event.message };
+					bottomPanelRevealed = true;
+					bottomPanelOpen = true;
 				} else if (event.method === "provider_oauth_notify" && typeof event.id === "string") {
 					const notify = event.notify as Record<string, unknown> | undefined;
 					if (notify && oauthStep) {
@@ -652,6 +670,8 @@
 					activeTaskKey = ++taskSeq;
 					taskStopping = false;
 					taskHadErrors = false;
+					taskHadExecution = false;
+					taskErrorDetails = [];
 					taskSawAssistant = false;
 					lastAssistantStopReason = undefined;
 				}
@@ -661,23 +681,50 @@
 			case "agent_settled": {
 				pendingApproval = undefined;
 				finalizeStreamingMessage();
-				const failed = !taskStopping && (!taskSawAssistant || lastAssistantStopReason === "error");
+				const outcome = event.outcome as TaskOutcome | undefined;
+				const outcomeFailed =
+					outcome !== undefined &&
+					outcome.status !== "completed" &&
+					outcome.status !== "implemented-and-verified";
+				const failed =
+					!taskStopping && (outcomeFailed || !taskSawAssistant || lastAssistantStopReason === "error");
+				const outcomeTitle =
+					outcome?.status === "implemented-and-verified"
+						? "Implemented and verified"
+						: outcome?.status === "blocked-before-implementation"
+							? "Blocked before implementation"
+							: outcome?.status === "plan-returned-instead-of-implementation"
+								? "Plan returned instead of implementation"
+								: outcome?.status === "verification-missing"
+									? "Implementation not verified"
+									: outcome?.status === "failed"
+										? "Task failed"
+										: undefined;
 				taskActive = false;
-				pushTimeline(
-					"task",
-					failed ? "red" : taskHadErrors ? "amber" : "neutral",
-					failed
-						? "Task failed"
-						: taskStopping
-							? "Task stopped"
-							: taskHadErrors
-								? "Task completed with errors"
-								: "Task completed",
-					"",
-					failed ? "error" : "settled",
-				);
+				if (outcomeFailed || taskHadExecution || taskStopping) {
+					const completionDetail = [
+						outcome?.reason,
+						taskErrorDetails.length > 0 ? taskErrorDetails.join("\n\n") : undefined,
+						outcome?.status === "implemented-and-verified"
+							? `${outcome.changedFileCount} changed file${outcome.changedFileCount === 1 ? "" : "s"}; ${outcome.verificationCount} verification${outcome.verificationCount === 1 ? "" : "s"}.`
+							: undefined,
+					]
+						.filter((detail): detail is string => Boolean(detail))
+						.join("\n\n");
+					pushTimeline(
+						"task",
+						failed ? "red" : taskHadErrors ? "amber" : "neutral",
+						taskHadErrors && !failed
+							? "Task completed with errors"
+							: outcomeTitle ?? (failed ? "Task failed" : taskStopping ? "Task stopped" : "Task completed"),
+						completionDetail,
+						failed ? "error" : "settled",
+					);
+				}
 				taskStopping = false;
 				taskHadErrors = false;
+				taskHadExecution = false;
+				taskErrorDetails = [];
 				taskSawAssistant = false;
 				lastAssistantStopReason = undefined;
 				activeTaskKey = 0;
@@ -730,7 +777,7 @@
 				}
 				streamingMessageId = undefined;
 				if (completedMessage.stopReason === "error") {
-					taskHadErrors = true;
+					recordTaskError(completedMessage.errorMessage ?? "The model ended with an error.");
 					pushTimeline(
 						"error",
 						"red",
@@ -808,7 +855,7 @@
 			}
 			case "backend_error": {
 				const text = typeof event.message === "string" ? event.message : "Backend error";
-				if (taskActive) taskHadErrors = true;
+				if (taskActive) recordTaskError(text);
 				pushTimeline("error", "red", text, "", "error");
 				return;
 			}
@@ -919,13 +966,16 @@
 	}
 
 	async function refreshRunningServices(): Promise<void> {
-		if (!backendReady) return;
+		if (!backendReady || runningServicesBusy) return;
+		runningServicesBusy = true;
 		try {
 			const result = await bridge.send<{ services: RunningService[] }>("get_running_services");
 			runningServices = result.services;
 		} catch (error) {
 			runningServices = [];
 			showError(toError(error).message);
+		} finally {
+			runningServicesBusy = false;
 		}
 	}
 
@@ -1541,10 +1591,13 @@
 	async function sendMessage(text: string): Promise<void> {
 		if (!text || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
 		bottomPanelOpen = false;
+		bottomPanelRevealed = true;
 		clearError();
 		taskActive = true;
 		taskStopping = false;
 		taskHadErrors = false;
+		taskHadExecution = false;
+		taskErrorDetails = [];
 		taskSawAssistant = false;
 		lastAssistantStopReason = undefined;
 		activeTaskKey = ++taskSeq;
@@ -1828,12 +1881,23 @@
 			{terminalOutput}
 			{terminalBusy}
 			{terminalCurrentCommand}
+			{pendingApproval}
 			ontoggle={() => (bottomPanelOpen = !bottomPanelOpen)}
 			onrefresh={() => void refreshRunningServices()}
 			onopenurl={(url) => void openLocalUrl(url)}
 			onruncommand={(command) => void runTerminalCommand(command)}
 			onstopcommand={() => void stopTerminalCommand()}
 			onclearterminal={() => (terminalOutput = "")}
+			onreject={() => {
+				const request = pendingApproval;
+				pendingApproval = undefined;
+				if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: false });
+			}}
+			onapprove={() => {
+				const request = pendingApproval;
+				pendingApproval = undefined;
+				if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: true });
+			}}
 		/>
 		{/if}
 		{/if}
@@ -1865,24 +1929,6 @@
 			const session = pendingDelete;
 			pendingDelete = undefined;
 			if (session) void deleteConversation(session);
-		}}
-	/>
-{/if}
-{#if pendingApproval}
-	<ConfirmDialog
-		title={pendingApproval.title}
-		detail={pendingApproval.message}
-		confirmLabel="Approve"
-		tone="approval"
-		oncancel={() => {
-			const request = pendingApproval;
-			pendingApproval = undefined;
-			if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: false });
-		}}
-		onconfirm={() => {
-			const request = pendingApproval;
-			pendingApproval = undefined;
-			if (request) void bridge.respond({ type: "extension_ui_response", id: request.id, confirmed: true });
 		}}
 	/>
 {/if}
