@@ -4,10 +4,10 @@
 
 # Klerm
 
-Klerm is an agent-to-agent (A2A) coding system that routes work between a local
-model and a configured frontier model. It provides an interactive terminal UI,
-multi-provider model access, coding tools, persistent routing configuration,
-and deterministic JSONL decision logs.
+Klerm is being built as a multi-agent coding system where multiple local and
+frontier agents can work together at the same time. It will combine persistent
+memory with support for different agent harnesses, allowing tools such as
+Claude Code and Codex to collaborate concurrently in one coordinated workflow.
 
 ## Current Capabilities
 
