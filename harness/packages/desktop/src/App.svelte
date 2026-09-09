@@ -70,6 +70,7 @@
 	let lastAssistantStopReason: string | undefined;
 	let taskHadExecution = false;
 	let taskErrorDetails: string[] = [];
+	let buildModeOffer = $state<{ id: number; agent: "agent1" | "agent2" } | undefined>(undefined);
 	let sessionTransitionActive = $state(false);
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
@@ -131,6 +132,7 @@
 	let lastFallbackReason = "";
 	let feedSeq = 0;
 	let taskSeq = 0;
+	let buildModeOfferSeq = 0;
 	let activeTaskKey = 0;
 	let timelineSeq = 0;
 	let messageSeq = 0;
@@ -261,6 +263,17 @@
 		if (detail && !taskErrorDetails.includes(detail)) taskErrorDetails.push(detail);
 	}
 
+	function dismissBuildModeOffer(id: number): void {
+		if (buildModeOffer?.id === id) buildModeOffer = undefined;
+	}
+
+	function switchBuildMode(id: number): void {
+		const offer = buildModeOffer;
+		if (!offer || offer.id !== id) return;
+		buildModeOffer = undefined;
+		applyConfigUpdate(offer.agent === "agent1" ? { localRole: "builder" } : { frontierRole: "builder" });
+	}
+
 	function appendTerminal(text: string): void {
 		terminalOutput = `${terminalOutput}${text}`.slice(-120_000);
 	}
@@ -349,6 +362,7 @@
 	}
 
 	function clearFeed(): void {
+		buildModeOffer = undefined;
 		lastFallbackReason = "";
 		toolCards.clear();
 		feed.length = 0;
@@ -688,6 +702,8 @@
 					outcome.status !== "implemented-and-verified";
 				const failed =
 					!taskStopping && (outcomeFailed || !taskSawAssistant || lastAssistantStopReason === "error");
+				const settledAgent = activeAgent;
+				const settledRole = settledAgent === "agent1" ? currentConfig?.localRole : currentConfig?.frontierRole;
 				const outcomeTitle =
 					outcome?.status === "implemented-and-verified"
 						? "Implemented and verified"
@@ -701,6 +717,9 @@
 										? "Task failed"
 										: undefined;
 				taskActive = false;
+				if (!failed && !taskStopping && !taskHadErrors && taskSawAssistant && settledRole === "planner") {
+					buildModeOffer = { id: ++buildModeOfferSeq, agent: settledAgent };
+				}
 				if (outcomeFailed || taskHadExecution || taskStopping) {
 					const completionDetail = [
 						outcome?.reason,
@@ -1590,6 +1609,7 @@
 
 	async function sendMessage(text: string): Promise<void> {
 		if (!text || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		buildModeOffer = undefined;
 		bottomPanelOpen = false;
 		bottomPanelRevealed = true;
 		clearError();
@@ -1714,6 +1734,7 @@
 		onaddmcpserver={addMcpServer}
 		settingsOpen={settingsOpen}
 		ontogglesettings={() => {
+			buildModeOffer = undefined;
 			settingsOpen = !settingsOpen;
 			if (!settingsOpen) settingsFullscreen = false;
 		}}
@@ -1857,6 +1878,7 @@
 			frontierApprovalMode={currentConfig?.frontierApprovalMode ?? "risky"}
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
+			{buildModeOffer}
 			onsend={(text) => void sendMessage(text)}
 			onstop={() => void stopTask()}
 			onlocalchange={(value) => applyConfigUpdate({ localModel: value })}
@@ -1864,8 +1886,16 @@
 			onroutingchange={applyRoutingSelection}
 			onlocalthinkingchange={(level) => void applyThinkingLevel("local", level)}
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
-			onlocalrolechange={(role) => applyConfigUpdate({ localRole: role })}
-			onfrontierrolechange={(role) => applyConfigUpdate({ frontierRole: role })}
+			onlocalrolechange={(role) => {
+				buildModeOffer = undefined;
+				applyConfigUpdate({ localRole: role });
+			}}
+			onfrontierrolechange={(role) => {
+				buildModeOffer = undefined;
+				applyConfigUpdate({ frontierRole: role });
+			}}
+			onbuildofferdismiss={dismissBuildModeOffer}
+			onbuildofferswitch={switchBuildMode}
 			onlocalapprovalchange={(mode) => applyConfigUpdate({ localApprovalMode: mode })}
 			onfrontierapprovalchange={(mode) => applyConfigUpdate({ frontierApprovalMode: mode })}
 			onlocalprofilechange={(id) => void assignProfile("local", id)}

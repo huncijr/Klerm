@@ -361,13 +361,23 @@
 			</button>
 		{/each}
 		<div class="ml-auto flex shrink-0 flex-col items-end gap-1 py-1.5">
-			<button
-				type="button"
-				class="h-8 rounded-md border-0 bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019] uppercase"
-				onclick={saveChanges}
-			>
-				Save changes
-			</button>
+			{#if dirty}
+				<button
+					type="button"
+					class="h-8 rounded-md border-0 bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019] uppercase"
+					onclick={saveChanges}
+				>
+					Save Settings
+				</button>
+			{:else}
+				<button
+					type="button"
+					class="h-8 rounded-md border border-[#303a42] bg-[#0d1217] px-3 font-mono text-[10px] text-[#aeb8be] uppercase hover:border-[#56636c] hover:text-white"
+					onclick={onclose}
+				>
+					Back
+				</button>
+			{/if}
 			{#if dirty}
 				<button
 					type="button"

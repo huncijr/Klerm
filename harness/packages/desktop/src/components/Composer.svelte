@@ -57,6 +57,7 @@
 		frontierApprovalMode,
 		activeAgent,
 		roleDisabled,
+		buildModeOffer,
 		onsend,
 		onstop,
 		onlocalchange,
@@ -70,6 +71,8 @@
 		onfrontierapprovalchange,
 		onlocalprofilechange,
 		onfrontierprofilechange,
+		onbuildofferdismiss,
+		onbuildofferswitch,
 	}: {
 		draft: string;
 		sendDisabled: boolean;
@@ -106,6 +109,7 @@
 		frontierApprovalMode: ApprovalMode;
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
+		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
 		onsend: (text: string) => void;
 		onstop: () => void;
 		onlocalchange: (value: string) => void;
@@ -119,6 +123,8 @@
 		onfrontierapprovalchange: (mode: ApprovalMode) => void;
 		onlocalprofilechange: (id: string) => void;
 		onfrontierprofilechange: (id: string) => void;
+		onbuildofferdismiss: (id: number) => void;
+		onbuildofferswitch: (id: number) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -187,6 +193,13 @@
 
 	$effect(() => {
 		if (roleDisabled) roleMenuOpen = false;
+	});
+
+	$effect(() => {
+		const offerId = buildModeOffer?.id;
+		if (offerId === undefined) return;
+		const timer = window.setTimeout(() => onbuildofferdismiss(offerId), 10_000);
+		return () => window.clearTimeout(timer);
 	});
 
 	onMount(() => {
@@ -385,6 +398,25 @@
 			{errorBanner}
 		</div>
 	{/if}
+	{#if buildModeOffer}
+		{#key buildModeOffer.id}
+			<div class="mx-auto mb-2 flex w-[min(820px,100%)] flex-wrap items-center gap-3 rounded-lg border border-[rgba(255,82,82,.5)] bg-[linear-gradient(90deg,rgba(105,25,25,.45),rgba(50,16,20,.72))] px-3 py-2 shadow-[0_10px_30px_rgba(75,0,0,.2)]" role="status" aria-live="polite">
+				<div class="relative grid h-8 w-8 shrink-0 place-items-center" aria-label="This suggestion expires in 10 seconds">
+					<svg viewBox="0 0 36 36" class="h-8 w-8 -rotate-90" aria-hidden="true">
+						<circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,120,120,.2)" stroke-width="3"></circle>
+						<circle cx="18" cy="18" r="15" pathLength="100" fill="none" stroke="#ff6f61" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" class="build-offer-countdown"></circle>
+					</svg>
+					<Hammer size={12} class="absolute text-[#ff9b91]" />
+				</div>
+				<div class="min-w-[160px] flex-1">
+					<strong class="block text-[11px] text-[#ffd0cb]">Plan ready</strong>
+					<span class="mt-0.5 block font-mono text-[8px] text-[#b98d89]">Switch {buildModeOffer.agent === "agent1" ? "Agent 1" : "Agent 2"} to Build mode?</span>
+				</div>
+				<button type="button" class="rounded px-2.5 py-1.5 font-mono text-[8px] text-[#bc8e8a] hover:bg-[rgba(255,255,255,.06)] hover:text-white" onclick={() => onbuildofferdismiss(buildModeOffer!.id)}>Cancel</button>
+				<button type="button" disabled={roleDisabled} class="rounded border border-[rgba(255,111,97,.55)] bg-[rgba(255,82,82,.15)] px-3 py-1.5 font-mono text-[8px] font-semibold text-[#ff9b91] hover:bg-[rgba(255,82,82,.25)] disabled:cursor-not-allowed disabled:opacity-45" onclick={() => onbuildofferswitch(buildModeOffer!.id)}>Switch to Build mode</button>
+			</div>
+		{/key}
+	{/if}
 	<div class="mx-auto mb-1 flex w-[min(820px,100%)] justify-end px-1">
 		<button
 			type="button"
@@ -482,7 +514,7 @@
 								{/each}
 							</div>
 						{/each}
-						<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan sees names only. Build has full tools and asks before risky actions.</p>
+						<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build has full tools and asks before risky actions.</p>
 					</div>
 				{/if}
 			</div>
@@ -611,3 +643,16 @@
 		</span>
 	</div>
 </footer>
+
+<style>
+	.build-offer-countdown {
+		stroke-dashoffset: 100;
+		animation: build-offer-progress 10s linear forwards;
+	}
+
+	@keyframes build-offer-progress {
+		to {
+			stroke-dashoffset: 0;
+		}
+	}
+</style>
