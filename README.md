@@ -37,6 +37,55 @@ The inherited workspace package name in the final command is retained for
 build compatibility. The installed executable and user-facing product are
 named `klerm`.
 
+### Windows Fast Setup
+
+On Windows, use the PowerShell helpers from `Klerm/harness`. The first command
+downloads dependencies into a project-local cache and builds Klerm. Later runs
+reuse `node_modules`, npm cache, and Cargo cache, and only reinstall packages
+when `package.json` or `package-lock.json` files changed.
+
+```powershell
+cd Klerm\harness
+.\setup-windows.ps1
+```
+
+If Node.js is not installed yet, let the setup download a portable project-local
+Node.js once under `harness\.cache\tools`:
+
+```powershell
+.\setup-windows.ps1 -InstallTools
+```
+
+After source changes or after updating the checkout, run:
+
+```powershell
+.\update-windows.ps1
+```
+
+For the Windows desktop app/installer, add `-Desktop`:
+
+```powershell
+.\setup-windows.ps1 -Desktop -InstallTools
+.\update-windows.ps1 -Desktop
+```
+
+Without admin rights, build the desktop executable with the portable `cargo-xwin`
+toolchain instead of Visual Studio Build Tools:
+
+```powershell
+.\setup-windows.ps1 -Desktop -InstallTools -NoAdminDesktopToolchain
+.\update-windows.ps1 -Desktop -NoAdminDesktopToolchain
+```
+
+To keep rebuilding automatically while editing locally:
+
+```powershell
+.\update-windows.ps1 -Watch
+```
+
+If Git is installed and you want the script to pull first, use
+`.\update-windows.ps1 -Pull`.
+
 Start Klerm in any project:
 
 ```bash
