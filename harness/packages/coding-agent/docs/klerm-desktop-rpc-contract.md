@@ -14,6 +14,7 @@ The existing protocol is a useful base for the workspace spike:
 | Start, list, switch, delete, clone, fork, and rename sessions | `new_session`, `list_sessions`, `switch_session`, `rename_session`, `delete_session`, `clone`, `fork`, `set_session_name` | Available; direct active-session deletion and rename-by-token are rejected in favor of their active-session flows |
 | Negotiate the desktop boundary | `desktop_handshake` | Available with protocol version, Klerm version, command/event capabilities, session state, and initial routing state |
 | Discover local runtimes and update routing config | `get_local_runtimes`, `get_klerm_config`, `set_klerm_config` | Available for model, routing, active-start, and per-lane `planner`/`builder` controls; planner tool access is enforced by the backend |
+| Discover and assign coding harnesses | `get_coding_harness_setup`, `set_coding_harness_slots` | Available for a global master switch and a dynamic stable-ID agent registry with per-agent harness/On-Off/model/role/effort/tools setup, fixed shell-free version discovery for Pi, Claude Code, Codex, OpenCode, and Cline, built-in Klerm discovery, availability-filtered choices, Klerm model listing, and backend-derived `auto`/`none`/`disabled` routing; this does not report authentication or start native sessions |
 | Read and safely edit the project workspace | `get_workspace_status`, `get_workspace_diff`, `read_workspace_file`, `write_workspace_file` | Available; paths are project-relative, existing text files are limited to 2 MiB, and binary/out-of-root writes are rejected |
 | Discover/open editors and workspace processes | `get_available_editors`, `open_workspace_editor`, `get_running_services`, `open_local_url` | Available through allowlisted process arguments and localhost-only URL validation; Running always includes the current backend and limits Linux listeners to process cwd values inside the project |
 | Run desktop terminal commands | `bash`, `abort_bash`, `bash_execution_update` | Available as a writable, streamable, stoppable fresh-shell command console in the selected workspace; full PTY semantics remain deferred |
@@ -55,6 +56,8 @@ milestones. The CLI equivalents added for diagnostics are not desktop APIs.
 | Read/filter decision events | App 4 | Typed `KlermRouteDecision` records and deterministic filter fields |
 | Subscribe to decision events | App 4 | Append-only event with task/session correlation and no response body content |
 | Query provider authentication status | App 3 | Provider ID, configured boolean, auth method/source label; never credentials |
+| Start and reconnect native coding-harness sessions | App 3 | Adapter capability/health, credential-safe native session reference, lifecycle state, and typed failures |
+| Prompt and stop an external coding harness | App 3 | Structured streaming events, cancellation acknowledgement, and adapter-owned session continuity |
 
 MCP desktop status is intentionally not a credential surface. `get_mcp_status`
 returns server name, transport, enabled flag, lifecycle state, exposed tool names,

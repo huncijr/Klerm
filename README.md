@@ -20,6 +20,38 @@ Claude Code and Codex to collaborate concurrently in one coordinated workflow.
   `delegate_frontier` and `return_to_local`.
 - Provider-neutral handoff context between different model APIs.
 - Deterministic per-project routing logs.
+- Preview harness setup for a dynamic agent registry. Klerm plus installed Pi,
+  Claude Code, Codex, OpenCode, and Cline harness discovery and assignment are shared by the CLI and desktop
+  Settings. A General master switch, per-agent On/Off state, model, role, effort,
+  tools, and
+  backend-derived `Auto`, `None`, or `Disabled` routing are persisted. External
+  native sessions and agent-to-agent prompting are not connected yet.
+
+The registry starts with Agent 1. Configure it, add more stable numbered agents,
+and inspect any agent from the single interactive CLI chat:
+
+```text
+/agent 1 connect claude code
+/add
+/agent 2
+/agent 2 model gpt-5
+/agent 2 effort high
+/agent 2 tools read,grep,bash
+/view
+/remove agent 2
+```
+
+`/view` opens a chooser containing only existing agents. `/agent N` opens that
+agent's Harness, Model, Role, Thinking effort, Tools, On/Off, Status, and Remove
+controls. Harness choices appear only after their fixed, shell-free `--version`
+probe succeeds; unavailable installations are not offered. `connect`/`harness`
+validate the same discovery result, enable external setup, and
+save the selected harness. Agent 2 is also created automatically when its Klerm
+model is first selected. Agent 3+ can be configured now, but execution remains
+limited to the existing proven two-agent route. Setup does not start or authenticate an external native
+session yet. The desktop General and Settings > Agents controls expose the same
+global setup. When external mode is On, Send remains blocked until a native
+adapter is available rather than silently using the normal Klerm prompt path.
 
 ## Install From Source
 

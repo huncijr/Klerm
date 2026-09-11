@@ -24,6 +24,7 @@
 - Added `klerm session list [--json] [--dir <dir>]` for listing stored sessions with metadata, and `--session`, `--provider`, `--model` filters plus `--export <file>` (with a sharing warning) for `klerm debug decisions`.
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
 - Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
+- Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards; native external session prompting remains disabled until adapters are available.
 
 ### Changed
 

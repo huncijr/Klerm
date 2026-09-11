@@ -14,6 +14,8 @@ export {
 } from "./rpc/rpc-client.ts";
 export { type RunRpcModeOptions, runRpcMode } from "./rpc/rpc-mode.ts";
 export type {
+	RpcCodingHarnessSetup,
+	RpcCodingHarnessSlots,
 	RpcCommand,
 	RpcDesktopHandshake,
 	RpcDesktopSessionInfo,

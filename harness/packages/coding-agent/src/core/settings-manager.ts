@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { type CodingHarnessSlots, normalizeCodingHarnessSlots } from "../klerm/coding-harness-setup.ts";
 import {
 	type KlermProfile,
 	type KlermProfileState,
@@ -164,6 +165,7 @@ export interface Settings {
 	mcpServers?: Record<string, McpServerSettings>; // MCP servers; project entries replace global entries by name
 	desktopAppearance?: DesktopAppearance;
 	klermProfiles?: KlermProfileState;
+	codingHarnessSlots?: CodingHarnessSlots;
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -810,6 +812,16 @@ export class SettingsManager {
 	setDesktopAppearance(appearance: DesktopAppearance): void {
 		this.globalSettings.desktopAppearance = appearance;
 		this.markModified("desktopAppearance");
+		this.save();
+	}
+
+	getCodingHarnessSlots(): CodingHarnessSlots {
+		return normalizeCodingHarnessSlots(this.globalSettings.codingHarnessSlots);
+	}
+
+	setCodingHarnessSlots(slots: CodingHarnessSlots): void {
+		this.globalSettings.codingHarnessSlots = normalizeCodingHarnessSlots(slots);
+		this.markModified("codingHarnessSlots");
 		this.save();
 	}
 

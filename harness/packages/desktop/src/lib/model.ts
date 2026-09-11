@@ -4,6 +4,37 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export type WorkerRole = "planner" | "builder";
 export type ApprovalMode = "always" | "risky" | "never";
 export type DesktopAppearance = "dark" | "light" | "system";
+export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline";
+export type CodingHarnessSlot = CodingHarnessKind | null;
+export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
+
+export interface CodingHarnessSlotSettings {
+	id: string;
+	kind: CodingHarnessSlot;
+	enabled: boolean;
+	model?: string;
+	role: WorkerRole;
+	effort: ThinkingLevel;
+	tools: string[];
+}
+
+export interface CodingHarnessSetup {
+	slots: {
+		externalHarnessesEnabled: boolean;
+		agents: CodingHarnessSlotSettings[];
+	};
+	harnesses: Array<{
+		kind: CodingHarnessKind;
+		available: boolean;
+		builtin: boolean;
+		version?: string;
+		models: string[];
+	}>;
+	effectiveRouting: CodingHarnessEffectiveRouting;
+	externalPromptingAvailable: boolean;
+	blockingReason?: string;
+}
+
 export const KLERM_PROFILE_FACES = ["fox", "owl", "wolf", "cat", "bear", "otter"] as const;
 export type KlermProfileFace = (typeof KLERM_PROFILE_FACES)[number];
 

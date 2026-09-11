@@ -18,21 +18,24 @@ export interface BuiltinSlashCommand {
 
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "settings", description: "Open settings menu" },
+	{ name: "add", description: "Add the next numbered coding agent" },
+	{ name: "view", description: "Choose or view a configured coding agent", argumentHint: "[agent N|N]" },
+	{ name: "remove", description: "Remove a numbered coding agent", argumentHint: "<agent N|N>" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
 	{
 		name: "agent1",
-		description: "Configure Agent 1 to any available model or run one Agent 1 task",
-		argumentHint: "<model [reference]|status|models|off|task <prompt>>",
+		description: "Configure Agent 1 harness or model, or run one Agent 1 task",
+		argumentHint: "<connect <harness>|disconnect|model [reference]|status|models|off|task <prompt>>",
 	},
 	{
 		name: "agent2",
-		description: "Configure Agent 2 to a different available model or run one Agent 2 task",
-		argumentHint: "<model [reference]|status|off|task <prompt>>",
+		description: "Configure Agent 2 harness or model, or run one Agent 2 task",
+		argumentHint: "<connect <harness>|disconnect|model [reference]|status|off|task <prompt>>",
 	},
 	{
 		name: "agent",
-		description: "Configure Agent 1 or Agent 2",
-		argumentHint: "<1|2> <model [reference]|status|off|task <prompt>>",
+		description: "Choose and configure a numbered coding agent",
+		argumentHint: "<N> [harness|model|role|effort|tools|on|off|status]",
 	},
 	{
 		name: "routing",

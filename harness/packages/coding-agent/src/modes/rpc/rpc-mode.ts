@@ -38,6 +38,11 @@ import {
 	type McpServerTransport,
 	type SettingsScope,
 } from "../../core/settings-manager.ts";
+import {
+	createCodingHarnessSetup,
+	discoverCodingHarnesses,
+	parseCodingHarnessSlots,
+} from "../../klerm/coding-harness-setup.ts";
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
@@ -58,6 +63,7 @@ import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import { normalizeRpcImages } from "./rpc-images.ts";
 import type {
+	RpcCodingHarnessSetup,
 	RpcCommand,
 	RpcDesktopSessionInfo,
 	RpcDesktopSettings,
@@ -97,6 +103,7 @@ export type {
 
 export interface RunRpcModeOptions {
 	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
+	discoverCodingHarnesses?: typeof discoverCodingHarnesses;
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
@@ -105,6 +112,8 @@ export interface RunRpcModeOptions {
 const DESKTOP_COMMANDS = [
 	"desktop_handshake",
 	"get_local_runtimes",
+	"get_coding_harness_setup",
+	"set_coding_harness_slots",
 	"get_klerm_config",
 	"set_klerm_config",
 	"list_sessions",
@@ -348,6 +357,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			{ action: "New session", keys: "Ctrl/Cmd+N" },
 		],
 	});
+
+	const getCodingHarnessSetup = async (): Promise<RpcCodingHarnessSetup> => {
+		const harnesses = await (options.discoverCodingHarnesses ?? discoverCodingHarnesses)();
+		const klermModels = session.modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}/${model.id}`);
+		return createCodingHarnessSetup(
+			session.settingsManager.getCodingHarnessSlots(),
+			harnesses.map((harness) => (harness.kind === "klerm" ? { ...harness, models: klermModels } : harness)),
+		);
+	};
 
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
@@ -751,6 +769,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				const discover = options.discoverLocalRuntimes ?? discoverLocalRuntimes;
 				const runtimes = await discover(undefined, AbortSignal.timeout(5000));
 				return success(id, "get_local_runtimes", { runtimes });
+			}
+
+			case "get_coding_harness_setup": {
+				return success(id, "get_coding_harness_setup", await getCodingHarnessSetup());
+			}
+
+			case "set_coding_harness_slots": {
+				const slots = parseCodingHarnessSlots(command.slots);
+				if (!slots) {
+					return error(
+						id,
+						"set_coding_harness_slots",
+						"Harness setup must contain the master switch and a valid non-empty agent registry.",
+						"INVALID_CODING_HARNESS_SLOTS",
+					);
+				}
+				session.settingsManager.setCodingHarnessSlots(slots);
+				await session.settingsManager.flush();
+				return success(id, "set_coding_harness_slots", await getCodingHarnessSetup());
 			}
 
 			case "get_klerm_config": {

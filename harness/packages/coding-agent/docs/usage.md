@@ -38,11 +38,50 @@ See [Keybindings](keybindings.md) for all shortcuts and customization.
 
 Type `/` in the editor to open command completion. Extensions can register custom commands, skills are available as `/skill:name`, and prompt templates expand via `/templatename`.
 
+Klerm's preview coding-harness registry uses the same single chat. It starts
+with Agent 1; `/add` allocates the next stable agent number:
+
+```text
+/agent 1 connect claude code
+/add
+/agent 2
+/agent 2 model gpt-5
+/agent 2 role builder
+/agent 2 effort high
+/agent 2 tools read,grep,bash
+/view
+/remove agent 2
+```
+
+`/view` without an argument opens a selector containing only persisted agents.
+`/agent N` without an action opens the selected agent's Harness, Model, Role,
+Thinking effort, Tools, On/Off, Status, and Remove controls. Harness selectors
+and completions include only executables that pass a bounded, shell-free
+`--version` probe. Klerm is built in; Pi, Claude Code, Codex, OpenCode, and Cline
+are probed as `pi`, `claude`, `codex`, `opencode`, and `cline` respectively.
+
+These commands detect and persist a harness assignment, enable the
+external setup master state, and report each agent's harness, On/Off, model,
+role, effort, and tools. Agent 2 is created automatically when its Klerm model
+is first selected. Agent 3+ configuration is available, but execution and
+delegation remain limited to the existing two-agent route. The commands do
+not authenticate, start, or prompt an external native session yet. Desktop Send
+is blocked while external mode is On until that adapter bridge exists. Existing
+`/agent1 model`, `/agent2 model`, and `task` controls continue to configure the
+Klerm model-routing compatibility path.
+
 | Command | Description |
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
 | `/model` | Switch models |
+| `/add` | Add the next stable numbered coding agent |
+| `/view [agent N]` | Choose an existing agent or show one agent's complete setup |
+| `/agent N` | Open the agent's complete interactive setup selector |
+| `/agent N harness <klerm\|pi\|claude code\|codex\|opencode\|cline>` | Assign a fact-checked installed harness |
+| `/agent N model\|role\|effort\|tools ...` | Configure one explicitly numbered agent |
+| `/agent N on\|off` | Include or exclude one configured agent |
+| `/remove agent N` | Remove an agent without renumbering the remaining agents |
 | `/active <auto|local|frontier|frontier-local>` | Set the Klerm initial worker lane (`/activ` is an alias) |
 | `/routing handback on|off` | Return delegated work to the task's completion owner |
 | `/routing cycles <count|unlimited>` | Set any positive per-task A2A cycle limit, or remove it with `unlimited`/`0` (default `3`) |

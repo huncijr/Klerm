@@ -11,6 +11,7 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
+import type { CodingHarnessSetup, CodingHarnessSlots } from "../../klerm/coding-harness-setup.ts";
 import type { KlermConfig } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { KlermRoutingState } from "../../klerm/router/types.ts";
@@ -221,6 +222,18 @@ export class RpcClient {
 	async getLocalRuntimes(): Promise<LocalRuntimeDiscoveryResult[]> {
 		const response = await this.send({ type: "get_local_runtimes" });
 		return this.getData<{ runtimes: LocalRuntimeDiscoveryResult[] }>(response).runtimes;
+	}
+
+	/** Discover coding harnesses and read their global slot assignments. */
+	async getCodingHarnessSetup(): Promise<CodingHarnessSetup> {
+		const response = await this.send({ type: "get_coding_harness_setup" });
+		return this.getData(response);
+	}
+
+	/** Persist global coding harness slot assignments and return refreshed discovery. */
+	async setCodingHarnessSlots(slots: CodingHarnessSlots): Promise<CodingHarnessSetup> {
+		const response = await this.send({ type: "set_coding_harness_slots", slots });
+		return this.getData(response);
 	}
 
 	/** Read the persisted Klerm routing configuration. */

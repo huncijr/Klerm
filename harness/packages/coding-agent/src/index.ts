@@ -330,6 +330,22 @@ export {
 	type ProjectTrustStoreEntry,
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
+export {
+	CODING_HARNESS_KINDS,
+	type CodingHarnessDiscoveryResult,
+	type CodingHarnessKind,
+	type CodingHarnessProbe,
+	type CodingHarnessProbeOptions,
+	type CodingHarnessProbeResult,
+	type CodingHarnessSetup,
+	type CodingHarnessSlot,
+	type CodingHarnessSlots,
+	discoverCodingHarnesses,
+	normalizeCodingHarnessKind,
+	normalizeCodingHarnessSlots,
+	parseCodingHarnessSlots,
+	probeCodingHarnessVersion,
+} from "./klerm/coding-harness-setup.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
@@ -342,6 +358,8 @@ export {
 	type PrintModeOptions,
 	RpcClient,
 	type RpcClientOptions,
+	type RpcCodingHarnessSetup,
+	type RpcCodingHarnessSlots,
 	type RpcCommand,
 	type RpcDesktopHandshake,
 	type RpcDesktopSessionInfo,

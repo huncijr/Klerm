@@ -3,6 +3,7 @@ import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import { OllamaClient } from "../src/extensions/ollama/client.ts";
 import { parseAgentSlashCommand } from "../src/klerm/agent-labels.ts";
+import type { CodingHarnessSlots } from "../src/klerm/coding-harness-setup.ts";
 import { KLERM_SESSION_TRANSITION_CUSTOM_TYPE } from "../src/klerm/router/types.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import {
@@ -16,6 +17,11 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 type LaneContext = {
+	settingsManager: {
+		getCodingHarnessSlots: () => CodingHarnessSlots;
+		setCodingHarnessSlots: (slots: CodingHarnessSlots) => void;
+		flush: () => Promise<void>;
+	};
 	session: {
 		isStreaming: boolean;
 		isCompacting: boolean;
@@ -31,6 +37,7 @@ type LaneContext = {
 	showWarning: (message: string) => void;
 	showStatus: (message: string) => void;
 	showKlermModelSelector: (lane: "local" | "frontier", search?: string) => void;
+	updateKlermRoutingStatus: () => void;
 };
 
 type RoutingContext = {
@@ -66,6 +73,12 @@ type SubmitContext = {
 	editor: { setText: (text: string) => void };
 	handleKlermModelCommand: (lane: "local" | "frontier", argument: string) => Promise<void>;
 	handleKlermActiveCommand: (argument: string) => Promise<void>;
+	addCodingAgent: () => Promise<void>;
+	viewCodingAgent: (agentNumber: number) => void;
+	removeCodingAgent: (agentNumber: number) => Promise<void>;
+	handleNumberedCodingAgentCommand: (agentNumber: number, argument: string) => Promise<void>;
+	showCodingAgentViewSelector: () => void;
+	showCodingAgentSettingsSelector: (agentNumber: number) => void;
 };
 
 type InteractiveModePrivate = {
@@ -79,7 +92,18 @@ type InteractiveModePrivate = {
 const prototype = InteractiveMode.prototype as unknown as InteractiveModePrivate;
 
 function createLaneContext(): LaneContext {
+	let slots: CodingHarnessSlots = {
+		externalHarnessesEnabled: false,
+		agents: [{ id: "agent1", kind: null, enabled: false, role: "builder", effort: "off", tools: [] }],
+	};
 	return {
+		settingsManager: {
+			getCodingHarnessSlots: () => structuredClone(slots),
+			setCodingHarnessSlots: (next) => {
+				slots = structuredClone(next);
+			},
+			flush: vi.fn(async () => {}),
+		},
 		session: {
 			isStreaming: false,
 			isCompacting: false,
@@ -103,6 +127,7 @@ function createLaneContext(): LaneContext {
 		showWarning: vi.fn(),
 		showStatus: vi.fn(),
 		showKlermModelSelector: vi.fn(),
+		updateKlermRoutingStatus: vi.fn(),
 	};
 }
 
@@ -548,6 +573,12 @@ describe("interactive Klerm commands", () => {
 			editor: { setText: vi.fn() },
 			handleKlermModelCommand: vi.fn(async () => {}),
 			handleKlermActiveCommand: vi.fn(async () => {}),
+			addCodingAgent: vi.fn(async () => {}),
+			viewCodingAgent: vi.fn(),
+			removeCodingAgent: vi.fn(async () => {}),
+			handleNumberedCodingAgentCommand: vi.fn(async () => {}),
+			showCodingAgentViewSelector: vi.fn(),
+			showCodingAgentSettingsSelector: vi.fn(),
 		};
 		prototype.setupEditorSubmitHandler.call(context);
 
@@ -562,11 +593,49 @@ describe("interactive Klerm commands", () => {
 			editor: { setText: vi.fn() },
 			handleKlermModelCommand: vi.fn(async () => {}),
 			handleKlermActiveCommand: vi.fn(async () => {}),
+			addCodingAgent: vi.fn(async () => {}),
+			viewCodingAgent: vi.fn(),
+			removeCodingAgent: vi.fn(async () => {}),
+			handleNumberedCodingAgentCommand: vi.fn(async () => {}),
+			showCodingAgentViewSelector: vi.fn(),
+			showCodingAgentSettingsSelector: vi.fn(),
 		};
 		prototype.setupEditorSubmitHandler.call(context);
 
 		await context.defaultEditor.onSubmit?.("/activ frontier-local");
 
 		expect(context.handleKlermActiveCommand).toHaveBeenCalledWith("frontier-local");
+	});
+
+	it("dispatches dynamic coding agent commands with explicit agent numbers", async () => {
+		const context: SubmitContext = {
+			defaultEditor: {},
+			editor: { setText: vi.fn() },
+			handleKlermModelCommand: vi.fn(async () => {}),
+			handleKlermActiveCommand: vi.fn(async () => {}),
+			addCodingAgent: vi.fn(async () => {}),
+			viewCodingAgent: vi.fn(),
+			removeCodingAgent: vi.fn(async () => {}),
+			handleNumberedCodingAgentCommand: vi.fn(async () => {}),
+			showCodingAgentViewSelector: vi.fn(),
+			showCodingAgentSettingsSelector: vi.fn(),
+		};
+		prototype.setupEditorSubmitHandler.call(context);
+
+		await context.defaultEditor.onSubmit?.("/add");
+		await context.defaultEditor.onSubmit?.("/view");
+		await context.defaultEditor.onSubmit?.("/view agent 3");
+		await context.defaultEditor.onSubmit?.("/agent 2");
+		await context.defaultEditor.onSubmit?.("/agent 3 effort high");
+		await context.defaultEditor.onSubmit?.("/agent 2 tools read,grep");
+		await context.defaultEditor.onSubmit?.("/remove 3");
+
+		expect(context.addCodingAgent).toHaveBeenCalledOnce();
+		expect(context.showCodingAgentViewSelector).toHaveBeenCalledOnce();
+		expect(context.viewCodingAgent).toHaveBeenCalledWith(3);
+		expect(context.showCodingAgentSettingsSelector).toHaveBeenCalledWith(2);
+		expect(context.handleNumberedCodingAgentCommand).toHaveBeenCalledWith(3, "effort high");
+		expect(context.handleNumberedCodingAgentCommand).toHaveBeenCalledWith(2, "tools read,grep");
+		expect(context.removeCodingAgent).toHaveBeenCalledWith(3);
 	});
 });

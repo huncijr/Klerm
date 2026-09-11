@@ -16,6 +16,7 @@
 		AgentMessage,
 		BashResult,
 		ChatMessage,
+		CodingHarnessSetup,
 		CustomModelEntry,
 		DesktopAppearance,
 		DesktopHandshake,
@@ -129,6 +130,9 @@
 	let providerBusy = $state(false);
 	let oauthStep = $state<ProviderOauthStep | undefined>(undefined);
 	let backendCommands = $state<string[]>([]);
+	let codingHarnessSetup = $state<CodingHarnessSetup | undefined>(undefined);
+	let codingHarnessSetupLoading = $state(false);
+	let codingHarnessSetupError = $state("");
 	let mcpNeedsReload = false;
 
 	let currentLocalRuntimes = $state<LocalRuntime[]>([]);
@@ -146,7 +150,9 @@
 	const interactionActive = $derived(
 		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
 	);
-	const sendDisabled = $derived(!backendReady || interactionActive);
+	const externalHarnessesEnabled = $derived(codingHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const externalSendBlocked = $derived(externalHarnessesEnabled && codingHarnessSetup?.externalPromptingAvailable !== true);
+	const sendDisabled = $derived(!backendReady || interactionActive || externalSendBlocked);
 	const localSelectDisabled = $derived(
 		!backendReady || interactionActive || !localOptions.some((option) => option.value.length > 0),
 	);
@@ -1047,6 +1053,34 @@
 		}
 	}
 
+	async function refreshCodingHarnessSetup(): Promise<void> {
+		if (!backendReady || codingHarnessSetupLoading || !supportsCommand("get_coding_harness_setup")) return;
+		codingHarnessSetupLoading = true;
+		codingHarnessSetupError = "";
+		try {
+			codingHarnessSetup = await bridge.send<CodingHarnessSetup>("get_coding_harness_setup");
+		} catch (error) {
+			codingHarnessSetupError = toError(error).message;
+		} finally {
+			codingHarnessSetupLoading = false;
+		}
+	}
+
+	async function saveCodingHarnessSlots(slots: CodingHarnessSetup["slots"]): Promise<boolean> {
+		if (!backendReady || codingHarnessSetupLoading || !supportsCommand("set_coding_harness_slots")) return false;
+		codingHarnessSetupLoading = true;
+		codingHarnessSetupError = "";
+		try {
+			codingHarnessSetup = await bridge.send<CodingHarnessSetup>("set_coding_harness_slots", { slots });
+			return true;
+		} catch (error) {
+			codingHarnessSetupError = toError(error).message;
+			return false;
+		} finally {
+			codingHarnessSetupLoading = false;
+		}
+	}
+
 	async function setDesktopAppearance(appearance: DesktopAppearance): Promise<void> {
 		if (!supportsCommand("set_desktop_appearance")) return;
 		try {
@@ -1552,7 +1586,14 @@
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		await refreshLocalModels();
-		await Promise.all([refreshFrontierModels(), refreshThinkingLevels(), refreshMcpStatus(), refreshDesktopSettings(), refreshProviderStatus()]);
+		await Promise.all([
+			refreshFrontierModels(),
+			refreshThinkingLevels(),
+			refreshMcpStatus(),
+			refreshDesktopSettings(),
+			refreshProviderStatus(),
+			refreshCodingHarnessSetup(),
+		]);
 		const entries = await entriesPromise;
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
@@ -1798,6 +1839,9 @@
 				klermConfig={currentConfig}
 				{mcpStatus}
 				{mcpBusy}
+				codingHarnessSetup={codingHarnessSetup}
+				codingHarnessLoading={codingHarnessSetupLoading}
+				codingHarnessError={codingHarnessSetupError}
 				providers={providerAccounts}
 				{providerBusy}
 				fullscreen={settingsFullscreen}
@@ -1808,6 +1852,8 @@
 				}}
 				onappearance={(value) => void setDesktopAppearance(value)}
 				onmaxdelegationcycles={(value) => applyConfigUpdate({ maxDelegationCycles: value })}
+				onrefreshharnesses={() => void refreshCodingHarnessSetup()}
+				onsaveharnesses={saveCodingHarnessSlots}
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
 				ondisconnectprovider={disconnectProvider}
@@ -1874,6 +1920,7 @@
 			routingDisabled={routingSelectDisabled}
 			{taskStateText}
 			{errorBanner}
+			externalHarnessSetup={codingHarnessSetup}
 			history={promptHistory}
 			focusRequest={composerFocusRequest}
 			historyKey={lastState?.sessionId ?? ""}

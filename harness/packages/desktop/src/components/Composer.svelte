@@ -12,6 +12,8 @@
 	import { imageDataUrl } from "../lib/helpers.ts";
 	import type {
 		ApprovalMode,
+		CodingHarnessSetup,
+		CodingHarnessSlotSettings,
 		ImageAttachment,
 		KlermProfile,
 		McpColor,
@@ -40,6 +42,7 @@
 		routingDisabled,
 		taskStateText,
 		errorBanner,
+		externalHarnessSetup,
 		history,
 		focusRequest,
 		historyKey,
@@ -94,6 +97,7 @@
 		routingDisabled: boolean;
 		taskStateText: string;
 		errorBanner: string;
+		externalHarnessSetup: CodingHarnessSetup | undefined;
 		history: string[];
 		focusRequest: number;
 		historyKey: string;
@@ -161,6 +165,11 @@
 	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
 	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
+	const externalAgentSlots = $derived<Array<{ label: string; slot: CodingHarnessSlotSettings }>>(
+		externalHarnessSetup
+			? externalHarnessSetup.slots.agents.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot }))
+			: [],
+	);
 
 	function mentionStyle(color: McpColor = "base"): string {
 		return `color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[color]}55; border-radius: 4px;`;
@@ -460,6 +469,28 @@
 				<button type="button" disabled={roleDisabled} class="rounded border border-[rgba(255,111,97,.55)] bg-[rgba(255,82,82,.15)] px-3 py-1.5 font-mono text-[8px] font-semibold text-[#ff9b91] hover:bg-[rgba(255,82,82,.25)] disabled:cursor-not-allowed disabled:opacity-45" onclick={() => onbuildofferswitch(buildModeOffer!.id)}>Switch to Build mode</button>
 			</div>
 		{/key}
+	{/if}
+	{#if externalHarnessSetup?.slots.externalHarnessesEnabled}
+		<div class="mx-auto mb-2 w-[min(820px,100%)] rounded-lg border border-[#33404a] bg-[#0a1015] p-2.5">
+			<div class="mb-2 flex items-center justify-between gap-3 font-mono text-[8px] uppercase tracking-[.12em]">
+				<strong class="text-[#d7e7ff]">External Agents</strong>
+				<span class="text-[#8b969e]">{externalHarnessSetup.effectiveRouting === "auto" ? "Auto / Agent 1 first" : externalHarnessSetup.effectiveRouting === "none" ? "None" : "Disabled"}</span>
+			</div>
+			<div class="grid grid-cols-2 gap-2 narrow-520:grid-cols-1">
+				{#each externalAgentSlots as { label, slot }}
+					<div class={`rounded-md border px-2.5 py-2 ${slot.enabled ? "border-[#40512e] bg-[#11180c]" : "border-[#293239] bg-[#0d1217] opacity-60"}`}>
+						<div class="flex items-center justify-between gap-2">
+							<strong class="font-mono text-[9px] text-white">{label}</strong>
+							<span class={`h-1.5 w-1.5 rounded-full ${slot.enabled ? "bg-[#9fca43]" : "bg-[#56616a]"}`}></span>
+						</div>
+						<span class="mt-1 block truncate font-mono text-[8px] text-[#7f8b93]">{slot.kind ?? "Not configured"}{slot.model ? ` · ${slot.model}` : ""} · {slot.enabled ? "On" : "Off"}</span>
+					</div>
+				{/each}
+			</div>
+			{#if externalHarnessSetup.blockingReason}
+				<p class="m-0 mt-2 font-mono text-[8px] leading-[1.45] text-[#d6b16e]">{externalHarnessSetup.blockingReason}</p>
+			{/if}
+		</div>
 	{/if}
 	<div class="mx-auto mb-1 flex w-[min(820px,100%)] justify-end px-1">
 		<button

@@ -105,6 +105,14 @@ import {
 	parseRoutingModeInput,
 	routingValueLabel,
 } from "../../klerm/agent-labels.ts";
+import {
+	type CodingHarnessDiscoveryResult,
+	type CodingHarnessKind,
+	createCodingHarnessAgent,
+	discoverCodingHarnesses as discoverCodingHarnessesDefault,
+	nextCodingHarnessAgentId,
+	normalizeCodingHarnessKind,
+} from "../../klerm/coding-harness-setup.ts";
 import type { KlermWorkerRole } from "../../klerm/config.ts";
 import {
 	discoverLocalRuntimes,
@@ -249,6 +257,8 @@ type RenderSessionItem =
 
 export type KlermLaneCommand =
 	| { action: "selector" }
+	| { action: "connect"; target: string }
+	| { action: "disconnect" }
 	| { action: "model"; reference: string }
 	| { action: "status" }
 	| { action: "models" }
@@ -258,6 +268,10 @@ export type KlermLaneCommand =
 export function parseKlermLaneCommand(argument: string): KlermLaneCommand {
 	const command = argument.trimStart();
 	if (!command || command === "model") return { action: "selector" };
+	if (command === "connect" || command.startsWith("connect ")) {
+		return { action: "connect", target: command.slice(7).trim() };
+	}
+	if (command === "disconnect") return { action: "disconnect" };
 	if (command.startsWith("model ")) {
 		const reference = command.slice(6).trim();
 		return reference ? { action: "model", reference } : { action: "selector" };
@@ -452,6 +466,8 @@ export interface InteractiveModeOptions {
 	tuiMode?: TuiMode;
 	/** Initial interactive theme setting for this invocation. */
 	initialThemeSetting?: string;
+	/** Override coding harness discovery, primarily for deterministic tests. */
+	discoverCodingHarnesses?: typeof discoverCodingHarnessesDefault;
 }
 
 interface InteractiveTuiOptions {
@@ -810,9 +826,58 @@ export class InteractiveMode {
 			};
 		}
 
-		const laneCompletions = (lane: "local" | "frontier", prefix: string): AutocompleteItem[] | null => {
-			const actions =
-				lane === "local" ? ["model", "status", "models", "off", "task"] : ["model", "status", "off", "task"];
+		const agentCompletions = async (
+			prefix: string,
+			lane?: "local" | "frontier",
+		): Promise<AutocompleteItem[] | null> => {
+			const actions = [
+				"harness",
+				"connect",
+				"disconnect",
+				"model",
+				"role",
+				"effort",
+				"tools",
+				"on",
+				"status",
+				...(lane === "local" ? ["models"] : []),
+				"off",
+				...(lane ? ["task"] : []),
+			];
+			const harnessAction = prefix.startsWith("connect ")
+				? "connect"
+				: prefix.startsWith("harness ")
+					? "harness"
+					: undefined;
+			if (harnessAction) {
+				const targetPrefix = prefix.slice(harnessAction.length + 1);
+				const available = (
+					await (this.options?.discoverCodingHarnesses ?? discoverCodingHarnessesDefault)()
+				).filter((harness) => harness.available);
+				return createFuzzyAutocompleteItems(
+					available,
+					targetPrefix,
+					(harness) => `${harness.kind} ${this.codingAgentLabel(harness.kind)}`,
+					(harness) => ({
+						value: `${harnessAction} ${harness.kind}`,
+						label: this.codingAgentLabel(harness.kind),
+						description: harness.version ?? (harness.builtin ? "built-in" : "installed"),
+					}),
+				);
+			}
+			for (const [action, values] of [
+				["role", ["planner", "builder"]],
+				["effort", ["off", "minimal", "low", "medium", "high", "xhigh", "max"]],
+			] as const) {
+				if (prefix.startsWith(`${action} `)) {
+					return createFuzzyAutocompleteItems(
+						[...values],
+						prefix.slice(action.length + 1),
+						(value) => value,
+						(value) => ({ value: `${action} ${value}`, label: value }),
+					);
+				}
+			}
 			if (!prefix.startsWith("model ")) {
 				return createFuzzyAutocompleteItems(
 					actions,
@@ -828,7 +893,9 @@ export class InteractiveMode {
 			const other =
 				lane === "local"
 					? this.session.klermRouting?.config.frontierModel
-					: this.session.klermRouting?.config.localModel;
+					: lane === "frontier"
+						? this.session.klermRouting?.config.localModel
+						: undefined;
 			const models = this.session.modelRuntime
 				.getAvailableSnapshot()
 				.filter((model) => `${model.provider}/${model.id}` !== other);
@@ -844,29 +911,53 @@ export class InteractiveMode {
 		] as const) {
 			const command = slashCommands.find((candidate) => candidate.name === name);
 			if (!command) continue;
-			command.getArgumentCompletions = (prefix: string) => laneCompletions(lane, prefix);
+			command.getArgumentCompletions = (prefix: string) => agentCompletions(prefix, lane);
 		}
 		const agentCommand = slashCommands.find((command) => command.name === "agent");
 		if (agentCommand) {
-			agentCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				const lower = prefix.toLowerCase();
-				if (lower.startsWith("1 ") || lower.startsWith("2 ")) {
-					const lane = lower.startsWith("1 ") ? "local" : "frontier";
-					const items = laneCompletions(lane, prefix.slice(2));
+			agentCommand.getArgumentCompletions = async (prefix: string): Promise<AutocompleteItem[] | null> => {
+				const match = /^(\d+)\s+(.*)$/.exec(prefix);
+				if (match) {
+					const agentNumber = Number(match[1]);
+					const items = await agentCompletions(
+						match[2],
+						agentNumber === 1 ? "local" : agentNumber === 2 ? "frontier" : undefined,
+					);
 					return (
 						items?.map((item) => ({
 							...item,
-							value: `${lower.slice(0, 1)} ${item.value}`,
+							value: `${agentNumber} ${item.value}`,
 						})) ?? null
 					);
 				}
+				const agents = this.settingsManager.getCodingHarnessSlots().agents;
 				return createFuzzyAutocompleteItems(
-					["1", "2"],
+					agents,
 					prefix,
-					(option) => option,
-					(option) => ({
-						value: option,
-						label: option === "1" ? "Agent 1" : "Agent 2",
+					(agent) => `${agent.id.slice(5)} Agent ${agent.id.slice(5)} ${this.codingAgentLabel(agent.kind)}`,
+					(agent) => ({
+						value: agent.id.slice(5),
+						label: `Agent ${agent.id.slice(5)}`,
+						description: this.codingAgentLabel(agent.kind),
+					}),
+				);
+			};
+		}
+		for (const name of ["view", "remove"] as const) {
+			const command = slashCommands.find((candidate) => candidate.name === name);
+			if (!command) continue;
+			command.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const agents = this.settingsManager
+					.getCodingHarnessSlots()
+					.agents.filter((agent) => name === "view" || agent.id !== "agent1");
+				return createFuzzyAutocompleteItems(
+					agents,
+					prefix.replace(/^agent\s+/i, ""),
+					(agent) => `${agent.id.slice(5)} Agent ${agent.id.slice(5)} ${this.codingAgentLabel(agent.kind)}`,
+					(agent) => ({
+						value: agent.id.slice(5),
+						label: `Agent ${agent.id.slice(5)}`,
+						description: this.codingAgentLabel(agent.kind),
 					}),
 				);
 			};
@@ -3166,15 +3257,64 @@ export class InteractiveMode {
 				await this.handleModelCommand(searchTerm);
 				return;
 			}
+			if (text === "/add") {
+				this.editor.setText("");
+				await this.addCodingAgent();
+				return;
+			}
+			if (text === "/view") {
+				this.editor.setText("");
+				this.showCodingAgentViewSelector();
+				return;
+			}
+			const viewMatch = text.match(/^\/view(?:\s+agent)?\s+(\d+)$/i);
+			if (viewMatch) {
+				this.editor.setText("");
+				this.viewCodingAgent(Number(viewMatch[1]));
+				return;
+			}
+			const removeMatch = text.match(/^\/remove(?:\s+agent)?\s+(\d+)$/i);
+			if (removeMatch) {
+				this.editor.setText("");
+				await this.removeCodingAgent(Number(removeMatch[1]));
+				return;
+			}
+			const explicitAgentMatch = text.match(/^\/agent\s+(\d+)(?:\s+(.*))?$/i);
+			if (explicitAgentMatch && explicitAgentMatch[2] === undefined) {
+				this.editor.setText("");
+				this.showCodingAgentSettingsSelector(Number(explicitAgentMatch[1]));
+				return;
+			}
+			if (
+				explicitAgentMatch &&
+				(Number(explicitAgentMatch[1]) > 2 ||
+					/^(?:harness|role|effort|tools|on|off|view)(?:\s|$)/i.test(explicitAgentMatch[2] ?? ""))
+			) {
+				this.editor.setText("");
+				await this.handleNumberedCodingAgentCommand(
+					Number(explicitAgentMatch[1]),
+					explicitAgentMatch[2] ?? "status",
+				);
+				return;
+			}
 			const agentCommand = parseAgentSlashCommand(rawText);
 			if (agentCommand) {
 				this.editor.setText("");
 				await this.handleKlermModelCommand(agentCommand.lane, agentCommand.argument);
 				return;
 			}
+			const numberedAgentMatch = text.match(/^\/agent\s+(\d+)(?:\s+(.*))?$/i);
+			if (numberedAgentMatch) {
+				this.editor.setText("");
+				await this.handleNumberedCodingAgentCommand(
+					Number(numberedAgentMatch[1]),
+					numberedAgentMatch[2] ?? "status",
+				);
+				return;
+			}
 			if (text === "/agent" || text.startsWith("/agent ")) {
 				this.editor.setText("");
-				this.showError("Usage: /agent 1|2 <model [reference]|status|off|task <prompt>>");
+				this.showError("Usage: /agent N <harness|model|role|effort|tools|on|off|status> ...");
 				return;
 			}
 			if (text === "/routing" || text.startsWith("/routing ")) {
@@ -5000,13 +5140,105 @@ export class InteractiveMode {
 	}
 
 	private async handleKlermModelCommand(lane: "local" | "frontier", argument: string): Promise<void> {
+		const command = parseKlermLaneCommand(argument);
+		const agentId = lane === "local" ? "agent1" : "agent2";
+		const agentLabel = lane === "local" ? "Agent 1" : "Agent 2";
+		const discovery = this.options?.discoverCodingHarnesses ?? discoverCodingHarnessesDefault;
+		const formatSetup = (
+			kind: CodingHarnessKind,
+			result: CodingHarnessDiscoveryResult,
+			enabled: boolean,
+			model?: string,
+		): string =>
+			[
+				`${agentLabel} harness setup`,
+				`Harness: ${kind}`,
+				`Enabled: ${enabled ? "yes" : "no"}`,
+				`Model: ${model ?? "not selected"}`,
+				`Built-in: ${result.builtin ? "yes" : "no"}`,
+				`Available: ${result.available ? "yes" : "no"}`,
+				`Version: ${result.version ?? "not reported"}`,
+				"Status: configured (setup only)",
+				"External native session bridging is not started yet. Authentication and connection are not verified.",
+			].join("\n");
+
+		if (command.action === "connect") {
+			const kind = normalizeCodingHarnessKind(command.target);
+			if (!kind) {
+				this.showError(
+					`Usage: /${agentSlashName(lane)} connect <klerm|pi|claude code|claude-code|codex|opencode|cline>`,
+				);
+				return;
+			}
+			const result = (await discovery()).find((candidate) => candidate.kind === kind);
+			if (!result?.available) {
+				this.showError(
+					`${kind} is not available. Harness setup was not changed. External native session bridging is not started yet.`,
+				);
+				return;
+			}
+			const slots = this.settingsManager.getCodingHarnessSlots();
+			const index = slots.agents.findIndex((agent) => agent.id === agentId);
+			const previous = index >= 0 ? slots.agents[index] : undefined;
+			slots.externalHarnessesEnabled = true;
+			const configured = {
+				id: agentId,
+				kind,
+				enabled: true,
+				...(previous?.kind === kind && previous.model ? { model: previous.model } : {}),
+				role: previous?.role ?? "builder",
+				effort: previous?.effort ?? "off",
+				tools: previous?.tools ?? [],
+			};
+			if (index >= 0) slots.agents[index] = configured;
+			else slots.agents.push(configured);
+			this.settingsManager.setCodingHarnessSlots(slots);
+			await this.settingsManager.flush();
+			this.updateKlermRoutingStatus();
+			this.showStatus(formatSetup(kind, result, true, configured.model));
+			return;
+		}
+
+		if (command.action === "disconnect") {
+			const slots = this.settingsManager.getCodingHarnessSlots();
+			const configured = slots.agents.find((agent) => agent.id === agentId);
+			if (configured) {
+				configured.kind = null;
+				configured.enabled = false;
+				delete configured.model;
+			}
+			if (slots.agents.every((agent) => agent.kind === null)) slots.externalHarnessesEnabled = false;
+			this.settingsManager.setCodingHarnessSlots(slots);
+			await this.settingsManager.flush();
+			this.updateKlermRoutingStatus();
+			this.showStatus(
+				`${agentLabel} harness setup cleared.\nExternal native session bridging is not started yet. No authentication or connection was changed.`,
+			);
+			return;
+		}
+
+		if (command.action === "status") {
+			const slots = this.settingsManager.getCodingHarnessSlots();
+			const configured = slots.agents.find((agent) => agent.id === agentId);
+			const kind = configured?.kind;
+			if (kind) {
+				const result = (await discovery()).find((candidate) => candidate.kind === kind) ?? {
+					kind,
+					available: false,
+					builtin: kind === "klerm",
+					models: [],
+				};
+				this.showStatus(formatSetup(kind, result, configured.enabled, configured.model));
+				return;
+			}
+		}
+
 		const routing = this.session.klermRouting;
 		if (!routing) {
 			this.showError("Klerm routing is unavailable in this session.");
 			return;
 		}
 
-		const command = parseKlermLaneCommand(argument);
 		if (command.action === "task") {
 			if (!command.prompt.trim()) {
 				this.showError(`Usage: /${agentSlashName(lane)} task <prompt>`);
@@ -5101,11 +5333,340 @@ export class InteractiveMode {
 			} else {
 				await routing.setFrontierModel(command.reference);
 			}
+			const slots = this.settingsManager.getCodingHarnessSlots();
+			let configured = slots.agents.find((agent) => agent.id === agentId);
+			if (!configured) {
+				configured = createCodingHarnessAgent(agentId, "klerm");
+				slots.agents.push(configured);
+			}
+			configured.kind = "klerm";
+			configured.enabled = true;
+			configured.model = command.reference;
+			this.settingsManager.setCodingHarnessSlots(slots);
+			await this.settingsManager.flush();
 			this.updateKlermRoutingStatus();
 			this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} model: ${command.reference}`);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	private codingAgentLabel(kind: CodingHarnessKind | null): string {
+		if (kind === "claude-code") return "Claude Code";
+		if (kind === "codex") return "Codex";
+		if (kind === "opencode") return "OpenCode";
+		if (kind === "cline") return "Cline";
+		if (kind === "pi") return "Pi";
+		if (kind === "klerm") return "Klerm";
+		return "Unconfigured";
+	}
+
+	private async addCodingAgent(): Promise<void> {
+		const slots = this.settingsManager.getCodingHarnessSlots();
+		const id = nextCodingHarnessAgentId(slots.agents);
+		slots.agents.push(createCodingHarnessAgent(id));
+		this.settingsManager.setCodingHarnessSlots(slots);
+		await this.settingsManager.flush();
+		this.updateKlermRoutingStatus();
+		this.showStatus(
+			`Added Agent ${id.slice(5)}. Run /agent ${id.slice(5)} to configure its harness, model, role, effort, and tools.`,
+		);
+	}
+
+	private showCodingAgentViewSelector(): void {
+		const agents = this.settingsManager.getCodingHarnessSlots().agents;
+		const choices = agents.map((agent) => ({
+			value: `Agent ${agent.id.slice(5)} (${this.codingAgentLabel(agent.kind)} · ${agent.enabled ? "On" : "Off"})`,
+			number: Number(agent.id.slice(5)),
+		}));
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				"View coding agent",
+				choices.map((choice) => choice.value),
+				(choice) => {
+					done();
+					const selected = choices.find((candidate) => candidate.value === choice);
+					if (selected) this.viewCodingAgent(selected.number);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private showCodingAgentSettingsSelector(agentNumber: number): void {
+		const agent = this.settingsManager
+			.getCodingHarnessSlots()
+			.agents.find((candidate) => candidate.id === `agent${agentNumber}`);
+		if (!agent) {
+			this.showError(`Agent ${agentNumber} does not exist. Use /add to create the next agent.`);
+			return;
+		}
+		const actions = [
+			`Harness · ${this.codingAgentLabel(agent.kind)}`,
+			`Model · ${agent.model ?? "default"}`,
+			`Role · ${agent.role}`,
+			`Thinking effort · ${agent.effort}`,
+			`Tools · ${agent.tools.length > 0 ? agent.tools.join(", ") : "default"}`,
+			agent.enabled ? "Turn off" : "Turn on",
+			"View status",
+			...(agentNumber === 1 ? [] : ["Remove agent"]),
+		];
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Configure Agent ${agentNumber}`,
+				actions,
+				(action) => {
+					done();
+					if (action.startsWith("Harness")) void this.showCodingHarnessSelector(agentNumber);
+					else if (action.startsWith("Model")) this.showCodingAgentModelSelector(agentNumber);
+					else if (action.startsWith("Role")) this.showCodingAgentRoleSelector(agentNumber);
+					else if (action.startsWith("Thinking effort")) this.showCodingAgentEffortSelector(agentNumber);
+					else if (action.startsWith("Tools")) this.showCodingAgentToolsSelector(agentNumber);
+					else if (action === "Turn off") void this.handleNumberedCodingAgentCommand(agentNumber, "off");
+					else if (action === "Turn on") void this.handleNumberedCodingAgentCommand(agentNumber, "on");
+					else if (action === "View status") this.viewCodingAgent(agentNumber);
+					else if (action === "Remove agent") void this.removeCodingAgent(agentNumber);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private async showCodingHarnessSelector(agentNumber: number): Promise<void> {
+		const discovered = await (this.options?.discoverCodingHarnesses ?? discoverCodingHarnessesDefault)();
+		const available = discovered.filter((harness) => harness.available);
+		if (available.length === 0) {
+			this.showError("No installed coding harness was detected.");
+			return;
+		}
+		const choices = available.map((harness) => ({
+			value: `${this.codingAgentLabel(harness.kind)}${harness.version ? ` · ${harness.version}` : ""}`,
+			kind: harness.kind,
+		}));
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Agent ${agentNumber} harness (installed only)`,
+				choices.map((choice) => choice.value),
+				(choice) => {
+					done();
+					const selected = choices.find((candidate) => candidate.value === choice);
+					if (selected) void this.handleNumberedCodingAgentCommand(agentNumber, `harness ${selected.kind}`);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private showCodingAgentModelSelector(agentNumber: number): void {
+		const agent = this.settingsManager
+			.getCodingHarnessSlots()
+			.agents.find((candidate) => candidate.id === `agent${agentNumber}`);
+		if (!agent?.kind) {
+			this.showError(`Choose an installed harness for Agent ${agentNumber} before selecting a model.`);
+			return;
+		}
+		if (agent.kind === "klerm" && (agentNumber === 1 || agentNumber === 2)) {
+			this.showKlermModelSelector(agentNumber === 1 ? "local" : "frontier");
+			return;
+		}
+		if (agent.kind !== "klerm") {
+			void (this.options?.discoverCodingHarnesses ?? discoverCodingHarnessesDefault)().then((discovered) => {
+				const models = discovered.find((harness) => harness.kind === agent.kind)?.models ?? [];
+				if (models.length === 0) {
+					this.showError(`${this.codingAgentLabel(agent.kind)} has not reported a model list through an adapter.`);
+					return;
+				}
+				this.showCodingAgentModelChoices(agentNumber, models);
+			});
+			return;
+		}
+		this.showCodingAgentModelChoices(
+			agentNumber,
+			this.session.modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}/${model.id}`),
+		);
+	}
+
+	private showCodingAgentModelChoices(agentNumber: number, models: string[]): void {
+		if (models.length === 0) {
+			this.showError("No fact-checked models are currently available.");
+			return;
+		}
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Agent ${agentNumber} model`,
+				models,
+				(model) => {
+					done();
+					void this.handleNumberedCodingAgentCommand(agentNumber, `model ${model}`);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private showCodingAgentRoleSelector(agentNumber: number): void {
+		this.showCodingAgentValueSelector(agentNumber, "role", ["planner", "builder"]);
+	}
+
+	private showCodingAgentEffortSelector(agentNumber: number): void {
+		this.showCodingAgentValueSelector(agentNumber, "effort", [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+	}
+
+	private showCodingAgentToolsSelector(agentNumber: number): void {
+		const tools = [...new Set(this.session.getAllTools().map((tool) => tool.name))].sort();
+		const choices = [
+			"Default tools",
+			...(tools.length > 0 ? ["All available tools"] : []),
+			...tools.map((tool) => `Only ${tool}`),
+		];
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Agent ${agentNumber} tools`,
+				choices,
+				(choice) => {
+					done();
+					const value =
+						choice === "Default tools"
+							? "default"
+							: choice === "All available tools"
+								? tools.join(",")
+								: choice.slice(5);
+					void this.handleNumberedCodingAgentCommand(agentNumber, `tools ${value}`);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private showCodingAgentValueSelector(agentNumber: number, action: "role" | "effort", values: string[]): void {
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Agent ${agentNumber} ${action}`,
+				values,
+				(value) => {
+					done();
+					void this.handleNumberedCodingAgentCommand(agentNumber, `${action} ${value}`);
+				},
+				() => done(),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private viewCodingAgent(agentNumber: number): void {
+		const agent = this.settingsManager
+			.getCodingHarnessSlots()
+			.agents.find((candidate) => candidate.id === `agent${agentNumber}`);
+		if (!agent) {
+			this.showError(`Agent ${agentNumber} does not exist. Use /add to create the next agent.`);
+			return;
+		}
+		this.showStatus(
+			`Agent ${agentNumber} (${this.codingAgentLabel(agent.kind)} · ${agent.enabled ? "On" : "Off"}) | model: ${agent.model ?? "default"} | role: ${agent.role} | effort: ${agent.effort} | tools: ${agent.tools.length > 0 ? agent.tools.join(", ") : "default"}`,
+		);
+	}
+
+	private async removeCodingAgent(agentNumber: number): Promise<void> {
+		if (agentNumber === 1) {
+			this.showError("Agent 1 cannot be removed; turn it off or change its harness instead.");
+			return;
+		}
+		const slots = this.settingsManager.getCodingHarnessSlots();
+		const remaining = slots.agents.filter((agent) => agent.id !== `agent${agentNumber}`);
+		if (remaining.length === slots.agents.length) {
+			this.showError(`Agent ${agentNumber} does not exist.`);
+			return;
+		}
+		slots.agents = remaining;
+		this.settingsManager.setCodingHarnessSlots(slots);
+		await this.settingsManager.flush();
+		this.updateKlermRoutingStatus();
+		this.showStatus(`Removed Agent ${agentNumber}. Existing agent numbers remain unchanged.`);
+	}
+
+	private async handleNumberedCodingAgentCommand(agentNumber: number, argument: string): Promise<void> {
+		const slots = this.settingsManager.getCodingHarnessSlots();
+		const agent = slots.agents.find((candidate) => candidate.id === `agent${agentNumber}`);
+		if (!agent) {
+			this.showError(`Agent ${agentNumber} does not exist. Use /add to create the next agent.`);
+			return;
+		}
+		const [action = "status", ...parts] = argument.trim().split(/\s+/);
+		const value = parts.join(" ").trim();
+		if (action === "status" || action === "view") {
+			this.viewCodingAgent(agentNumber);
+			return;
+		}
+		if (action === "harness" || action === "connect") {
+			const kind = normalizeCodingHarnessKind(value);
+			if (!kind) {
+				this.showError(`Usage: /agent ${agentNumber} harness <klerm|pi|claude code|codex|opencode|cline>`);
+				return;
+			}
+			const setup = await (this.options?.discoverCodingHarnesses ?? discoverCodingHarnessesDefault)();
+			const discovered = setup.find((result) => result.kind === kind);
+			if (!discovered?.available) {
+				this.showError(discovered?.error ?? `${this.codingAgentLabel(kind)} was not found.`);
+				return;
+			}
+			agent.kind = kind;
+			agent.enabled = true;
+			if (kind !== "klerm") delete agent.model;
+		} else if (action === "disconnect") {
+			agent.kind = null;
+			agent.enabled = false;
+			delete agent.model;
+		} else if (action === "on" || action === "off") {
+			if (action === "on" && agent.kind === null) {
+				this.showError(`Agent ${agentNumber} needs a harness before it can be turned on.`);
+				return;
+			}
+			agent.enabled = action === "on";
+		} else if (action === "model") {
+			if (!value) {
+				this.showError(`Usage: /agent ${agentNumber} model <reference|default>`);
+				return;
+			}
+			if (value === "default") delete agent.model;
+			else agent.model = value;
+		} else if (action === "role") {
+			if (value !== "planner" && value !== "builder") {
+				this.showError(`Usage: /agent ${agentNumber} role <planner|builder>`);
+				return;
+			}
+			agent.role = value;
+		} else if (action === "effort") {
+			const effort = value === "none" ? "off" : value;
+			if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(effort)) {
+				this.showError(`Usage: /agent ${agentNumber} effort <off|minimal|low|medium|high|xhigh|max>`);
+				return;
+			}
+			agent.effort = effort as typeof agent.effort;
+		} else if (action === "tools") {
+			agent.tools = value === "default" || value === "none" ? [] : value.split(/[\s,]+/).filter(Boolean);
+		} else {
+			this.showError(`Usage: /agent ${agentNumber} <harness|model|role|effort|tools|on|off|status> ...`);
+			return;
+		}
+
+		slots.externalHarnessesEnabled = slots.agents.some((candidate) => candidate.enabled && candidate.kind !== null);
+		this.settingsManager.setCodingHarnessSlots(slots);
+		await this.settingsManager.flush();
+		this.updateKlermRoutingStatus();
+		this.viewCodingAgent(agentNumber);
 	}
 
 	private async handleKlermRoutingCommand(argument: string): Promise<void> {
@@ -5294,6 +5855,12 @@ export class InteractiveMode {
 		const selectedTarget = state.lane === "direct" ? activeModel : state.selectedTarget;
 		const localModel = state.localModel ?? routing.config.localModel;
 		const frontierModel = state.frontierModel ?? routing.config.frontierModel;
+		const configuredAgents = this.settingsManager.getCodingHarnessSlots().agents;
+		const configuredAgent = (number: number) => configuredAgents.find((agent) => agent.id === `agent${number}`);
+		const harnessSuffix = (number: number) => {
+			const agent = configuredAgent(number);
+			return agent ? ` (${this.codingAgentLabel(agent.kind)}${agent.enabled ? "" : " · Off"})` : "";
+		};
 		const activeLabel = theme.fg("success", "(currently active)");
 		const laneLabel = (lane: string) =>
 			lane === "local" ? "Agent 1" : lane === "frontier" ? "Agent 2" : lane === "direct" ? "Direct" : lane;
@@ -5316,8 +5883,18 @@ export class InteractiveMode {
 					: state.lane;
 			this.klermRoutingStatus.setText(
 				[
-					`Agent 1: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
-					`Agent 2: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					`Agent 1${harnessSuffix(1)}: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+					...(configuredAgent(2) || frontierModel
+						? [
+								`Agent 2${harnessSuffix(2)}: ${frontierModel ?? configuredAgent(2)?.model ?? "default"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+							]
+						: []),
+					...configuredAgents
+						.filter((agent) => agent.id !== "agent1" && agent.id !== "agent2")
+						.map(
+							(agent) =>
+								`Agent ${agent.id.slice(5)}${harnessSuffix(Number(agent.id.slice(5)))}: ${agent.model ?? "default"}`,
+						),
 					`Route: ${routingLabel(state.mode)} · ${laneLabel(activeRoute)}${selectedTarget ? ` · ${selectedTarget}` : ""}`,
 				].join("\n"),
 			);
@@ -5326,11 +5903,20 @@ export class InteractiveMode {
 
 		const lines: string[] = [];
 		lines.push(
-			`Agent 1 model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+			`Agent 1${harnessSuffix(1)} model: ${localModel ?? "none"}${selectedTarget && localModel === selectedTarget ? ` ${activeLabel}` : ""}`,
 		);
-		lines.push(
-			`Agent 2 model: ${frontierModel ?? "none"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
-		);
+		if (configuredAgent(2) || frontierModel) {
+			lines.push(
+				`Agent 2${harnessSuffix(2)} model: ${frontierModel ?? configuredAgent(2)?.model ?? "default"}${selectedTarget && frontierModel === selectedTarget ? ` ${activeLabel}` : ""}`,
+			);
+		}
+		for (const agent of configuredAgents.filter(
+			(candidate) => candidate.id !== "agent1" && candidate.id !== "agent2",
+		)) {
+			lines.push(
+				`Agent ${agent.id.slice(5)}${harnessSuffix(Number(agent.id.slice(5)))} model: ${agent.model ?? "default"}`,
+			);
+		}
 		lines.push(`Routing: ${routingLabel(state.mode)}`);
 		lines.push(`Start lane: ${routingLabel(routing.config.activeStartLane)}`);
 		const effectiveHandback = state.handbackEnabled ?? routing.config.handbackEnabled;
@@ -5595,6 +6181,18 @@ export class InteractiveMode {
 						const reference = `${model.provider}/${model.id}`;
 						if (lane === "local") await routing.setLocalModel(reference);
 						else await routing.setFrontierModel(reference);
+						const id = lane === "local" ? "agent1" : "agent2";
+						const slots = this.settingsManager.getCodingHarnessSlots();
+						let configured = slots.agents.find((agent) => agent.id === id);
+						if (!configured) {
+							configured = createCodingHarnessAgent(id, "klerm");
+							slots.agents.push(configured);
+						}
+						configured.kind = "klerm";
+						configured.enabled = true;
+						configured.model = reference;
+						this.settingsManager.setCodingHarnessSlots(slots);
+						await this.settingsManager.flush();
 						this.updateKlermRoutingStatus();
 						done();
 						this.showStatus(`${lane === "local" ? "Agent 1" : "Agent 2"} model: ${reference}`);
