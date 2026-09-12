@@ -12,6 +12,7 @@ export interface CodingHarnessAgentSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	memoryProfileId?: string;
 	role: CodingHarnessRole;
 	effort: CodingHarnessEffort;
 	tools: string[];
@@ -19,6 +20,7 @@ export interface CodingHarnessAgentSettings {
 
 export interface CodingHarnessSlots {
 	externalHarnessesEnabled: boolean;
+	workTogetherEnabled?: boolean;
 	agents: CodingHarnessAgentSettings[];
 }
 
@@ -87,14 +89,16 @@ export function normalizeCodingHarnessKind(value: unknown): CodingHarnessKind | 
 
 function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): CodingHarnessAgentSettings {
 	if (value === null || typeof value === "string") {
-		const kind = value === null ? null : (normalizeCodingHarnessKind(value) ?? fallback.kind);
+		const kind = value === null ? fallback.kind : (normalizeCodingHarnessKind(value) ?? fallback.kind);
 		return { ...fallback, kind, enabled: kind !== null };
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return structuredClone(fallback);
 	const candidate = value as Record<string, unknown>;
 	const id = typeof candidate.id === "string" && AGENT_ID_PATTERN.test(candidate.id) ? candidate.id : fallback.id;
-	const kind = candidate.kind === null ? null : (normalizeCodingHarnessKind(candidate.kind) ?? fallback.kind);
+	const kind = candidate.kind === null ? fallback.kind : (normalizeCodingHarnessKind(candidate.kind) ?? fallback.kind);
 	const model = typeof candidate.model === "string" ? candidate.model.trim().slice(0, MAX_MODEL_LENGTH) : "";
+	const memoryProfileId =
+		typeof candidate.memoryProfileId === "string" ? candidate.memoryProfileId.trim().slice(0, 128) : "";
 	const role = candidate.role === "planner" || candidate.role === "builder" ? candidate.role : fallback.role;
 	const effort = CODING_HARNESS_EFFORTS.includes(candidate.effort as CodingHarnessEffort)
 		? (candidate.effort as CodingHarnessEffort)
@@ -113,6 +117,7 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		kind,
 		enabled: kind !== null && (typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled),
 		...(model ? { model } : {}),
+		...(memoryProfileId ? { memoryProfileId } : {}),
 		role,
 		effort,
 		tools,
@@ -130,20 +135,29 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 			normalizeAgent(agent, {
 				...DEFAULT_AGENT,
 				id: `agent${index + 1}`,
-				kind: index === 0 ? "klerm" : null,
-				enabled: index === 0,
+				kind: "klerm",
+				enabled: true,
 			}),
 		);
 	} else {
 		const first = normalizeAgent(stored.agent1, DEFAULT_AGENT);
-		const second = normalizeAgent(stored.agent2, { ...DEFAULT_AGENT, id: "agent2", kind: null, enabled: false });
-		agents = second.kind === null ? [first] : [first, second];
+		const second = normalizeAgent(stored.agent2, { ...DEFAULT_AGENT, id: "agent2" });
+		agents = normalizeCodingHarnessKind(stored.agent2) === undefined ? [first] : [first, second];
 	}
 	const seen = new Set<string>();
 	agents = agents.filter((agent) => !seen.has(agent.id) && seen.add(agent.id));
 	if (agents.length === 0) agents = [structuredClone(DEFAULT_AGENT)];
+	if (!agents.some((agent) => agent.id === "agent1")) agents.push(structuredClone(DEFAULT_AGENT));
+	agents.sort((left, right) => Number(left.id.slice(5)) - Number(right.id.slice(5)));
 	return {
 		externalHarnessesEnabled: stored.externalHarnessesEnabled === true,
+		...(stored.externalHarnessesEnabled === true &&
+		new Set(
+			agents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model).map((agent) => agent.model),
+		).size >= 3 &&
+		stored.workTogetherEnabled === true
+			? { workTogetherEnabled: true }
+			: {}),
 		agents,
 	};
 }
@@ -151,7 +165,11 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const agent = value as Record<string, unknown>;
-	if (Object.keys(agent).some((key) => !["id", "kind", "enabled", "model", "role", "effort", "tools"].includes(key))) {
+	if (
+		Object.keys(agent).some(
+			(key) => !["id", "kind", "enabled", "model", "memoryProfileId", "role", "effort", "tools"].includes(key),
+		)
+	) {
 		return undefined;
 	}
 	if (typeof agent.id !== "string" || !AGENT_ID_PATTERN.test(agent.id)) return undefined;
@@ -160,6 +178,12 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (
 		agent.model !== undefined &&
 		(typeof agent.model !== "string" || !agent.model.trim() || agent.model.length > MAX_MODEL_LENGTH)
+	) {
+		return undefined;
+	}
+	if (
+		agent.memoryProfileId !== undefined &&
+		(typeof agent.memoryProfileId !== "string" || !agent.memoryProfileId.trim() || agent.memoryProfileId.length > 128)
 	) {
 		return undefined;
 	}
@@ -176,6 +200,7 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		kind: agent.kind as CodingHarnessSlot,
 		enabled: agent.enabled,
 		...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
+		...(typeof agent.memoryProfileId === "string" ? { memoryProfileId: agent.memoryProfileId.trim() } : {}),
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,
 		tools: [...new Set(agent.tools as string[])],
@@ -186,10 +211,11 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const setup = value as Record<string, unknown>;
 	if (
-		Object.keys(setup).length !== 2 ||
+		Object.keys(setup).some((key) => !["externalHarnessesEnabled", "workTogetherEnabled", "agents"].includes(key)) ||
 		!Object.hasOwn(setup, "externalHarnessesEnabled") ||
 		!Object.hasOwn(setup, "agents") ||
 		typeof setup.externalHarnessesEnabled !== "boolean" ||
+		(setup.workTogetherEnabled !== undefined && typeof setup.workTogetherEnabled !== "boolean") ||
 		!Array.isArray(setup.agents) ||
 		setup.agents.length < 1 ||
 		setup.agents.length > MAX_AGENTS
@@ -199,7 +225,20 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 	if (agents.some((agent) => !agent)) return undefined;
 	const parsedAgents = agents as CodingHarnessAgentSettings[];
 	if (new Set(parsedAgents.map((agent) => agent.id)).size !== parsedAgents.length) return undefined;
-	return { externalHarnessesEnabled: setup.externalHarnessesEnabled, agents: parsedAgents };
+	if (!parsedAgents.some((agent) => agent.id === "agent1")) return undefined;
+	const workTogetherEnabled =
+		setup.externalHarnessesEnabled &&
+		setup.workTogetherEnabled === true &&
+		new Set(
+			parsedAgents
+				.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model)
+				.map((agent) => agent.model),
+		).size >= 3;
+	return {
+		externalHarnessesEnabled: setup.externalHarnessesEnabled,
+		...(workTogetherEnabled ? { workTogetherEnabled: true } : {}),
+		agents: parsedAgents,
+	};
 }
 
 export function nextCodingHarnessAgentId(agents: readonly CodingHarnessAgentSettings[]): string {
@@ -210,7 +249,7 @@ export function nextCodingHarnessAgentId(agents: readonly CodingHarnessAgentSett
 	return `agent${highest + 1}`;
 }
 
-export function createCodingHarnessAgent(id: string, kind: CodingHarnessSlot = null): CodingHarnessAgentSettings {
+export function createCodingHarnessAgent(id: string, kind: CodingHarnessSlot = "klerm"): CodingHarnessAgentSettings {
 	return { id, kind, enabled: kind !== null, role: "builder", effort: "off", tools: [] };
 }
 

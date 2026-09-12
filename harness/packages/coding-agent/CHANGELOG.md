@@ -25,9 +25,11 @@
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
 - Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
 - Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards; native external session prompting remains disabled until adapters are available.
+- Added desktop Work together orchestration for three or more distinct Klerm models, with shared capability rosters, task-aware peer selection, per-agent memory profiles, and target-attributed transition logs.
 
 ### Changed
 
+- Changed newly added coding agents to use the enabled Klerm harness by default while keeping external harness activation as an independent global setting.
 - Removed the changelog URL line from the interactive update-available notice.
 - Changed automatic routing to always start locally, deterministically recommend frontier for complex tasks, and enforce ignored recommendations after the first completed local response.
 - Changed the persistent A2A cycle budget to accept any positive safe integer or an explicit unlimited mode through `/routing cycles unlimited` or `0`.

@@ -51,6 +51,7 @@ describe("desktop image and task helpers", () => {
 	});
 
 	test("maps native coding harness logos", () => {
+		expect(providerLogoSrc("klerm")).toBe("/K_Klerm_no_background.png");
 		expect(providerLogoSrc("claude-code")).toBe("/providers/claude-code.webp");
 		expect(providerLogoSrc("codex")).toBe("/providers/codex-mark.png");
 	});

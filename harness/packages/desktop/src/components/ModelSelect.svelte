@@ -33,7 +33,7 @@
 	let buttonEl: HTMLButtonElement | undefined = $state();
 
 	const selected = $derived(options.find((option) => option.value === value));
-	const displayLabel = $derived(selected?.label ?? options[0]?.label ?? placeholder);
+	const displayLabel = $derived(selected?.label ?? placeholder);
 
 	$effect(() => {
 		if (disabled) open = false;

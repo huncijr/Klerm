@@ -151,7 +151,7 @@ describe("interactive harness slot commands", () => {
 		await dynamicHandlers.handleNumberedCodingAgentCommand.call(dynamicContext, 2, "tools read,grep,bash");
 
 		expect(getSlots().agents[1]).toEqual({
-			...agent("agent2", null, false),
+			...agent("agent2", "klerm"),
 			role: "planner",
 			effort: "high",
 			tools: ["read", "grep", "bash"],

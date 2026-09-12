@@ -12,6 +12,7 @@
 	import { imageDataUrl } from "../lib/helpers.ts";
 	import type {
 		ApprovalMode,
+		CodingHarnessKind,
 		CodingHarnessSetup,
 		CodingHarnessSlotSettings,
 		ImageAttachment,
@@ -38,12 +39,16 @@
 		localValue,
 		frontierValue,
 		routingValue,
+		codingHarnessOptions,
 		localDisabled,
 		frontierDisabled,
 		routingDisabled,
 		taskStateText,
 		errorBanner,
 		externalHarnessSetup,
+		externalHarnessBusy,
+		workTogetherEnabled,
+		workTogetherAvailable,
 		history,
 		focusRequest,
 		historyKey,
@@ -81,6 +86,13 @@
 		onfrontierprofilechange,
 		onbuildofferdismiss,
 		onbuildofferswitch,
+		onexternalharnesschange,
+		onexternalharnesskindchange,
+		onexternalmodelchange,
+		onexternalmemorychange,
+		onaddexternalagent,
+		onremoveexternalagent,
+		onworktogetherchange,
 	}: {
 		draft: string;
 		attachments: ImageAttachment[];
@@ -93,12 +105,16 @@
 		localValue: string;
 		frontierValue: string;
 		routingValue: string;
+		codingHarnessOptions: SelectOption[];
 		localDisabled: boolean;
 		frontierDisabled: boolean;
 		routingDisabled: boolean;
 		taskStateText: string;
 		errorBanner: string;
 		externalHarnessSetup: CodingHarnessSetup | undefined;
+		externalHarnessBusy: boolean;
+		workTogetherEnabled: boolean;
+		workTogetherAvailable: boolean;
 		history: string[];
 		focusRequest: number;
 		historyKey: string;
@@ -136,6 +152,13 @@
 		onfrontierprofilechange: (id: string) => void;
 		onbuildofferdismiss: (id: number) => void;
 		onbuildofferswitch: (id: number) => void;
+		onexternalharnesschange: (id: string, enabled: boolean) => void;
+		onexternalharnesskindchange: (id: string, kind: CodingHarnessKind) => void;
+		onexternalmodelchange: (id: string, model: string) => void;
+		onexternalmemorychange: (id: string, profileId: string) => void;
+		onaddexternalagent: () => void;
+		onremoveexternalagent: (id: string) => void;
+		onworktogetherchange: (enabled: boolean) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -152,6 +175,8 @@
 	let draftBeforeHistory = $state("");
 	let roleMenuOpen = $state(false);
 	let roleMenuRoot: HTMLElement | undefined = $state();
+	let agentStripRoot: HTMLElement | undefined = $state();
+	let pinnedAgentId = $state("");
 	let mcpPickerOpen = $state(false);
 	let mcpQuery = $state("");
 	let mcpTokenStart = $state(-1);
@@ -167,10 +192,13 @@
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
 	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
 	const externalAgentSlots = $derived<Array<{ label: string; slot: CodingHarnessSlotSettings }>>(
-		externalHarnessSetup
-			? externalHarnessSetup.slots.agents.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot }))
+		externalHarnessSetup?.slots.externalHarnessesEnabled
+			? externalHarnessSetup.slots.agents
+					.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot }))
 			: [],
 	);
+	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const compactWorkTogetherLayout = $derived(externalMode && workTogetherAvailable);
 
 	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
 		if (kind === "claude-code") return "Claude Code";
@@ -180,6 +208,20 @@
 		if (kind === "pi") return "Pi";
 		if (kind === "klerm") return "Klerm";
 		return "Not configured";
+	}
+
+	function harnessModels(slot: CodingHarnessSlotSettings): SelectOption[] {
+		if (slot.kind === "klerm") {
+			const source = slot.id === "agent1" ? localOptions : slot.id === "agent2" ? frontierOptions : [...localOptions, ...frontierOptions];
+			return source.filter(
+				(option, index, options) => option.value && options.findIndex((candidate) => candidate.value === option.value) === index,
+			);
+		}
+		return (
+			externalHarnessSetup?.harnesses
+				.find((harness) => harness.kind === slot.kind)
+				?.models.map((model) => ({ value: model, label: model })) ?? []
+		);
 	}
 
 	function mentionStyle(color: McpColor = "base"): string {
@@ -231,21 +273,28 @@
 
 	onMount(() => {
 		const closeRoleMenu = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || !roleMenuOpen) return;
+			if (event.key !== "Escape" || (!roleMenuOpen && !pinnedAgentId)) return;
 			event.preventDefault();
 			roleMenuOpen = false;
+			pinnedAgentId = "";
 		};
 		const closeRoleMenuOutside = (event: PointerEvent) => {
 			if (!roleMenuOpen || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
 			roleMenuOpen = false;
 		};
+		const closeAgentMenuOutside = (event: PointerEvent) => {
+			if (!pinnedAgentId || !(event.target instanceof Node) || agentStripRoot?.contains(event.target)) return;
+			pinnedAgentId = "";
+		};
 		window.addEventListener("resize", resizePrompt);
 		window.addEventListener("keydown", closeRoleMenu);
 		document.addEventListener("pointerdown", closeRoleMenuOutside);
+		document.addEventListener("pointerdown", closeAgentMenuOutside);
 		return () => {
 			window.removeEventListener("resize", resizePrompt);
 			window.removeEventListener("keydown", closeRoleMenu);
 			document.removeEventListener("pointerdown", closeRoleMenuOutside);
+			document.removeEventListener("pointerdown", closeAgentMenuOutside);
 		};
 	});
 
@@ -481,23 +530,6 @@
 			</div>
 		{/key}
 	{/if}
-	{#if externalHarnessSetup?.slots.externalHarnessesEnabled}
-		<div class="mx-auto mb-2 w-[min(820px,100%)] rounded-md border border-[#33404a] bg-[#0a1015] px-2.5 py-2">
-			<div class="flex flex-wrap items-center gap-1.5">
-				<strong class="mr-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#d7e7ff]">External agents</strong>
-				{#each externalAgentSlots as { label, slot }}
-					<span class={`flex items-center gap-1 rounded border px-1.5 py-1 font-mono text-[8px] ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#cbd8af]" : "border-[#293239] bg-[#0d1217] text-[#69757d]"}`}>
-						<ProviderLogo id={slot.kind ?? "custom"} label={harnessDisplayName(slot.kind)} size={16} decorative />
-						{label} · {harnessDisplayName(slot.kind)} · {slot.enabled ? "Opt in" : "Opt out"}
-					</span>
-				{/each}
-				<span class="ml-auto font-mono text-[8px] text-[#8b969e]">{externalHarnessSetup.effectiveRouting === "auto" ? "Auto" : externalHarnessSetup.effectiveRouting === "none" ? "Single" : "Off"}</span>
-			</div>
-			{#if externalHarnessSetup.blockingReason}
-				<p class="m-0 mt-1 font-mono text-[7px] leading-[1.35] text-[#a78e60]">{externalHarnessSetup.blockingReason} Built-in Klerm prompting remains available.</p>
-			{/if}
-		</div>
-	{/if}
 	<div class="mx-auto mb-1 flex w-[min(820px,100%)] justify-end px-1">
 		<button
 			type="button"
@@ -516,6 +548,79 @@
 			submit();
 		}}
 	>
+		{#if externalAgentSlots.length > 0}
+			<div bind:this={agentStripRoot} class="flex min-h-9 flex-wrap items-center gap-1.5 border-b border-[#232c34] px-2.5 py-1.5">
+				{#each externalAgentSlots as { label, slot }, index (slot.id)}
+					{@const models = harnessModels(slot)}
+					<div class="group relative">
+						<div class={`flex h-7 items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
+							<button
+								type="button"
+								aria-expanded={pinnedAgentId === slot.id}
+								aria-label={`Configure ${label} ${harnessDisplayName(slot.kind)}`}
+								class="flex h-full items-center gap-1.5 px-1.5 font-mono text-[8px]"
+								onfocus={() => (pinnedAgentId = slot.id)}
+								onclick={() => (pinnedAgentId = pinnedAgentId === slot.id ? "" : slot.id)}
+							>
+								<span>{label}</span>
+								<span class="text-[#3f4a52]">·</span>
+								<ProviderLogo id={slot.kind ?? "klerm"} label={harnessDisplayName(slot.kind)} size={16} decorative />
+								<span>{harnessDisplayName(slot.kind)}</span>
+							</button>
+							<button
+								type="button"
+								role="switch"
+								aria-checked={slot.enabled}
+								aria-label={`${slot.enabled ? "Disable" : "Enable"} ${label}`}
+								disabled={externalHarnessBusy}
+								class="mr-1 flex h-full items-center pl-1 disabled:cursor-wait disabled:opacity-50"
+								onclick={() => onexternalharnesschange(slot.id, !slot.enabled)}
+							>
+								<span class={`relative h-3.5 w-6 rounded-full transition-colors ${slot.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${slot.enabled ? "translate-x-2.5" : "translate-x-0"}`}></span></span>
+							</button>
+						</div>
+						<div class={`absolute top-full z-40 w-56 rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_16px_38px_rgba(0,0,0,.5)] group-hover:block ${pinnedAgentId === slot.id ? "block" : "hidden"} ${index > 1 ? "right-0" : "left-0"}`}>
+							<label class="block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-model-${slot.id}`}>Model</label>
+							<select
+								id={`composer-model-${slot.id}`}
+								value={slot.model ?? (slot.id === "agent1" ? localValue : slot.id === "agent2" ? frontierValue : "")}
+								disabled={externalHarnessBusy || models.length === 0}
+								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
+								onchange={(event) => onexternalmodelchange(slot.id, event.currentTarget.value)}
+							>
+								<option value="">{slot.kind === "klerm" ? "Choose a model" : "Models available after adapter connection"}</option>
+								{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}
+							</select>
+							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-harness-${slot.id}`}>Harness</label>
+							<select
+								id={`composer-harness-${slot.id}`}
+								value={slot.kind ?? "klerm"}
+								disabled={externalHarnessBusy}
+								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
+								onchange={(event) => onexternalharnesskindchange(slot.id, event.currentTarget.value as CodingHarnessKind)}
+							>
+								{#each codingHarnessOptions as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
+							</select>
+							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-memory-${slot.id}`}>Memory</label>
+							<select
+								id={`composer-memory-${slot.id}`}
+								value={slot.memoryProfileId ?? (slot.id === "agent1" ? localProfileId : slot.id === "agent2" ? frontierProfileId : "")}
+								disabled={externalHarnessBusy}
+								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
+								onchange={(event) => onexternalmemorychange(slot.id, event.currentTarget.value)}
+							>
+								<option value="">Shared memory only</option>
+								{#each profiles as profile (profile.id)}<option value={profile.id}>{profile.name}</option>{/each}
+							</select>
+							{#if slot.id !== "agent1"}
+								<button type="button" class="mt-2 w-full rounded-md border border-[#4a3030] px-2 py-1.5 font-mono text-[8px] text-[#d9928b] hover:bg-[#241111]" onclick={() => { pinnedAgentId = ""; onremoveexternalagent(slot.id); }}>Remove agent</button>
+							{/if}
+						</div>
+					</div>
+				{/each}
+				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 16} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[#3d4a54] bg-[#0a0f13] font-mono text-[13px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
+			</div>
+		{/if}
 		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-[55px] narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[49px]">
 			<input bind:this={fileEl} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple class="hidden" onchange={(event) => void attachImages(event)} />
 			{#if attachments.length > 0}
@@ -667,15 +772,16 @@
 		</label>
 	</div>
 
-	<div class="mx-auto mt-1.5 grid w-[min(820px,100%)] grid-cols-3 gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px]">
-		<div class="min-w-0">
+	<div class={`mx-auto mt-1.5 grid w-[min(820px,100%)] gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px] ${compactWorkTogetherLayout || (externalMode && externalAgentSlots.length < 2) ? "grid-cols-2" : "grid-cols-3"}`}>
+		{#if !compactWorkTogetherLayout}
+			<div class="min-w-0">
 			<ModelSelect
-				label="Agent 1 model"
+				label={`${externalAgentSlots[0]?.label ?? "Agent 1"} model`}
 				options={localOptions}
 				value={localValue}
 				disabled={localDisabled}
 				placeholder="Discovering models..."
-				profiles={profileDisabled ? [] : profiles}
+				profiles={profileDisabled || externalMode ? [] : profiles}
 				selectedProfile={profiles.find((profile) => profile.id === localProfileId)}
 				onchange={(value) => {
 					onlocalchange(value);
@@ -686,7 +792,7 @@
 					onlocalprofilechange(profileId);
 				}}
 			/>
-			{#if localThinkingLevels.length > 1}
+			{#if !externalMode && localThinkingLevels.length > 1}
 				<ThinkingSlider
 					label="Agent 1 effort"
 					levels={localThinkingLevels}
@@ -695,15 +801,17 @@
 					onchange={onlocalthinkingchange}
 				/>
 			{/if}
-		</div>
-		<div class="min-w-0">
+			</div>
+		{/if}
+		{#if !compactWorkTogetherLayout && (!externalMode || externalAgentSlots.length > 1)}
+			<div class="min-w-0">
 			<ModelSelect
-				label="Agent 2 model"
+				label={`${externalAgentSlots[1]?.label ?? "Agent 2"} model`}
 				options={frontierOptions}
 				value={frontierValue}
 				disabled={frontierDisabled}
-				placeholder="Discovering models..."
-				profiles={profileDisabled ? [] : profiles}
+				placeholder="Choose a model"
+				profiles={profileDisabled || externalMode ? [] : profiles}
 				selectedProfile={profiles.find((profile) => profile.id === frontierProfileId)}
 				flyout="left"
 				onchange={(value) => {
@@ -715,7 +823,7 @@
 					onfrontierprofilechange(profileId);
 				}}
 			/>
-			{#if frontierThinkingLevels.length > 1}
+			{#if !externalMode && frontierThinkingLevels.length > 1}
 				<ThinkingSlider
 					label="Agent 2 effort"
 					levels={frontierThinkingLevels}
@@ -724,15 +832,33 @@
 					onchange={onfrontierthinkingchange}
 				/>
 			{/if}
-		</div>
+			</div>
+		{/if}
 		<ModelSelect
 			label="Routing"
 			options={routingOptions}
 			value={routingValue}
-			disabled={routingDisabled}
+			disabled={routingDisabled || workTogetherEnabled}
 			placeholder="Choose routing"
 			onchange={onroutingchange}
 		/>
+		{#if compactWorkTogetherLayout}
+			<button
+				type="button"
+				role="switch"
+				aria-checked={workTogetherEnabled}
+				aria-label="Toggle Work together mode"
+				disabled={externalHarnessBusy}
+				class="flex min-w-0 items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left disabled:cursor-wait disabled:opacity-50"
+				onclick={() => onworktogetherchange(!workTogetherEnabled)}
+			>
+				<span>
+					<strong class="block font-mono text-[8px] tracking-[.1em] text-[#59636b] uppercase">Harness mode</strong>
+					<span class="mt-1 block font-mono text-[10px] text-[#b7c0c6]">{workTogetherEnabled ? "Work together" : "Routing"}</span>
+				</span>
+				<span class={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${workTogetherEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${workTogetherEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
+			</button>
+		{/if}
 	</div>
 
 	<div

@@ -12,11 +12,13 @@
 		toDisplayText,
 		truncateText,
 	} from "./lib/helpers.ts";
+	import { addCodingHarnessSlot, removeCodingHarnessSlot, updateCodingHarnessSlot } from "./lib/coding-harnesses.ts";
 	import type {
 		AgentMessage,
 		BashResult,
 		ChatMessage,
 		CodingHarnessSetup,
+		CodingHarnessSlotSettings,
 		CustomModelEntry,
 		DesktopAppearance,
 		DesktopHandshake,
@@ -151,11 +153,72 @@
 		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
 	);
 	const sendDisabled = $derived(!backendReady || interactionActive);
-	const localSelectDisabled = $derived(
-		!backendReady || interactionActive || !localOptions.some((option) => option.value.length > 0),
+	const externalHarnessesEnabled = $derived(codingHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const codingHarnessOptions = $derived<SelectOption[]>(
+		codingHarnessSetup?.harnesses
+			.filter((harness) => harness.available)
+			.map((harness) => ({
+				value: harness.kind,
+				label:
+					harness.kind === "claude-code"
+						? "Claude Code"
+						: harness.kind === "opencode"
+							? "OpenCode"
+							: harness.kind.charAt(0).toUpperCase() + harness.kind.slice(1),
+			})) ?? [{ value: "klerm", label: "Klerm" }],
 	);
-	const frontierSelectDisabled = $derived(
-		!backendReady || interactionActive || !frontierOptions.some((option) => option.value.length > 0),
+	const configuredHarnessAgents = $derived(codingHarnessSetup?.slots.agents ?? []);
+	const firstHarnessAgent = $derived(configuredHarnessAgents[0]);
+	const secondHarnessAgent = $derived(configuredHarnessAgents[1]);
+	const workTogetherAvailable = $derived.by(() => {
+		if (!externalHarnessesEnabled) return false;
+		const models = configuredHarnessAgents
+			.filter((agent) => agent.enabled && agent.kind === "klerm")
+			.map((agent) =>
+				agent.model ??
+				(agent.id === "agent1"
+					? currentConfig?.localModel
+					: agent.id === "agent2"
+						? currentConfig?.frontierModel
+						: undefined),
+			)
+			.filter((model): model is string => Boolean(model));
+		return new Set(models).size >= 3;
+	});
+	const workTogetherEnabled = $derived(
+		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
+	);
+	const composerLocalOptions = $derived(
+		externalHarnessesEnabled && firstHarnessAgent?.kind !== "klerm"
+			? (codingHarnessSetup?.harnesses
+					.find((harness) => harness.kind === firstHarnessAgent?.kind)
+					?.models.map((model) => ({ value: model, label: model })) ?? [])
+			: localOptions,
+	);
+	const composerFrontierOptions = $derived(
+		externalHarnessesEnabled && secondHarnessAgent?.kind !== "klerm"
+			? (codingHarnessSetup?.harnesses
+					.find((harness) => harness.kind === secondHarnessAgent?.kind)
+					?.models.map((model) => ({ value: model, label: model })) ?? [])
+			: frontierOptions,
+	);
+	const composerLocalValue = $derived(
+		externalHarnessesEnabled
+			? (firstHarnessAgent?.model ?? (firstHarnessAgent?.kind === "klerm" ? currentConfig?.localModel : undefined) ?? "")
+			: (currentConfig?.localModel ?? ""),
+	);
+	const composerFrontierValue = $derived(
+		externalHarnessesEnabled
+			? (secondHarnessAgent?.model ??
+				(secondHarnessAgent?.kind === "klerm" ? currentConfig?.frontierModel : undefined) ??
+				"")
+			: (currentConfig?.frontierModel ?? ""),
+	);
+	const composerLocalDisabled = $derived(
+		!backendReady || interactionActive || !composerLocalOptions.some((option) => option.value.length > 0),
+	);
+	const composerFrontierDisabled = $derived(
+		!backendReady || interactionActive || !composerFrontierOptions.some((option) => option.value.length > 0),
 	);
 	const routingSelectDisabled = $derived(!backendReady || interactionActive);
 	const localThinkingDisabled = $derived(!backendReady || interactionActive || localThinking.levels.length < 2);
@@ -1079,6 +1142,57 @@
 		}
 	}
 
+	async function updateCodingHarnessAgent(
+		id: string,
+		update: Partial<CodingHarnessSlotSettings>,
+	): Promise<boolean> {
+		if (!codingHarnessSetup) return false;
+		return saveCodingHarnessSlots(updateCodingHarnessSlot(codingHarnessSetup.slots, id, update));
+	}
+
+	async function setCodingHarnessAgentModel(id: string, model: string): Promise<void> {
+		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
+		if (!agent || !(await updateCodingHarnessAgent(id, { model: model || undefined }))) return;
+		if (agent.kind === "klerm" && id === "agent1") await applyConfigUpdate({ localModel: model });
+		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierModel: model });
+	}
+
+	async function setCodingHarnessAgentMemory(id: string, profileId: string): Promise<void> {
+		if (!(await updateCodingHarnessAgent(id, { memoryProfileId: profileId || undefined }))) return;
+		if (id === "agent1") await assignProfile("local", profileId);
+		if (id === "agent2") await assignProfile("frontier", profileId);
+	}
+
+	async function addCodingHarnessAgent(): Promise<void> {
+		if (!codingHarnessSetup || codingHarnessSetup.slots.agents.length >= 16) return;
+		await saveCodingHarnessSlots(addCodingHarnessSlot(codingHarnessSetup.slots));
+	}
+
+	async function removeCodingHarnessAgent(id: string): Promise<void> {
+		if (!codingHarnessSetup || id === "agent1") return;
+		await saveCodingHarnessSlots(removeCodingHarnessSlot(codingHarnessSetup.slots, id));
+	}
+
+	async function setWorkTogetherMode(enabled: boolean): Promise<void> {
+		if (!codingHarnessSetup) return;
+		const agents = codingHarnessSetup.slots.agents.map((agent) => ({
+			...agent,
+			...(agent.model
+				? {}
+				: agent.kind === "klerm" && agent.id === "agent1" && currentConfig?.localModel
+					? { model: currentConfig.localModel }
+					: agent.kind === "klerm" && agent.id === "agent2" && currentConfig?.frontierModel
+						? { model: currentConfig.frontierModel }
+						: {}),
+		}));
+		if (enabled && new Set(agents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model).map((agent) => agent.model)).size < 3) return;
+		await saveCodingHarnessSlots({
+			...codingHarnessSetup.slots,
+			workTogetherEnabled: enabled || undefined,
+			agents,
+		});
+	}
+
 	async function setDesktopAppearance(appearance: DesktopAppearance): Promise<boolean> {
 		if (!supportsCommand("set_desktop_appearance")) return false;
 		try {
@@ -1911,17 +2025,21 @@
 			{taskActive}
 			showMeta={hasConversation}
 			emptyLayout={!hasConversation}
-			localOptions={localOptions}
-			frontierOptions={frontierOptions}
-			localValue={currentConfig?.localModel ?? ""}
-			frontierValue={currentConfig?.frontierModel ?? ""}
+			localOptions={composerLocalOptions}
+			frontierOptions={composerFrontierOptions}
+			localValue={composerLocalValue}
+			frontierValue={composerFrontierValue}
 			routingValue={routingControlValue}
-			localDisabled={localSelectDisabled}
-			frontierDisabled={frontierSelectDisabled}
+			codingHarnessOptions={codingHarnessOptions}
+			localDisabled={composerLocalDisabled}
+			frontierDisabled={composerFrontierDisabled}
 			routingDisabled={routingSelectDisabled}
 			{taskStateText}
 			{errorBanner}
 			externalHarnessSetup={codingHarnessSetup}
+			externalHarnessBusy={codingHarnessSetupLoading}
+			{workTogetherEnabled}
+			{workTogetherAvailable}
 			history={promptHistory}
 			focusRequest={composerFocusRequest}
 			historyKey={lastState?.sessionId ?? ""}
@@ -1946,8 +2064,14 @@
 			onsend={(text, images) => void sendMessage(text, images)}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
-			onlocalchange={(value) => void applyConfigUpdate({ localModel: value })}
-			onfrontierchange={(value) => void applyConfigUpdate({ frontierModel: value })}
+			onlocalchange={(value) => {
+				if (externalHarnessesEnabled && firstHarnessAgent) void setCodingHarnessAgentModel(firstHarnessAgent.id, value);
+				else void applyConfigUpdate({ localModel: value });
+			}}
+			onfrontierchange={(value) => {
+				if (externalHarnessesEnabled && secondHarnessAgent) void setCodingHarnessAgentModel(secondHarnessAgent.id, value);
+				else void applyConfigUpdate({ frontierModel: value });
+			}}
 			onroutingchange={applyRoutingSelection}
 			onlocalthinkingchange={(level) => void applyThinkingLevel("local", level)}
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
@@ -1965,6 +2089,13 @@
 			onfrontierapprovalchange={(mode) => void applyConfigUpdate({ frontierApprovalMode: mode })}
 			onlocalprofilechange={(id) => void assignProfile("local", id)}
 			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
+			onexternalharnesschange={(id, enabled) => void updateCodingHarnessAgent(id, { enabled })}
+			onexternalharnesskindchange={(id, kind) => void updateCodingHarnessAgent(id, { kind, model: undefined })}
+			onexternalmodelchange={(id, model) => void setCodingHarnessAgentModel(id, model)}
+			onexternalmemorychange={(id, profileId) => void setCodingHarnessAgentMemory(id, profileId)}
+			onaddexternalagent={() => void addCodingHarnessAgent()}
+			onremoveexternalagent={(id) => void removeCodingHarnessAgent(id)}
+			onworktogetherchange={(enabled) => void setWorkTogetherMode(enabled)}
 		/>
 
 		{#if bottomPanelVisible}

@@ -13,6 +13,7 @@ export interface CodingHarnessSlotSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	memoryProfileId?: string;
 	role: WorkerRole;
 	effort: ThinkingLevel;
 	tools: string[];
@@ -21,6 +22,7 @@ export interface CodingHarnessSlotSettings {
 export interface CodingHarnessSetup {
 	slots: {
 		externalHarnessesEnabled: boolean;
+		workTogetherEnabled?: boolean;
 		agents: CodingHarnessSlotSettings[];
 	};
 	harnesses: Array<{

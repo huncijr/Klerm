@@ -4,6 +4,7 @@
  * provider id below. Unmapped ids fall back to an initial letter.
  */
 const PROVIDER_LOGO_FILES: Record<string, string> = {
+	klerm: "/K_Klerm_no_background.png",
 	anthropic: "anthropic.webp",
 	"claude-code": "claude-code.webp",
 	codex: "codex-mark.png",
@@ -32,7 +33,7 @@ const PROVIDER_LOGO_FILES: Record<string, string> = {
 
 export function providerLogoSrc(id: string): string | undefined {
 	const file = PROVIDER_LOGO_FILES[id];
-	return file ? `/providers/${file}` : undefined;
+	return file ? (file.startsWith("/") ? file : `/providers/${file}`) : undefined;
 }
 
 export function providerLogoAlt(id: string, label: string): string {

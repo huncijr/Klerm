@@ -6,6 +6,7 @@ import { defineTool, type ToolCapability, type ToolDefinition } from "../../core
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { agentLaneLabel, routingValueLabel } from "../agent-labels.ts";
+import type { CodingHarnessAgentSettings, CodingHarnessSlots } from "../coding-harness-setup.ts";
 import type {
 	KlermActiveStartLane,
 	KlermBuilderApprovalMode,
@@ -46,6 +47,9 @@ const delegateSchema = Type.Object({
 	reason: Type.String({ maxLength: 2000, description: "Why Agent 1 needs Agent 2" }),
 	summary: Type.String({ maxLength: 12000, description: "Work already completed and relevant findings" }),
 	remainingWork: Type.String({ maxLength: 12000, description: "What Agent 2 should do next" }),
+	targetAgentId: Type.Optional(
+		Type.String({ maxLength: 32, description: "Work together target, such as agent2 or agent3" }),
+	),
 });
 
 const delegateLocalSchema = Type.Object({
@@ -86,6 +90,7 @@ interface PendingDelegation {
 	reason: string;
 	summary: string;
 	remainingWork: string;
+	targetAgentId?: string;
 	trigger: KlermHandoffTrigger;
 }
 
@@ -446,6 +451,8 @@ export class KlermRoutingController {
 	private readonly getSessionId?: () => string | undefined;
 	private readonly profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined;
 	private readonly sharedMemory?: () => string;
+	private readonly codingHarnessSlots?: () => CodingHarnessSlots;
+	private readonly profileById?: (id: string) => KlermProfile | undefined;
 
 	constructor(
 		cwd: string,
@@ -454,6 +461,8 @@ export class KlermRoutingController {
 		getSessionId?: () => string | undefined,
 		profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined,
 		sharedMemory?: () => string,
+		codingHarnessSlots?: () => CodingHarnessSlots,
+		profileById?: (id: string) => KlermProfile | undefined,
 	) {
 		this.cwd = cwd;
 		this.modelRuntime = modelRuntime;
@@ -461,6 +470,8 @@ export class KlermRoutingController {
 		this.getSessionId = getSessionId;
 		this.profileForLane = profileForLane;
 		this.sharedMemory = sharedMemory;
+		this.codingHarnessSlots = codingHarnessSlots;
+		this.profileById = profileById;
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
@@ -486,8 +497,9 @@ export class KlermRoutingController {
 	}
 
 	get activeWorkerRole(): KlermWorkerRole {
-		if (this.state.lane === "local") return this.config.localRole;
-		if (this.state.lane === "frontier") return this.config.frontierRole;
+		if (this.state.lane === "local") return this.activeWorkTogetherAgent("local")?.role ?? this.config.localRole;
+		if (this.state.lane === "frontier")
+			return this.activeWorkTogetherAgent("frontier")?.role ?? this.config.frontierRole;
 		return "builder";
 	}
 
@@ -544,8 +556,82 @@ export class KlermRoutingController {
 		return compareStrength(self, other) === "stronger";
 	}
 
+	private workTogetherAgents(): CodingHarnessAgentSettings[] {
+		const slots = this.codingHarnessSlots?.();
+		if (!slots?.externalHarnessesEnabled || !slots.workTogetherEnabled) return [];
+		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
+		const seenModels = new Set<string>();
+		const agents = slots.agents.filter((agent) => {
+			if (!agent.enabled || agent.kind !== "klerm" || !agent.model || seenModels.has(agent.model)) return false;
+			if (!findExactModelReferenceMatch(agent.model, snapshot)) return false;
+			seenModels.add(agent.model);
+			return true;
+		});
+		return agents.length >= 3 && agents.some((agent) => agent.id === "agent1") ? agents : [];
+	}
+
+	private activeWorkTogetherAgent(lane: "local" | "frontier"): CodingHarnessAgentSettings | undefined {
+		const agents = this.workTogetherAgents();
+		if (lane === "local") return agents.find((agent) => agent.id === "agent1");
+		return (
+			agents.find((agent) => agent.model === this.state.selectedTarget) ??
+			agents.find((agent) => agent.id === "agent2")
+		);
+	}
+
+	private selectWorkTogetherPeer(
+		taskIntent: KlermTaskIntent | undefined = this.state.taskIntent,
+	): CodingHarnessAgentSettings | undefined {
+		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
+		const workspaceChange = taskIntent === "workspace-change";
+		return this.workTogetherAgents()
+			.filter((agent) => agent.id !== "agent1" && agent.model)
+			.sort((left, right) => {
+				const score = (agent: CodingHarnessAgentSettings): number => {
+					const model = findExactModelReferenceMatch(agent.model!, snapshot);
+					const profile = describeModelProfile(agent.model, model);
+					return (
+						profile.band * 100 +
+						(profile.reasoning ? 10 : 0) +
+						(workspaceChange === (agent.role === "builder") ? 5 : 0)
+					);
+				};
+				return score(right) - score(left) || left.id.localeCompare(right.id, undefined, { numeric: true });
+			})[0];
+	}
+
 	private identityBlock(lane: "local" | "frontier"): string {
 		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
+		const workTogetherAgents = this.workTogetherAgents();
+		if (workTogetherAgents.length > 0) {
+			const active = this.activeWorkTogetherAgent(lane) ?? workTogetherAgents[0];
+			const roster = workTogetherAgents.map((agent) => {
+				const model = findExactModelReferenceMatch(agent.model!, snapshot);
+				const profile = describeModelProfile(agent.model, model);
+				return `${agent.id}: ${profile.reference}; role ${agent.role}; strength ${profile.band}/5; reasoning ${profile.reasoning ? "yes" : "no"}; strengths ${profile.strengths.join(", ")}; tools ${agent.tools.join(", ") || "default"}`;
+			});
+			const profile = active.memoryProfileId
+				? this.profileById?.(active.memoryProfileId)
+				: active.id === "agent1"
+					? this.profileForLane?.("local")
+					: active.id === "agent2"
+						? this.profileForLane?.("frontier")
+						: undefined;
+			const identity = [
+				"<klerm_identity>",
+				`You are ${active.id} running ${active.model}.`,
+				"Work together is enabled. Every active agent has the same roster and must choose handoffs by task fit, role, capability, and available tools.",
+				...roster,
+				"</klerm_identity>",
+			].join("\n");
+			const identityWithProfile = profile
+				? `${identity}\n\n${formatProfilePrompt(`Agent ${Number(active.id.slice(5))}`, profile, active.role)}`
+				: identity;
+			const memory = this.sharedMemory?.().trim();
+			return memory
+				? `${identityWithProfile}\n\n<klerm_shared_memory>\nShared durable workspace facts for the active Klerm team:\n${memory}\n</klerm_shared_memory>`
+				: identityWithProfile;
+		}
 		const selfRef = lane === "local" ? this.config.localModel : this.config.frontierModel;
 		const otherRef = lane === "local" ? this.config.frontierModel : this.config.localModel;
 		const agent = lane === "local" ? "Agent 1" : "Agent 2";
@@ -566,9 +652,11 @@ export class KlermRoutingController {
 
 	getSystemPromptContribution(): string | undefined {
 		const localModel = this.config.localModel ?? "not configured";
-		const frontierModel = this.config.frontierModel ?? "not configured";
+		const activeFrontierAgent = this.activeWorkTogetherAgent("frontier");
+		const frontierAgent = activeFrontierAgent ? `Agent ${activeFrontierAgent.id.slice(5)}` : "Agent 2";
+		const frontierModel = activeFrontierAgent?.model ?? this.config.frontierModel ?? "not configured";
 		if (this.state.lane === "local") {
-			const role = this.config.localRole;
+			const role = this.activeWorkTogetherAgent("local")?.role ?? this.config.localRole;
 			const mustReturn = this.handbackRequired("frontier");
 			const returnedFromFrontier = this.state.lastTransition?.kind === "return";
 			const recommendedDelegation =
@@ -600,6 +688,12 @@ export class KlermRoutingController {
 				...(role === "builder" && this.state.taskIntent === "workspace-change"
 					? [
 							"Execution contract: use tools to implement the requested change. Do not stop after a plan or code snippet.",
+				...(this.workTogetherAgents().length > 0
+					? [
+							"Work together overrides normal routing for this task. Compare the full capability roster before delegating.",
+							"When a peer is better suited, call delegate_frontier with that peer's targetAgentId. References to Agent 2 below mean the selected peer agent.",
+						]
+					: []),
 							"After modifying the workspace, run a relevant verification tool. If implementation is blocked, state the concrete blocker instead of claiming completion.",
 							"If the result is a runnable website, service, or Docker application, start it in the background, verify that its local listener is reachable, and report the usable localhost URL before finishing.",
 						]
@@ -653,7 +747,7 @@ export class KlermRoutingController {
 		}
 
 		if (this.state.lane === "frontier") {
-			const role = this.config.frontierRole;
+			const role = activeFrontierAgent?.role ?? this.config.frontierRole;
 			const mustReturn = this.handbackRequired("local");
 			const canDelegateLocal =
 				this.state.completionOwner === "frontier" &&
@@ -662,10 +756,10 @@ export class KlermRoutingController {
 			return [
 				this.identityBlock("frontier"),
 				"<klerm_a2a>",
-				"You are Klerm Agent 2. Continue the current task using the existing session and provider-neutral handoff context.",
+				`You are Klerm ${frontierAgent}. Continue the current task using the existing session and provider-neutral handoff context.`,
 				`Agent 1 model: ${localModel}`,
-				`Current Agent 2 model: ${frontierModel}`,
-				`Current Agent 2 role: ${role}`,
+				`Current ${frontierAgent} model: ${frontierModel}`,
+				`Current ${frontierAgent} role: ${role}`,
 				...(role === "planner"
 					? [
 							"Planner mode is read-only: inspect files with read/search/list tools, use only non-mutating shell commands and read-only MCP tools, then produce a plan or delegate when appropriate.",
@@ -683,7 +777,7 @@ export class KlermRoutingController {
 						]
 					: []),
 				"Treat [Cross-model handoff] sections as instructions and context supplied by Agent 1.",
-				`When the user asks which model you are, identify the current Agent 2 model exactly as ${frontierModel}.`,
+				`When the user asks which model you are, identify the current ${frontierAgent} model exactly as ${frontierModel}.`,
 				canDelegateLocal
 					? "You own the final answer. Call delegate_local alone when a focused task is better suited to Agent 1, then review its return and finish the task."
 					: "Do not call delegate_frontier because you are already Agent 2.",
@@ -895,6 +989,13 @@ export class KlermRoutingController {
 			event,
 			task: this.task,
 			route,
+				workTogetherAgents: this.workTogetherAgents().map((agent) => ({
+					id: agent.id,
+					model: agent.model,
+					memoryProfileId: agent.memoryProfileId,
+					role: agent.role,
+					tools: agent.tools,
+				})),
 			routerModel: this.config.localModel,
 			selectedTarget,
 			reason,
@@ -1087,7 +1188,13 @@ export class KlermRoutingController {
 		this.repeatedToolCalls = 0;
 		this.explicitFrontierRequest = explicitlyRequestsFrontier(task);
 		const config = this.config;
-		if (config.routing === "off" && config.activeStartLane === "auto" && !routingOverride) {
+		const workTogetherAgents = this.workTogetherAgents();
+		if (
+			config.routing === "off" &&
+			config.activeStartLane === "auto" &&
+			!routingOverride &&
+			workTogetherAgents.length === 0
+		) {
 			this.state = {
 				...this.state,
 				task,
@@ -1127,7 +1234,13 @@ export class KlermRoutingController {
 		let completionOwner: KlermCompletionOwner;
 		let delegationAssessment: ReturnType<typeof assessDelegationRecommendation> | undefined;
 
-		if (routingOverride === "local") {
+		if (!routingOverride && workTogetherAgents.length > 0) {
+			route = "LOCAL";
+			reason = "Work together starts Agent 1 as the team orchestrator";
+			completionOwner = "local";
+			const peer = this.selectWorkTogetherPeer(taskIntent);
+			delegationAssessment = assessDelegationRecommendation(task, Boolean(peer));
+		} else if (routingOverride === "local") {
 			route = "LOCAL";
 			reason = "interactive task forced local";
 			completionOwner = "local";
@@ -1193,7 +1306,10 @@ export class KlermRoutingController {
 		const model = this.resolveModel(reference, route === "LOCAL" ? "local" : "frontier");
 		const selectedTarget = modelReference(model);
 		const initialCycle = 0;
-		const initialHandbackEnabled = config.handbackEnabled || (route === "FRONTIER" && completionOwner === "local");
+		const initialHandbackEnabled =
+			workTogetherAgents.length > 0 ||
+			config.handbackEnabled ||
+			(route === "FRONTIER" && completionOwner === "local");
 		this.state = {
 			taskId,
 			task,
@@ -1290,15 +1406,15 @@ export class KlermRoutingController {
 	createDelegationTool(): ToolDefinition {
 		return defineTool({
 			name: "delegate_frontier",
-			label: "Delegate to Agent 2",
+			label: "Delegate to peer agent",
 			description:
-				"Hand the current task to Agent 2. Agent 1 must use this when the user explicitly asks to consult Codex, Agent 2, or the other configured model, and may use it for work beyond Agent 1's strength band.",
+				"Hand the current task to a peer. In Work together mode, set targetAgentId to the best matching agent from the capability roster.",
 			promptSnippet: "Hand the task to Agent 2, including completed work and precise remaining instructions.",
 			promptGuidelines: [
 				"When acting as Klerm Agent 1, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Codex, Agent 2, or the other configured model.",
 				"When acting as Klerm Agent 1, use delegate_frontier when the task exceeds your strength band or repeated tool attempts fail.",
 				"As Agent 1, do not replace a requested Agent 2 handoff with a textual explanation; invoke delegate_frontier.",
-				"Call delegate_frontier through the native tool interface with reason, summary, and remainingWork string arguments. Never print a code example that imitates the call.",
+				"Call delegate_frontier through the native tool interface with reason, summary, remainingWork, and the best matching targetAgentId when Work together is enabled. Never print a code example that imitates the call.",
 			],
 			parameters: delegateSchema,
 			executionMode: "sequential",
@@ -1326,12 +1442,19 @@ export class KlermRoutingController {
 						`Agent 2 delegation cycle limit ${this.config.maxDelegationCycles} reached. Finish with the available results.`,
 					);
 				}
-				this.requestFrontierDelegation(params);
+				const workTogetherPeers = this.workTogetherAgents().filter((agent) => agent.id !== "agent1");
+				const target = params.targetAgentId
+					? workTogetherPeers.find((agent) => agent.id === params.targetAgentId)
+					: this.selectWorkTogetherPeer();
+				if (workTogetherPeers.length > 0 && !target) {
+					throw new Error(`Unknown or unavailable Work together target: ${params.targetAgentId ?? "none"}.`);
+				}
+				this.requestFrontierDelegation({ ...params, ...(target ? { targetAgentId: target.id } : {}) });
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Delegation recorded. Klerm will attempt to start Agent 2.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
+							text: `Delegation recorded. Klerm will attempt to start ${target?.id ?? "Agent 2"}.\nSummary: ${params.summary}\nRemaining work: ${params.remainingWork}`,
 						},
 					],
 					details: params,
@@ -1692,7 +1815,10 @@ export class KlermRoutingController {
 			);
 			return undefined;
 		}
-		const reference = this.config.frontierModel;
+		const target = this.pendingDelegation?.targetAgentId
+			? this.workTogetherAgents().find((agent) => agent.id === this.pendingDelegation?.targetAgentId)
+			: undefined;
+		const reference = target?.model ?? this.config.frontierModel;
 		if (!reference)
 			throw new Error(
 				`Local worker requested frontier delegation (${reason}), but no frontier model is configured.`,

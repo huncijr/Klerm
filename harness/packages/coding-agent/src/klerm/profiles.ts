@@ -196,7 +196,7 @@ export function assignedProfile(state: KlermProfileState, lane: "local" | "front
 }
 
 export function formatProfilePrompt(
-	agent: "Agent 1" | "Agent 2",
+	agent: `Agent ${number}`,
 	profile: KlermProfile,
 	role: "planner" | "builder" = "builder",
 ): string {

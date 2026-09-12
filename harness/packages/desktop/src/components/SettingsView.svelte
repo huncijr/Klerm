@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Maximize2, Shrink } from "@lucide/svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
+	import { addCodingHarnessSlot, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
 	import type {
 		CodingHarnessKind,
 		CodingHarnessSetup,
@@ -152,8 +153,7 @@
 	const providerCards = $derived(orderProviderGroups(groupProviderAccounts(providers)));
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
 	const connectGroup = $derived(providerCards.find((group) => group.id === connectId));
-	const harnessOptions = $derived.by<Array<{ kind: CodingHarnessKind | null; label: string }>>(() => [
-		{ kind: null, label: "None" },
+	const harnessOptions = $derived.by<Array<{ kind: CodingHarnessKind; label: string }>>(() => [
 		...(codingHarnessSetup?.harnesses
 			.filter((harness) => harness.available)
 			.map((harness) => ({ kind: harness.kind, label: codingHarnessLabel(harness.kind) })) ?? []),
@@ -222,8 +222,7 @@
 		return kind === null || codingHarnessSetup?.harnesses.some((item) => item.kind === kind && item.available) === true;
 	}
 
-	function harnessOptionLabel(option: { kind: CodingHarnessKind | null; label: string }): string {
-		if (option.kind === null) return option.label;
+	function harnessOptionLabel(option: { kind: CodingHarnessKind; label: string }): string {
 		const harness = codingHarnessSetup?.harnesses.find((item) => item.kind === option.kind);
 		if (!harness) return option.label;
 		const state = harness.available ? (harness.builtin ? "Built-in · Available" : "Available") : "Not installed";
@@ -235,27 +234,8 @@
 		return codingHarnessSetup?.harnesses.find((item) => item.kind === kind)?.models ?? [];
 	}
 
-	const draftEffectiveRouting = $derived.by(() => {
-		if (!draftHarnessSlots.externalHarnessesEnabled) return "Off";
-		const active = draftHarnessSlots.agents.filter(
-			(slot) => slot.enabled && slot.kind !== null && harnessAvailable(slot.kind),
-		).length;
-		return active >= 2 ? "Auto / Agent 1 first" : active === 1 ? "None" : "Disabled";
-	});
-
 	function addAgent(): void {
-		if (draftHarnessSlots.agents.length >= 16) return;
-		const highest = draftHarnessSlots.agents.reduce((max, agent) => {
-			const number = Number(agent.id.replace(/^agent/, ""));
-			return Number.isSafeInteger(number) ? Math.max(max, number) : max;
-		}, 0);
-		draftHarnessSlots = {
-			...draftHarnessSlots,
-			agents: [
-				...draftHarnessSlots.agents,
-				{ id: `agent${highest + 1}`, kind: null, enabled: false, role: "builder", effort: "off", tools: [] },
-			],
-		};
+		draftHarnessSlots = addCodingHarnessSlot(draftHarnessSlots);
 	}
 
 	function agentNumber(id: string): number {
@@ -264,10 +244,7 @@
 	}
 
 	function updateAgent(id: string, update: Partial<CodingHarnessSetup["slots"]["agents"][number]>): void {
-		draftHarnessSlots = {
-			...draftHarnessSlots,
-			agents: draftHarnessSlots.agents.map((agent) => (agent.id === id ? { ...agent, ...update } : agent)),
-		};
+		draftHarnessSlots = updateCodingHarnessSlot(draftHarnessSlots, id, update);
 	}
 
 	function editProfile(profile: KlermProfile): void {
@@ -485,6 +462,31 @@
 		}
 	}
 
+	async function toggleExternalHarnesses(): Promise<void> {
+		if (!codingHarnessSetup || codingHarnessLoading || savingChanges) return;
+		const previous = structuredClone(draftHarnessSlots);
+		const next = {
+			...draftHarnessSlots,
+			externalHarnessesEnabled: !draftHarnessSlots.externalHarnessesEnabled,
+			...(!draftHarnessSlots.externalHarnessesEnabled ? {} : { workTogetherEnabled: undefined }),
+		};
+		draftHarnessSlots = next;
+		savingChanges = true;
+		saveNotice = "";
+		saveError = "";
+		try {
+			if (!(await onsaveharnesses(structuredClone(next)))) {
+				draftHarnessSlots = previous;
+				saveError = "Could not save external harness settings.";
+				return;
+			}
+			syncedHarnessSlots = JSON.stringify(next);
+			saveNotice = "Changes saved";
+		} finally {
+			savingChanges = false;
+		}
+	}
+
 	function discardDrafts(): void {
 		draftAppearance = settings.appearance;
 		draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
@@ -553,26 +555,23 @@
 	<div class="min-h-0 flex-1 overflow-y-auto px-7 py-6 narrow-720:px-4">
 		{#if tab === "general"}
 			<div class="mx-auto flex w-[min(420px,100%)] flex-col items-center gap-6 pt-10">
-				<div class="w-full rounded-lg border border-[#303a42] bg-[#0a0f13] px-3 py-2.5">
-					<div class="flex flex-wrap items-center gap-2">
-						<strong class="mr-auto text-[11px] text-white">External agents</strong>
-						<div class="flex rounded-md border border-[#303a42] bg-[#05080b] p-0.5 font-mono text-[8px]">
-							<button type="button" aria-label="Opt out of external agents" aria-pressed={!draftHarnessSlots.externalHarnessesEnabled} class={`rounded px-2 py-1 ${!draftHarnessSlots.externalHarnessesEnabled ? "bg-[#293139] text-white" : "text-[#66747d] hover:text-white"}`} onclick={() => (draftHarnessSlots.externalHarnessesEnabled = false)}>Opt out</button>
-							<button type="button" aria-label="Opt in to external agents" aria-pressed={draftHarnessSlots.externalHarnessesEnabled} class={`rounded px-2 py-1 ${draftHarnessSlots.externalHarnessesEnabled ? "bg-[#506b19] text-white" : "text-[#66747d] hover:text-white"}`} onclick={() => (draftHarnessSlots.externalHarnessesEnabled = true)}>Opt in</button>
-						</div>
+				<div class="flex w-full items-center justify-between gap-3 rounded-lg border border-[#303a42] bg-[#0a0f13] px-3 py-2.5">
+					<div>
+						<strong class="block text-[11px] text-white">External harnesses</strong>
+						<span class="mt-0.5 block font-mono text-[8px] text-[#66747d]">Enable Agent 2 and additional harness slots</span>
 					</div>
-					<div class="mt-2 flex flex-wrap items-center gap-1.5">
-						{#each draftHarnessSlots.agents.filter((agent) => agent.kind === "claude-code" || agent.kind === "codex") as agent (agent.id)}
-							<span class="flex items-center gap-1 rounded border border-[#232c34] bg-[#080c10] px-1.5 py-1 font-mono text-[8px] text-[#aeb8be]">
-								<ProviderLogo id={agent.kind ?? "custom"} label={codingHarnessLabel(agent.kind ?? "klerm")} size={16} decorative />
-								{codingHarnessLabel(agent.kind ?? "klerm")}
-							</span>
-						{/each}
-						<span class="ml-auto font-mono text-[8px] text-[#66747d]">{draftEffectiveRouting}</span>
-					</div>
-					{#if draftHarnessSlots.externalHarnessesEnabled && codingHarnessSetup?.externalPromptingAvailable !== true}
-						<p class="m-0 mt-2 border-t border-[#232c34] pt-2 font-mono text-[8px] leading-[1.4] text-[#b69a66]">External agent prompting is not available until a native harness adapter is connected. Built-in Klerm prompting remains available.</p>
-					{/if}
+					<button
+						type="button"
+						role="switch"
+						aria-label="Toggle external harnesses"
+						aria-checked={draftHarnessSlots.externalHarnessesEnabled}
+						disabled={!codingHarnessSetup || codingHarnessLoading || savingChanges}
+						class="flex shrink-0 items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-wait disabled:opacity-40"
+						onclick={() => void toggleExternalHarnesses()}
+					>
+						<span>{draftHarnessSlots.externalHarnessesEnabled ? "On" : "Off"}</span>
+						<span class={`relative h-4 w-7 rounded-full transition-colors ${draftHarnessSlots.externalHarnessesEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${draftHarnessSlots.externalHarnessesEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
+					</button>
 				</div>
 				<p class="m-0 font-mono text-[9px] tracking-[.16em] text-[#536069] uppercase">Appearance</p>
 				<div class="flex w-full flex-col gap-2">
@@ -620,7 +619,6 @@
 						{codingHarnessLoading ? "Refreshing..." : "Refresh"}
 					</button>
 				</div>
-				<p class="m-0 font-mono text-[8px] leading-[1.4] text-[#8f805f]">External adapters are setup-only for now; built-in Klerm prompting remains available.</p>
 				{#if codingHarnessError}
 					<p class="m-0 rounded-lg border border-[#5a3434] bg-[#170d0d] px-3 py-2 font-mono text-[9px] text-[#f3a49c]">{codingHarnessError}</p>
 				{/if}
@@ -635,13 +633,13 @@
 								<ProviderLogo id={value.kind ?? "custom"} label={value.kind ? codingHarnessLabel(value.kind) : `Agent ${agentNumber(value.id)}`} size={24} decorative />
 								<strong class="mr-auto text-[12px] text-white">Agent {agentNumber(value.id)}{value.kind ? ` · ${codingHarnessLabel(value.kind)}` : ""}</strong>
 								<div class="flex items-center gap-1.5">
-									{#if draftHarnessSlots.agents.length > 1}
-										<button type="button" class="font-mono text-[8px] text-[#8b969e] hover:text-[#f3a49c]" onclick={() => (draftHarnessSlots = { ...draftHarnessSlots, agents: draftHarnessSlots.agents.filter((agent) => agent.id !== value.id) })}>Remove</button>
+									{#if value.id !== "agent1"}
+										<button type="button" class="font-mono text-[8px] text-[#8b969e] hover:text-[#f3a49c]" onclick={() => (draftHarnessSlots = removeCodingHarnessSlot(draftHarnessSlots, value.id))}>Remove</button>
 									{/if}
-									<div class="flex rounded-md border border-[#303a42] bg-[#05080b] p-0.5 font-mono text-[7px]">
-										<button type="button" aria-label={`Opt Agent ${agentNumber(value.id)} out`} aria-pressed={!value.enabled} class={`rounded px-1.5 py-1 ${!value.enabled ? "bg-[#293139] text-white" : "text-[#66747d] hover:text-white"}`} onclick={() => updateAgent(value.id, { enabled: false })}>Opt out</button>
-										<button type="button" aria-label={`Opt Agent ${agentNumber(value.id)} in`} aria-pressed={value.enabled} disabled={value.kind === null || !harnessAvailable(value.kind)} class={`rounded px-1.5 py-1 disabled:cursor-not-allowed disabled:opacity-35 ${value.enabled ? "bg-[#506b19] text-white" : "text-[#66747d] hover:text-white"}`} onclick={() => updateAgent(value.id, { enabled: true })}>Opt in</button>
-									</div>
+									<button type="button" role="switch" aria-label={`Toggle Agent ${agentNumber(value.id)}`} aria-checked={value.enabled} disabled={value.kind !== null && !harnessAvailable(value.kind)} class="flex items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-not-allowed disabled:opacity-35" onclick={() => updateAgent(value.id, { kind: value.kind ?? "klerm", enabled: !value.enabled })}>
+										<span>{value.enabled ? "On" : "Off"}</span>
+										<span class={`relative h-4 w-7 rounded-full transition-colors ${value.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${value.enabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
+									</button>
 								</div>
 							</div>
 							<label class="block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-${value.id}`}>Coding harness</label>
@@ -651,15 +649,15 @@
 								disabled={!codingHarnessSetup || codingHarnessLoading}
 								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
 								onchange={(event) => {
-									const selected = (event.currentTarget.value || null) as CodingHarnessKind | null;
-									updateAgent(value.id, { kind: selected, enabled: selected !== null && harnessAvailable(selected), model: undefined });
+									const selected = event.currentTarget.value as CodingHarnessKind;
+									updateAgent(value.id, { kind: selected, enabled: harnessAvailable(selected), model: undefined });
 								}}
 							>
 								{#if value.kind !== null && !harnessAvailable(value.kind)}
 									<option value={value.kind} disabled>{codingHarnessLabel(value.kind)} · Not installed</option>
 								{/if}
 								{#each harnessOptions as option}
-									<option value={option.kind ?? ""}>{harnessOptionLabel(option)}</option>
+									<option value={option.kind}>{harnessOptionLabel(option)}</option>
 								{/each}
 							</select>
 							<p class={`m-0 mt-3 break-words font-mono text-[9px] ${value.kind !== null && !harnessAvailable(value.kind) ? "text-[#f3a49c]" : "text-[#7b868e]"}`}>{harnessStatus(value.kind)} · {value.enabled ? "On" : "Off"}</p>

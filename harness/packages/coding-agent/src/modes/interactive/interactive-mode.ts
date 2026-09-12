@@ -5365,11 +5365,12 @@ export class InteractiveMode {
 		const slots = this.settingsManager.getCodingHarnessSlots();
 		const id = nextCodingHarnessAgentId(slots.agents);
 		slots.agents.push(createCodingHarnessAgent(id));
+		slots.externalHarnessesEnabled = true;
 		this.settingsManager.setCodingHarnessSlots(slots);
 		await this.settingsManager.flush();
 		this.updateKlermRoutingStatus();
 		this.showStatus(
-			`Added Agent ${id.slice(5)}. Run /agent ${id.slice(5)} to configure its harness, model, role, effort, and tools.`,
+			`Added Agent ${id.slice(5)} with the Klerm harness. Run /agent ${id.slice(5)} to configure its model, role, effort, and tools.`,
 		);
 	}
 

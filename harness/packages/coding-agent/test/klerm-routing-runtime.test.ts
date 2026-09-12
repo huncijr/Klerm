@@ -165,6 +165,79 @@ describe("Klerm routing runtime", () => {
 		expect(systemPrompt).toContain("start it in the background");
 	});
 
+	it("routes Work together delegation to the best available peer model", async () => {
+		const specialist = createModel("anthropic", "claude-opus-4", "anthropic-messages");
+		const runtime = {
+			...createRoutingRuntime(),
+			getAvailableSnapshot: () => [local, frontier, specialist],
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "off",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store, undefined, undefined, undefined, () => ({
+			externalHarnessesEnabled: true,
+			workTogetherEnabled: true,
+			agents: [
+				{
+					id: "agent1",
+					kind: "klerm",
+					enabled: true,
+					model: "ollama/qwen2.5-coder:7b",
+					role: "builder",
+					effort: "off",
+					tools: [],
+				},
+				{
+					id: "agent2",
+					kind: "klerm",
+					enabled: true,
+					model: "google/gemini-3.5-flash-lite",
+					role: "builder",
+					effort: "off",
+					tools: [],
+				},
+				{
+					id: "agent3",
+					kind: "klerm",
+					enabled: true,
+					model: "anthropic/claude-opus-4",
+					role: "planner",
+					effort: "high",
+					tools: ["read", "grep"],
+				},
+			],
+		}));
+
+		const initial = await controller.routePrompt("Review the architecture");
+		expect(initial?.model).toBe(local);
+		await initial?.commit();
+		expect(controller.getSystemPromptContribution()).toContain("agent3: anthropic/claude-opus-4");
+
+		await controller.createDelegationTool().execute(
+			"delegate-agent3",
+			{
+				reason: "architecture specialist",
+				summary: "Initial scan complete",
+				remainingWork: "Review architecture",
+			},
+			undefined,
+			undefined,
+			undefined as never,
+		);
+		const transition = await controller.prepareNextTurn({
+			message: assistantMessage([], local),
+			toolResults: [],
+			context: { systemPrompt: "", messages: [], tools: [] },
+			newMessages: [],
+		} as PrepareNextTurnContext);
+		expect(transition?.model).toBe(specialist);
+		expect(transition?.state.toTarget).toBe("anthropic/claude-opus-4");
+		await transition?.commit();
+		expect(controller.getSystemPromptContribution()).toContain("You are Klerm Agent 3");
+	});
+
 	it("lets Agent 1 and Agent 2 use mixed or two local models, but not the same one", async () => {
 		const extraLocal = createModel("lm-studio", "qwen2.5-coder:14b", "openai-completions");
 		const runtime = {
