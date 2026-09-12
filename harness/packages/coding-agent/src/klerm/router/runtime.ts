@@ -567,7 +567,7 @@ export class KlermRoutingController {
 			seenModels.add(agent.model);
 			return true;
 		});
-		return agents.length >= 3 && agents.some((agent) => agent.id === "agent1") ? agents : [];
+		return agents.some((agent) => agent.id === "agent1") ? agents : [];
 	}
 
 	private activeWorkTogetherAgent(lane: "local" | "frontier"): CodingHarnessAgentSettings | undefined {

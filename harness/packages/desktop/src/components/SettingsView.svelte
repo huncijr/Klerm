@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Maximize2, Shrink } from "@lucide/svelte";
+	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import { addCodingHarnessSlot, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
 	import type {
@@ -24,7 +25,11 @@
 	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
 	import ProviderLogo from "./ProviderLogo.svelte";
 	import { profileIcon } from "../lib/profiles.ts";
-	import { saveDesktopSettingsChanges, type DesktopSettingsSaveOperation } from "../lib/helpers.ts";
+	import {
+		saveDesktopSettingsChanges,
+		shouldReplaceSettingsDrafts,
+		type DesktopSettingsSaveOperation,
+	} from "../lib/helpers.ts";
 	import { normalizeShortcut, shortcutConflicts } from "../lib/shortcuts.ts";
 
 	type SettingsTab = "general" | "agents" | "models" | "shortcuts" | "mcp" | "memory";
@@ -69,7 +74,7 @@
 		providers: ProviderAccount[];
 		providerBusy: boolean;
 		oauthStep: ProviderOauthStep | undefined;
-		onstartoauth: (provider: string) => void;
+		onstartoauth: (provider: string) => Promise<boolean>;
 		oncanceloauth: () => void;
 		onoauthsubmit: (value: string) => void;
 		fullscreen: boolean;
@@ -101,10 +106,7 @@
 	let saveNotice = $state("");
 	let saveError = $state("");
 	let draftsInitialized = $state(false);
-	let syncedAppearance = $state<DesktopAppearance | undefined>(undefined);
-	let syncedMaxDelegationCycles = $state<number | undefined>(undefined);
-	let syncedShortcuts = $state("");
-	let syncedHarnessSlots = $state("");
+	let appliedSettingsSource = "";
 	let capturingIndex = $state<number | undefined>(undefined);
 	let provider = $state("custom");
 	let modelId = $state("");
@@ -117,6 +119,8 @@
 	let connectId = $state("");
 	let oauthInput = $state("");
 	let copiedUrl = $state("");
+	let connectNotice = $state("");
+	let connectNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 	let confirmDiscardSettings = $state(false);
 	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
 	let profileName = $state("");
@@ -172,6 +176,15 @@
 		connectForms = {};
 	}
 
+	function showConnectNotice(message: string): void {
+		connectNotice = message;
+		if (connectNoticeTimer) clearTimeout(connectNoticeTimer);
+		connectNoticeTimer = setTimeout(() => {
+			connectNotice = "";
+			connectNoticeTimer = undefined;
+		}, 2000);
+	}
+
 	async function saveConnect(memberId: string): Promise<void> {
 		const form = formFor(memberId);
 		setForm(memberId, { error: "" });
@@ -180,8 +193,18 @@
 			apiKey: form.key.trim() || undefined,
 			baseUrl: form.url.trim() || undefined,
 		});
-		if (saved) setForm(memberId, { key: "", url: "" });
-		else setForm(memberId, { error: "Could not connect this provider." });
+		if (saved) {
+			setForm(memberId, { key: "", url: "" });
+			showConnectNotice("Added");
+		} else setForm(memberId, { error: "Could not connect this provider." });
+	}
+
+	async function startOauth(memberId: string): Promise<void> {
+		if (await onstartoauth(memberId)) showConnectNotice("Successfully auth");
+	}
+
+	function openAuthUrl(url: string): void {
+		window.open(url, "_blank", "noopener,noreferrer");
 	}
 
 	async function discardConnect(memberId: string): Promise<void> {
@@ -392,35 +415,35 @@
 	const dirty = $derived(
 		draftAppearance !== settings.appearance ||
 			draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0) ||
-			(codingHarnessSetup !== undefined &&
-				JSON.stringify(draftHarnessSlots) !== JSON.stringify(codingHarnessSetup.slots)) ||
-			JSON.stringify(draftShortcuts) !== JSON.stringify(settings.shortcuts),
+			(codingHarnessSetup !== undefined && draftHarnessSlots !== codingHarnessSetup.slots) ||
+			draftShortcuts !== settings.shortcuts,
 	);
-	const harnessDirty = $derived(
-		codingHarnessSetup !== undefined && JSON.stringify(draftHarnessSlots) !== JSON.stringify(codingHarnessSetup.slots),
-	);
+	const harnessDirty = $derived(codingHarnessSetup !== undefined && draftHarnessSlots !== codingHarnessSetup.slots);
 
 	$effect(() => {
 		const nextAppearance = settings.appearance;
 		const nextCycles = klermConfig?.maxDelegationCycles ?? 0;
 		const nextShortcuts = settings.shortcuts;
 		const nextHarnessSlots = codingHarnessSetup?.slots;
-		const draftChangedSinceSync =
-			draftsInitialized &&
-			(draftAppearance !== syncedAppearance ||
-				draftMaxDelegationCycles !== syncedMaxDelegationCycles ||
-				JSON.stringify(draftShortcuts) !== syncedShortcuts ||
-				JSON.stringify(draftHarnessSlots) !== syncedHarnessSlots);
-		if (draftsInitialized && (savingChanges || (dirty && draftChangedSinceSync))) return;
-		draftAppearance = nextAppearance;
-		draftMaxDelegationCycles = nextCycles;
-		draftShortcuts = nextShortcuts.map((item) => ({ ...item }));
-		if (nextHarnessSlots) draftHarnessSlots = structuredClone(nextHarnessSlots);
-		syncedAppearance = nextAppearance;
-		syncedMaxDelegationCycles = nextCycles;
-		syncedShortcuts = JSON.stringify(nextShortcuts);
-		syncedHarnessSlots = JSON.stringify(nextHarnessSlots ?? draftHarnessSlots);
-		draftsInitialized = true;
+		const source = `${nextAppearance}\0${nextCycles}\0${nextShortcuts.map((item) => item.keys).join(",")}\0${nextHarnessSlots?.externalHarnessesEnabled ?? false}\0${nextHarnessSlots?.workTogetherEnabled ?? false}\0${nextHarnessSlots?.agents.map((agent) => `${agent.id}:${agent.kind}:${agent.enabled}:${agent.model ?? ""}`).join(",")}`;
+		const replace = untrack(() =>
+			shouldReplaceSettingsDrafts({
+				appliedSource: appliedSettingsSource,
+				source,
+				initialized: draftsInitialized,
+				saving: savingChanges,
+				dirty,
+			}),
+		);
+		if (!replace) return;
+		appliedSettingsSource = source;
+		untrack(() => {
+			draftAppearance = nextAppearance;
+			draftMaxDelegationCycles = nextCycles;
+			draftShortcuts = nextShortcuts;
+			if (nextHarnessSlots) draftHarnessSlots = nextHarnessSlots;
+			draftsInitialized = true;
+		});
 	});
 
 	async function saveChanges(): Promise<void> {
@@ -456,6 +479,10 @@
 				saveError = error;
 				return;
 			}
+			draftAppearance = settings.appearance;
+			draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
+			draftShortcuts = settings.shortcuts;
+			if (codingHarnessSetup) draftHarnessSlots = codingHarnessSetup.slots;
 			saveNotice = "Changes saved";
 		} finally {
 			savingChanges = false;
@@ -463,7 +490,7 @@
 	}
 
 	async function toggleExternalHarnesses(): Promise<void> {
-		if (!codingHarnessSetup || codingHarnessLoading || savingChanges) return;
+		if (!codingHarnessSetup || savingChanges) return;
 		const previous = structuredClone(draftHarnessSlots);
 		const next = {
 			...draftHarnessSlots,
@@ -480,7 +507,8 @@
 				saveError = "Could not save external harness settings.";
 				return;
 			}
-			syncedHarnessSlots = JSON.stringify(next);
+			const saved = codingHarnessSetup?.slots ?? next;
+			draftHarnessSlots = structuredClone(saved);
 			saveNotice = "Changes saved";
 		} finally {
 			savingChanges = false;
@@ -499,6 +527,11 @@
 </script>
 
 <section class="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+	{#if connectNotice}
+		<div class="pointer-events-none absolute inset-x-0 top-3 z-30 flex justify-center px-4">
+			<p class="m-0 rounded-md border border-[#2c4a34] bg-[#0d1510] px-3 py-1.5 font-mono text-[10px] text-[#81c995] shadow-[0_8px_24px_rgba(0,0,0,.4)]">{connectNotice}</p>
+		</div>
+	{/if}
 	<header class="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line px-5">
 		<button
 			type="button"
@@ -526,7 +559,7 @@
 					type="button"
 					class="h-8 rounded-md border-0 bg-[#e8eef2] px-3 font-mono text-[10px] text-[#091019] uppercase"
 					onclick={() => void saveChanges()}
-					disabled={savingChanges || (harnessDirty && codingHarnessLoading)}
+					disabled={savingChanges}
 				>
 					{savingChanges ? "Saving..." : "Save Settings"}
 				</button>
@@ -565,8 +598,8 @@
 						role="switch"
 						aria-label="Toggle external harnesses"
 						aria-checked={draftHarnessSlots.externalHarnessesEnabled}
-						disabled={!codingHarnessSetup || codingHarnessLoading || savingChanges}
-						class="flex shrink-0 items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-wait disabled:opacity-40"
+						disabled={!codingHarnessSetup || savingChanges}
+						class={`flex shrink-0 items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:opacity-40 ${savingChanges ? "disabled:cursor-wait" : "disabled:cursor-not-allowed"}`}
 						onclick={() => void toggleExternalHarnesses()}
 					>
 						<span>{draftHarnessSlots.externalHarnessesEnabled ? "On" : "Off"}</span>
@@ -646,7 +679,7 @@
 							<select
 								id={`harness-${value.id}`}
 								value={value.kind ?? ""}
-								disabled={!codingHarnessSetup || codingHarnessLoading}
+								disabled={!codingHarnessSetup}
 								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
 								onchange={(event) => {
 									const selected = event.currentTarget.value as CodingHarnessKind;
@@ -665,7 +698,7 @@
 							<select
 								id={`harness-model-${value.id}`}
 								value={value.model ?? ""}
-								disabled={models.length === 0 || codingHarnessLoading}
+								disabled={models.length === 0}
 								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
 								onchange={(event) => updateAgent(value.id, { model: event.currentTarget.value || undefined })}
 							>
@@ -859,7 +892,7 @@
 									{#if step.url}
 										<p class="m-0 font-mono text-[9px] text-[#7b868e]">Complete login in your browser:</p>
 										<div class="flex gap-1.5">
-											<code class="min-w-0 flex-1 truncate rounded bg-[#000] px-2 py-1.5 font-mono text-[9px] text-[#9cc0f2]">{step.url}</code>
+											<button type="button" class="min-w-0 flex-1 truncate rounded bg-[#000] px-2 py-1.5 text-left font-mono text-[9px] text-[#9cc0f2] underline hover:text-white" onclick={() => openAuthUrl(step.url ?? "")}>{step.url}</button>
 											<button type="button" class="h-7 shrink-0 rounded border border-[#34414a] px-2 font-mono text-[9px] text-[#d6dde1]" onclick={() => {
 												void navigator.clipboard.writeText(step.url ?? "");
 												copiedUrl = member.id;
@@ -872,10 +905,12 @@
 										</div>
 										{#if step.instructions}<p class="m-0 font-mono text-[8px] text-[#66747d]">{step.instructions}</p>{/if}
 									{/if}
-									{#if step.userCode}
+										{#if step.userCode}
 										<div class="flex items-center gap-2">
 											<code class="rounded bg-[#000] px-2 py-1.5 font-mono text-[12px] font-bold tracking-[.2em] text-[#e8eef2]">{step.userCode}</code>
-											{#if step.verificationUri}<span class="truncate font-mono text-[8px] text-[#66747d]">{step.verificationUri}</span>{/if}
+											{#if step.verificationUri}
+												<button type="button" class="truncate font-mono text-[8px] text-[#9cc0f2] underline hover:text-white" onclick={() => openAuthUrl(step.verificationUri ?? "")}>{step.verificationUri}</button>
+											{/if}
 										</div>
 									{/if}
 									{#if step.prompt}
@@ -908,7 +943,7 @@
 										{providerBusy ? "Working..." : member.configured ? "Save" : "Connect"}
 									</button>
 									{#if member.supportsOauth}
-										<button type="button" class="h-8 flex-1 rounded-md border border-[#2c4a34] bg-[#0d1510] font-mono text-[10px] text-[#81c995]" disabled={providerBusy} onclick={() => onstartoauth(member.id)}>OAuth</button>
+										<button type="button" class="h-8 flex-1 rounded-md border border-[#2c4a34] bg-[#0d1510] font-mono text-[10px] text-[#81c995]" disabled={providerBusy} onclick={() => void startOauth(member.id)}>OAuth</button>
 									{/if}
 								</div>
 							</form>

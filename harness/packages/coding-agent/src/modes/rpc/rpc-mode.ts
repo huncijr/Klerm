@@ -358,8 +358,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		],
 	});
 
-	const getCodingHarnessSetup = async (): Promise<RpcCodingHarnessSetup> => {
-		const harnesses = await (options.discoverCodingHarnesses ?? discoverCodingHarnesses)();
+	let cachedCodingHarnesses: Awaited<ReturnType<typeof discoverCodingHarnesses>> | undefined;
+	const loadCodingHarnesses = async (refresh: boolean): Promise<NonNullable<typeof cachedCodingHarnesses>> => {
+		if (!refresh && cachedCodingHarnesses) return cachedCodingHarnesses;
+		cachedCodingHarnesses = await (options.discoverCodingHarnesses ?? discoverCodingHarnesses)();
+		return cachedCodingHarnesses;
+	};
+	const getCodingHarnessSetup = async (refreshDiscovery = false): Promise<RpcCodingHarnessSetup> => {
+		const harnesses = await loadCodingHarnesses(refreshDiscovery);
 		const klermModels = session.modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}/${model.id}`);
 		return createCodingHarnessSetup(
 			session.settingsManager.getCodingHarnessSlots(),
@@ -772,7 +778,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "get_coding_harness_setup": {
-				return success(id, "get_coding_harness_setup", await getCodingHarnessSetup());
+				return success(id, "get_coding_harness_setup", await getCodingHarnessSetup(true));
 			}
 
 			case "set_coding_harness_slots": {

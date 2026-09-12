@@ -8,6 +8,7 @@ const PROVIDER_LOGO_FILES: Record<string, string> = {
 	anthropic: "anthropic.webp",
 	"claude-code": "claude-code.webp",
 	codex: "codex-mark.png",
+	opencode: "opencode-logo.webp",
 	"openai-codex": "openai.webp",
 	openai: "openai.webp",
 	google: "google.webp",

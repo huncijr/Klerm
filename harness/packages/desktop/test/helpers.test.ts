@@ -1,5 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
-import { contentImages, imageDataUrl, saveDesktopSettingsChanges, taskCompletionTitle } from "../src/lib/helpers.ts";
+import {
+	contentImages,
+	imageDataUrl,
+	saveDesktopSettingsChanges,
+	shouldReplaceSettingsDrafts,
+	taskCompletionTitle,
+} from "../src/lib/helpers.ts";
 import { providerLogoSrc } from "../src/lib/provider-logos.ts";
 
 describe("desktop image and task helpers", () => {
@@ -50,9 +56,40 @@ describe("desktop image and task helpers", () => {
 		expect(later).not.toHaveBeenCalled();
 	});
 
+	test("replaces settings drafts only when the source snapshot changes", () => {
+		expect(
+			shouldReplaceSettingsDrafts({
+				appliedSource: "same",
+				source: "same",
+				initialized: true,
+				saving: false,
+				dirty: false,
+			}),
+		).toBe(false);
+		expect(
+			shouldReplaceSettingsDrafts({
+				appliedSource: "old",
+				source: "new",
+				initialized: true,
+				saving: false,
+				dirty: true,
+			}),
+		).toBe(false);
+		expect(
+			shouldReplaceSettingsDrafts({
+				appliedSource: "old",
+				source: "new",
+				initialized: true,
+				saving: true,
+				dirty: true,
+			}),
+		).toBe(true);
+	});
+
 	test("maps native coding harness logos", () => {
 		expect(providerLogoSrc("klerm")).toBe("/K_Klerm_no_background.png");
 		expect(providerLogoSrc("claude-code")).toBe("/providers/claude-code.webp");
 		expect(providerLogoSrc("codex")).toBe("/providers/codex-mark.png");
+		expect(providerLogoSrc("opencode")).toBe("/providers/opencode-logo.webp");
 	});
 });

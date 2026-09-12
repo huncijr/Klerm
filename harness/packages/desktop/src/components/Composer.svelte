@@ -49,6 +49,7 @@
 		externalHarnessBusy,
 		workTogetherEnabled,
 		workTogetherAvailable,
+		workTogetherVisible,
 		history,
 		focusRequest,
 		historyKey,
@@ -65,8 +66,7 @@
 		profileDisabled,
 		localRole,
 		frontierRole,
-		localApprovalMode,
-		frontierApprovalMode,
+		approvalMode,
 		activeAgent,
 		roleDisabled,
 		buildModeOffer,
@@ -80,8 +80,7 @@
 		onfrontierthinkingchange,
 		onlocalrolechange,
 		onfrontierrolechange,
-		onlocalapprovalchange,
-		onfrontierapprovalchange,
+		onapprovalchange,
 		onlocalprofilechange,
 		onfrontierprofilechange,
 		onbuildofferdismiss,
@@ -115,6 +114,7 @@
 		externalHarnessBusy: boolean;
 		workTogetherEnabled: boolean;
 		workTogetherAvailable: boolean;
+		workTogetherVisible: boolean;
 		history: string[];
 		focusRequest: number;
 		historyKey: string;
@@ -131,8 +131,7 @@
 		profileDisabled: boolean;
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
-		localApprovalMode: ApprovalMode;
-		frontierApprovalMode: ApprovalMode;
+		approvalMode: ApprovalMode;
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
@@ -146,8 +145,7 @@
 		onfrontierthinkingchange: (level: ThinkingLevel) => void;
 		onlocalrolechange: (role: WorkerRole) => void;
 		onfrontierrolechange: (role: WorkerRole) => void;
-		onlocalapprovalchange: (mode: ApprovalMode) => void;
-		onfrontierapprovalchange: (mode: ApprovalMode) => void;
+		onapprovalchange: (mode: ApprovalMode) => void;
 		onlocalprofilechange: (id: string) => void;
 		onfrontierprofilechange: (id: string) => void;
 		onbuildofferdismiss: (id: number) => void;
@@ -183,10 +181,9 @@
 	let mcpSelectedIndex = $state(0);
 	const activeAgentLabel = $derived(activeAgent === "agent1" ? "Agent 1" : "Agent 2");
 	const activeRole = $derived(activeAgent === "agent1" ? localRole : frontierRole);
-	const activeApprovalMode = $derived(activeAgent === "agent1" ? localApprovalMode : frontierApprovalMode);
 	const approvalModes: ApprovalMode[] = ["never", "risky", "always"];
 	const approvalLabel = $derived(
-		activeApprovalMode === "always" ? "Always allow" : activeApprovalMode === "never" ? "Block risky" : "Ask risky",
+		approvalMode === "always" ? "Always allow" : approvalMode === "never" ? "Block risky" : "Ask risky",
 	);
 	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
@@ -198,7 +195,7 @@
 			: [],
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
-	const compactWorkTogetherLayout = $derived(externalMode && workTogetherAvailable);
+	const compactWorkTogetherLayout = $derived(externalMode && workTogetherVisible);
 
 	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
 		if (kind === "claude-code") return "Claude Code";
@@ -578,6 +575,20 @@
 							>
 								<span class={`relative h-3.5 w-6 rounded-full transition-colors ${slot.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${slot.enabled ? "translate-x-2.5" : "translate-x-0"}`}></span></span>
 							</button>
+							{#if slot.id !== "agent1"}
+								<button
+									type="button"
+									aria-label={`Remove ${label}`}
+									disabled={externalHarnessBusy}
+									class="mr-1 grid h-4 w-4 place-items-center rounded text-[#8b6b6b] hover:bg-[#241111] hover:text-[#d9928b] disabled:cursor-wait disabled:opacity-40"
+									onclick={() => {
+										pinnedAgentId = "";
+										onremoveexternalagent(slot.id);
+									}}
+								>
+									<X size={10} />
+								</button>
+							{/if}
 						</div>
 						<div class={`absolute top-full z-40 w-56 rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_16px_38px_rgba(0,0,0,.5)] group-hover:block ${pinnedAgentId === slot.id ? "block" : "hidden"} ${index > 1 ? "right-0" : "left-0"}`}>
 							<label class="block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-model-${slot.id}`}>Model</label>
@@ -752,23 +763,22 @@
 	</form>
 	<div class="mx-auto mt-1.5 flex w-[min(820px,100%)] justify-end px-1">
 		<label class="flex items-center gap-2 font-mono text-[8px] text-[#66727b]">
-			<span>{activeAgentLabel} approval</span>
+			<span>All agents approval</span>
 			<input
 				type="range"
 				min="0"
 				max="2"
 				step="1"
-				value={approvalModes.indexOf(activeApprovalMode)}
-				disabled={roleDisabled || activeRole !== "builder"}
-				aria-label={`${activeAgentLabel} builder approval mode`}
+				value={approvalModes.indexOf(approvalMode)}
+				disabled={roleDisabled}
+				aria-label="All agents builder approval mode"
 				class="h-1 w-20 cursor-pointer accent-[#d6ff3f] disabled:cursor-not-allowed disabled:opacity-40"
 				oninput={(event) => {
 					const mode = approvalModes[Number(event.currentTarget.value)] ?? "risky";
-					if (activeAgent === "agent1") onlocalapprovalchange(mode);
-					else onfrontierapprovalchange(mode);
+					onapprovalchange(mode);
 				}}
 			/>
-			<strong class="min-w-[66px] text-right font-medium text-[#aab4bb]">{activeRole === "builder" ? approvalLabel : "Plan locked"}</strong>
+			<strong class="min-w-[66px] text-right font-medium text-[#aab4bb]">{approvalLabel}</strong>
 		</label>
 	</div>
 
@@ -848,13 +858,14 @@
 				role="switch"
 				aria-checked={workTogetherEnabled}
 				aria-label="Toggle Work together mode"
-				disabled={externalHarnessBusy}
-				class="flex min-w-0 items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left disabled:cursor-wait disabled:opacity-50"
+				disabled={externalHarnessBusy || !workTogetherAvailable}
+				title={externalHarnessBusy ? "Saving harness setup" : workTogetherAvailable ? "Toggle Work together mode" : "Enable three Klerm agents with distinct models"}
+				class={`flex min-w-0 items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left disabled:opacity-50 ${externalHarnessBusy ? "disabled:cursor-wait" : "disabled:cursor-not-allowed"}`}
 				onclick={() => onworktogetherchange(!workTogetherEnabled)}
 			>
 				<span>
 					<strong class="block font-mono text-[8px] tracking-[.1em] text-[#59636b] uppercase">Harness mode</strong>
-					<span class="mt-1 block font-mono text-[10px] text-[#b7c0c6]">{workTogetherEnabled ? "Work together" : "Routing"}</span>
+					<span class="mt-1 block font-mono text-[10px] text-[#b7c0c6]">Work together</span>
 				</span>
 				<span class={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${workTogetherEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${workTogetherEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
 			</button>

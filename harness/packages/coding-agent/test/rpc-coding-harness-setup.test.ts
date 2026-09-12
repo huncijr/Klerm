@@ -150,7 +150,7 @@ describe("coding harness setup RPC", () => {
 				externalHarnessesEnabled: true,
 				agents: [agent("agent1", "codex"), { ...agent("agent2", "claude-code"), model: "sonnet" }],
 			});
-			expect(discoverCodingHarnesses).toHaveBeenCalledTimes(2);
+			expect(discoverCodingHarnesses).toHaveBeenCalledTimes(1);
 		} finally {
 			harness.cleanup();
 			for (const listener of process.stdin.listeners("end") as NodeListener[]) {

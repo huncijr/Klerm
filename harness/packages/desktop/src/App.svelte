@@ -12,7 +12,14 @@
 		toDisplayText,
 		truncateText,
 	} from "./lib/helpers.ts";
-	import { addCodingHarnessSlot, removeCodingHarnessSlot, updateCodingHarnessSlot } from "./lib/coding-harnesses.ts";
+	import {
+		addCodingHarnessSlot,
+		assignWorkTogetherModels,
+		canEnableWorkTogether,
+		hasThreeEnabledCodingHarnessAgents,
+		removeCodingHarnessSlot,
+		updateCodingHarnessSlot,
+	} from "./lib/coding-harnesses.ts";
 	import type {
 		AgentMessage,
 		BashResult,
@@ -170,21 +177,17 @@
 	const configuredHarnessAgents = $derived(codingHarnessSetup?.slots.agents ?? []);
 	const firstHarnessAgent = $derived(configuredHarnessAgents[0]);
 	const secondHarnessAgent = $derived(configuredHarnessAgents[1]);
-	const workTogetherAvailable = $derived.by(() => {
-		if (!externalHarnessesEnabled) return false;
-		const models = configuredHarnessAgents
-			.filter((agent) => agent.enabled && agent.kind === "klerm")
-			.map((agent) =>
-				agent.model ??
-				(agent.id === "agent1"
-					? currentConfig?.localModel
-					: agent.id === "agent2"
-						? currentConfig?.frontierModel
-						: undefined),
-			)
-			.filter((model): model is string => Boolean(model));
-		return new Set(models).size >= 3;
-	});
+	const workTogetherVisible = $derived(
+		codingHarnessSetup ? hasThreeEnabledCodingHarnessAgents(codingHarnessSetup.slots) : false,
+	);
+	const klermModelCatalog = $derived(
+		[...localOptions, ...frontierOptions]
+			.map((option) => option.value)
+			.filter((model, index, models) => model && models.indexOf(model) === index),
+	);
+	const workTogetherAvailable = $derived(
+		codingHarnessSetup ? canEnableWorkTogether(codingHarnessSetup.slots) : false,
+	);
 	const workTogetherEnabled = $derived(
 		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
 	);
@@ -1114,32 +1117,47 @@
 		}
 	}
 
+	let codingHarnessSetupQueue: Promise<void> = Promise.resolve();
+
+	async function enqueueCodingHarnessSetup<T>(work: () => Promise<T>): Promise<T> {
+		const run = codingHarnessSetupQueue.then(work, work);
+		codingHarnessSetupQueue = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
 	async function refreshCodingHarnessSetup(): Promise<void> {
-		if (!backendReady || codingHarnessSetupLoading || !supportsCommand("get_coding_harness_setup")) return;
-		codingHarnessSetupLoading = true;
-		codingHarnessSetupError = "";
-		try {
-			codingHarnessSetup = await bridge.send<CodingHarnessSetup>("get_coding_harness_setup");
-		} catch (error) {
-			codingHarnessSetupError = toError(error).message;
-		} finally {
-			codingHarnessSetupLoading = false;
-		}
+		if (!backendReady || !supportsCommand("get_coding_harness_setup")) return;
+		await enqueueCodingHarnessSetup(async () => {
+			codingHarnessSetupLoading = true;
+			codingHarnessSetupError = "";
+			try {
+				codingHarnessSetup = await bridge.send<CodingHarnessSetup>("get_coding_harness_setup");
+			} catch (error) {
+				codingHarnessSetupError = toError(error).message;
+			} finally {
+				codingHarnessSetupLoading = false;
+			}
+		});
 	}
 
 	async function saveCodingHarnessSlots(slots: CodingHarnessSetup["slots"]): Promise<boolean> {
-		if (!backendReady || codingHarnessSetupLoading || !supportsCommand("set_coding_harness_slots")) return false;
-		codingHarnessSetupLoading = true;
-		codingHarnessSetupError = "";
-		try {
-			codingHarnessSetup = await bridge.send<CodingHarnessSetup>("set_coding_harness_slots", { slots });
-			return true;
-		} catch (error) {
-			codingHarnessSetupError = toError(error).message;
-			return false;
-		} finally {
-			codingHarnessSetupLoading = false;
-		}
+		if (!backendReady || !supportsCommand("set_coding_harness_slots")) return false;
+		return enqueueCodingHarnessSetup(async () => {
+			codingHarnessSetupLoading = true;
+			codingHarnessSetupError = "";
+			try {
+				codingHarnessSetup = await bridge.send<CodingHarnessSetup>("set_coding_harness_slots", { slots });
+				return true;
+			} catch (error) {
+				codingHarnessSetupError = toError(error).message;
+				return false;
+			} finally {
+				codingHarnessSetupLoading = false;
+			}
+		});
 	}
 
 	async function updateCodingHarnessAgent(
@@ -1175,21 +1193,18 @@
 
 	async function setWorkTogetherMode(enabled: boolean): Promise<void> {
 		if (!codingHarnessSetup) return;
-		const agents = codingHarnessSetup.slots.agents.map((agent) => ({
-			...agent,
-			...(agent.model
-				? {}
-				: agent.kind === "klerm" && agent.id === "agent1" && currentConfig?.localModel
-					? { model: currentConfig.localModel }
-					: agent.kind === "klerm" && agent.id === "agent2" && currentConfig?.frontierModel
-						? { model: currentConfig.frontierModel }
-						: {}),
-		}));
-		if (enabled && new Set(agents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model).map((agent) => agent.model)).size < 3) return;
+		const next = assignWorkTogetherModels(
+			codingHarnessSetup.slots,
+			currentConfig?.localModel,
+			currentConfig?.frontierModel,
+			klermModelCatalog,
+		);
+		if (enabled && !canEnableWorkTogether(next)) {
+			return;
+		}
 		await saveCodingHarnessSlots({
-			...codingHarnessSetup.slots,
+			...next,
 			workTogetherEnabled: enabled || undefined,
-			agents,
 		});
 	}
 
@@ -1280,8 +1295,8 @@
 		}
 	}
 
-	async function startProviderOauth(provider: string): Promise<void> {
-		if (!supportsCommand("connect_provider_oauth") || providerBusy) return;
+	async function startProviderOauth(provider: string): Promise<boolean> {
+		if (!supportsCommand("connect_provider_oauth") || providerBusy) return false;
 		providerBusy = true;
 		clearError();
 		oauthStep = { provider };
@@ -1293,8 +1308,10 @@
 			);
 			providerAccounts = result.providers;
 			await refreshModels();
+			return true;
 		} catch (error) {
 			showError(toError(error).message);
+			return false;
 		} finally {
 			providerBusy = false;
 			oauthStep = undefined;
@@ -1937,7 +1954,7 @@
 			onclick={() => (sidebarOpen = false)}
 		></button>
 	{/if}
-	{#if workspacePanelOpen}
+	{#if workspacePanelOpen && !settingsOpen}
 		<button
 			type="button"
 			aria-label="Close file changes"
@@ -1973,7 +1990,7 @@
 				onconnectprovider={connectProvider}
 				ondisconnectprovider={disconnectProvider}
 				oauthStep={oauthStep}
-				onstartoauth={(provider) => void startProviderOauth(provider)}
+				onstartoauth={startProviderOauth}
 				oncanceloauth={() => void cancelProviderOauth()}
 				onoauthsubmit={submitOauthPrompt}
 				onupsertprofile={upsertProfile}
@@ -2040,6 +2057,7 @@
 			externalHarnessBusy={codingHarnessSetupLoading}
 			{workTogetherEnabled}
 			{workTogetherAvailable}
+			{workTogetherVisible}
 			history={promptHistory}
 			focusRequest={composerFocusRequest}
 			historyKey={lastState?.sessionId ?? ""}
@@ -2056,8 +2074,7 @@
 			profileDisabled={!backendReady || interactionActive}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
-			localApprovalMode={currentConfig?.localApprovalMode ?? "risky"}
-			frontierApprovalMode={currentConfig?.frontierApprovalMode ?? "risky"}
+			approvalMode={currentConfig?.localApprovalMode ?? "risky"}
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			{buildModeOffer}
@@ -2085,8 +2102,7 @@
 			}}
 			onbuildofferdismiss={dismissBuildModeOffer}
 			onbuildofferswitch={switchBuildMode}
-			onlocalapprovalchange={(mode) => void applyConfigUpdate({ localApprovalMode: mode })}
-			onfrontierapprovalchange={(mode) => void applyConfigUpdate({ frontierApprovalMode: mode })}
+			onapprovalchange={(mode) => void applyConfigUpdate({ localApprovalMode: mode, frontierApprovalMode: mode })}
 			onlocalprofilechange={(id) => void assignProfile("local", id)}
 			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
 			onexternalharnesschange={(id, enabled) => void updateCodingHarnessAgent(id, { enabled })}

@@ -152,9 +152,7 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 	return {
 		externalHarnessesEnabled: stored.externalHarnessesEnabled === true,
 		...(stored.externalHarnessesEnabled === true &&
-		new Set(
-			agents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model).map((agent) => agent.model),
-		).size >= 3 &&
+		agents.filter((agent) => agent.enabled).length >= 3 &&
 		stored.workTogetherEnabled === true
 			? { workTogetherEnabled: true }
 			: {}),
@@ -229,11 +227,7 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 	const workTogetherEnabled =
 		setup.externalHarnessesEnabled &&
 		setup.workTogetherEnabled === true &&
-		new Set(
-			parsedAgents
-				.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model)
-				.map((agent) => agent.model),
-		).size >= 3;
+		parsedAgents.filter((agent) => agent.enabled).length >= 3;
 	return {
 		externalHarnessesEnabled: setup.externalHarnessesEnabled,
 		...(workTogetherEnabled ? { workTogetherEnabled: true } : {}),

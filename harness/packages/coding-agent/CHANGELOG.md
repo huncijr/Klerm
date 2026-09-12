@@ -41,6 +41,9 @@
 
 ### Fixed
 
+- Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.
+- Fixed Work together refusing four enabled agents by persisting the mode for any three enabled slots and mapping the OpenCode harness logo.
+- Fixed the Work together control showing a wait cursor and refusing to enable when three agents were checked but Agent 3 had no model yet.
 - Fixed resumed Klerm sessions omitting the local/frontier delegation and return markers that were visible before exit; new transitions are persisted in the session, and legacy sessions are reconstructed from their routing messages and tool results.
 - Fixed complex automatic tasks bypassing deterministic frontier delegation enforcement when the persistent active start lane was local, and recognized explicit Hungarian requests for the other configured model.
 - Fixed the subagent example repeatedly prompting before running project-local agents in trusted repositories ([#8261](https://github.com/earendil-works/pi/issues/8261)).

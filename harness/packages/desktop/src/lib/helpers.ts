@@ -21,6 +21,17 @@ export async function saveDesktopSettingsChanges(
 	return undefined;
 }
 
+export function shouldReplaceSettingsDrafts(options: {
+	appliedSource: string;
+	source: string;
+	initialized: boolean;
+	saving: boolean;
+	dirty: boolean;
+}): boolean {
+	if (options.appliedSource === options.source) return false;
+	return !options.initialized || options.saving || !options.dirty;
+}
+
 export function messageText(message: AgentMessage): string {
 	if (typeof message.content === "string") return message.content;
 	return (message.content ?? [])

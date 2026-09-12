@@ -108,7 +108,7 @@ describe("coding harness setup", () => {
 				workTogetherEnabled: true,
 				agents: [...agents.slice(0, 2), { ...agents[2], kind: "codex" }],
 			}),
-		).not.toHaveProperty("workTogetherEnabled");
+		).toMatchObject({ workTogetherEnabled: true });
 		expect(parseCodingHarnessSlots({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents })).toEqual({
 			externalHarnessesEnabled: true,
 			workTogetherEnabled: true,
