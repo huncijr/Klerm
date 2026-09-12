@@ -23,6 +23,7 @@
 		WorkerRole,
 	} from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
+	import ProviderLogo from "./ProviderLogo.svelte";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
 	let {
@@ -170,6 +171,16 @@
 			? externalHarnessSetup.slots.agents.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot }))
 			: [],
 	);
+
+	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
+		if (kind === "claude-code") return "Claude Code";
+		if (kind === "opencode") return "OpenCode";
+		if (kind === "codex") return "Codex";
+		if (kind === "cline") return "Cline";
+		if (kind === "pi") return "Pi";
+		if (kind === "klerm") return "Klerm";
+		return "Not configured";
+	}
 
 	function mentionStyle(color: McpColor = "base"): string {
 		return `color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[color]}55; border-radius: 4px;`;
@@ -471,24 +482,19 @@
 		{/key}
 	{/if}
 	{#if externalHarnessSetup?.slots.externalHarnessesEnabled}
-		<div class="mx-auto mb-2 w-[min(820px,100%)] rounded-lg border border-[#33404a] bg-[#0a1015] p-2.5">
-			<div class="mb-2 flex items-center justify-between gap-3 font-mono text-[8px] uppercase tracking-[.12em]">
-				<strong class="text-[#d7e7ff]">External Agents</strong>
-				<span class="text-[#8b969e]">{externalHarnessSetup.effectiveRouting === "auto" ? "Auto / Agent 1 first" : externalHarnessSetup.effectiveRouting === "none" ? "None" : "Disabled"}</span>
-			</div>
-			<div class="grid grid-cols-2 gap-2 narrow-520:grid-cols-1">
+		<div class="mx-auto mb-2 w-[min(820px,100%)] rounded-md border border-[#33404a] bg-[#0a1015] px-2.5 py-2">
+			<div class="flex flex-wrap items-center gap-1.5">
+				<strong class="mr-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#d7e7ff]">External agents</strong>
 				{#each externalAgentSlots as { label, slot }}
-					<div class={`rounded-md border px-2.5 py-2 ${slot.enabled ? "border-[#40512e] bg-[#11180c]" : "border-[#293239] bg-[#0d1217] opacity-60"}`}>
-						<div class="flex items-center justify-between gap-2">
-							<strong class="font-mono text-[9px] text-white">{label}</strong>
-							<span class={`h-1.5 w-1.5 rounded-full ${slot.enabled ? "bg-[#9fca43]" : "bg-[#56616a]"}`}></span>
-						</div>
-						<span class="mt-1 block truncate font-mono text-[8px] text-[#7f8b93]">{slot.kind ?? "Not configured"}{slot.model ? ` · ${slot.model}` : ""} · {slot.enabled ? "On" : "Off"}</span>
-					</div>
+					<span class={`flex items-center gap-1 rounded border px-1.5 py-1 font-mono text-[8px] ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#cbd8af]" : "border-[#293239] bg-[#0d1217] text-[#69757d]"}`}>
+						<ProviderLogo id={slot.kind ?? "custom"} label={harnessDisplayName(slot.kind)} size={16} decorative />
+						{label} · {harnessDisplayName(slot.kind)} · {slot.enabled ? "Opt in" : "Opt out"}
+					</span>
 				{/each}
+				<span class="ml-auto font-mono text-[8px] text-[#8b969e]">{externalHarnessSetup.effectiveRouting === "auto" ? "Auto" : externalHarnessSetup.effectiveRouting === "none" ? "Single" : "Off"}</span>
 			</div>
 			{#if externalHarnessSetup.blockingReason}
-				<p class="m-0 mt-2 font-mono text-[8px] leading-[1.45] text-[#d6b16e]">{externalHarnessSetup.blockingReason}</p>
+				<p class="m-0 mt-1 font-mono text-[7px] leading-[1.35] text-[#a78e60]">{externalHarnessSetup.blockingReason} Built-in Klerm prompting remains available.</p>
 			{/if}
 		</div>
 	{/if}

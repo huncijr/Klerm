@@ -3,6 +3,24 @@ import type { AgentContentPart, AgentMessage, ImageAttachment, TimelineTone } fr
 export const TIMELINE_PREVIEW_LINES = 24;
 const MCP_TOOL_PATTERN = /^mcp_/;
 
+export interface DesktopSettingsSaveOperation {
+	error: string;
+	save: () => Promise<boolean>;
+}
+
+export async function saveDesktopSettingsChanges(
+	operations: readonly DesktopSettingsSaveOperation[],
+): Promise<string | undefined> {
+	for (const operation of operations) {
+		try {
+			if (!(await operation.save())) return operation.error;
+		} catch {
+			return operation.error;
+		}
+	}
+	return undefined;
+}
+
 export function messageText(message: AgentMessage): string {
 	if (typeof message.content === "string") return message.content;
 	return (message.content ?? [])

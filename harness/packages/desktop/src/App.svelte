@@ -150,9 +150,7 @@
 	const interactionActive = $derived(
 		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
 	);
-	const externalHarnessesEnabled = $derived(codingHarnessSetup?.slots.externalHarnessesEnabled === true);
-	const externalSendBlocked = $derived(externalHarnessesEnabled && codingHarnessSetup?.externalPromptingAvailable !== true);
-	const sendDisabled = $derived(!backendReady || interactionActive || externalSendBlocked);
+	const sendDisabled = $derived(!backendReady || interactionActive);
 	const localSelectDisabled = $derived(
 		!backendReady || interactionActive || !localOptions.some((option) => option.value.length > 0),
 	);
@@ -281,7 +279,7 @@
 		const offer = buildModeOffer;
 		if (!offer || offer.id !== id) return;
 		buildModeOffer = undefined;
-		applyConfigUpdate(offer.agent === "agent1" ? { localRole: "builder" } : { frontierRole: "builder" });
+		void applyConfigUpdate(offer.agent === "agent1" ? { localRole: "builder" } : { frontierRole: "builder" });
 	}
 
 	function appendTerminal(text: string): void {
@@ -1081,12 +1079,14 @@
 		}
 	}
 
-	async function setDesktopAppearance(appearance: DesktopAppearance): Promise<void> {
-		if (!supportsCommand("set_desktop_appearance")) return;
+	async function setDesktopAppearance(appearance: DesktopAppearance): Promise<boolean> {
+		if (!supportsCommand("set_desktop_appearance")) return false;
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("set_desktop_appearance", { appearance });
+			return true;
 		} catch (error) {
 			showError(toError(error).message);
+			return false;
 		}
 	}
 
@@ -1530,8 +1530,8 @@
 		localApprovalMode?: KlermConfig["localApprovalMode"];
 		frontierApprovalMode?: KlermConfig["frontierApprovalMode"];
 		maxDelegationCycles?: KlermConfig["maxDelegationCycles"];
-	}): void {
-		if (configBusy) return;
+	}): Promise<boolean> {
+		if (configBusy) return Promise.resolve(false);
 		const operation = (async () => {
 			clearError();
 			try {
@@ -1555,15 +1555,16 @@
 		void operation.finally(() => {
 			if (configBusy === operation) configBusy = undefined;
 		});
+		return operation;
 	}
 
 	function applyRoutingSelection(value: string): void {
 		if (value === "frontier-local") {
-			applyConfigUpdate({ routing: "frontier", activeStartLane: "frontier-local" });
+			void applyConfigUpdate({ routing: "frontier", activeStartLane: "frontier-local" });
 			return;
 		}
 		if (value === "off" || value === "local" || value === "frontier" || value === "auto") {
-			applyConfigUpdate({ routing: value, activeStartLane: "auto" });
+			void applyConfigUpdate({ routing: value, activeStartLane: "auto" });
 		}
 	}
 
@@ -1850,7 +1851,7 @@
 					settingsOpen = false;
 					settingsFullscreen = false;
 				}}
-				onappearance={(value) => void setDesktopAppearance(value)}
+				onappearance={setDesktopAppearance}
 				onmaxdelegationcycles={(value) => applyConfigUpdate({ maxDelegationCycles: value })}
 				onrefreshharnesses={() => void refreshCodingHarnessSetup()}
 				onsaveharnesses={saveCodingHarnessSlots}
@@ -1945,23 +1946,23 @@
 			onsend={(text, images) => void sendMessage(text, images)}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
-			onlocalchange={(value) => applyConfigUpdate({ localModel: value })}
-			onfrontierchange={(value) => applyConfigUpdate({ frontierModel: value })}
+			onlocalchange={(value) => void applyConfigUpdate({ localModel: value })}
+			onfrontierchange={(value) => void applyConfigUpdate({ frontierModel: value })}
 			onroutingchange={applyRoutingSelection}
 			onlocalthinkingchange={(level) => void applyThinkingLevel("local", level)}
 			onfrontierthinkingchange={(level) => void applyThinkingLevel("frontier", level)}
 			onlocalrolechange={(role) => {
 				buildModeOffer = undefined;
-				applyConfigUpdate({ localRole: role });
+				void applyConfigUpdate({ localRole: role });
 			}}
 			onfrontierrolechange={(role) => {
 				buildModeOffer = undefined;
-				applyConfigUpdate({ frontierRole: role });
+				void applyConfigUpdate({ frontierRole: role });
 			}}
 			onbuildofferdismiss={dismissBuildModeOffer}
 			onbuildofferswitch={switchBuildMode}
-			onlocalapprovalchange={(mode) => applyConfigUpdate({ localApprovalMode: mode })}
-			onfrontierapprovalchange={(mode) => applyConfigUpdate({ frontierApprovalMode: mode })}
+			onlocalapprovalchange={(mode) => void applyConfigUpdate({ localApprovalMode: mode })}
+			onfrontierapprovalchange={(mode) => void applyConfigUpdate({ frontierApprovalMode: mode })}
 			onlocalprofilechange={(id) => void assignProfile("local", id)}
 			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
 		/>
