@@ -26,9 +26,12 @@
 - Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
 - Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards; native external session prompting remains disabled until adapters are available.
 - Added desktop Work together orchestration for three or more distinct Klerm models, with shared capability rosters, task-aware peer selection, per-agent memory profiles, and target-attributed transition logs.
+- Added typed on-demand coding-harness model discovery through the native Pi, Codex, and OpenCode interfaces, with desktop refresh, loading, and error states.
+- Added up to four closable desktop agent activity views with model, status, and per-agent thinking-effort controls backed by agent-attributed RPC events.
 
 ### Changed
 
+- Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
 - Changed newly added coding agents to use the enabled Klerm harness by default while keeping external harness activation as an independent global setting.
 - Removed the changelog URL line from the interactive update-available notice.
 - Changed automatic routing to always start locally, deterministically recommend frontier for complex tasks, and enforce ignored recommendations after the first completed local response.
@@ -41,6 +44,7 @@
 
 ### Fixed
 
+- Fixed text-only desktop prompts sending an invalid empty image list, and replaced the stale external-adapter model placeholder with the actual discovery state.
 - Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.
 - Fixed Work together refusing four enabled agents by persisting the mode for any three enabled slots and mapping the OpenCode harness logo.
 - Fixed the Work together control showing a wait cursor and refusing to enable when three agents were checked but Agent 3 had no model yet.

@@ -786,7 +786,11 @@ export class AgentSession {
 			this._klermThinkingLevels.local = previousThinkingLevel;
 		}
 		try {
-			await this._applyRoutedModel(transition.model, false, this._klermThinkingLevels[transition.state.toLane]);
+			await this._applyRoutedModel(
+				transition.model,
+				false,
+				transition.thinkingLevel ?? this._klermThinkingLevels[transition.state.toLane],
+			);
 			await transition.commit();
 			this._applyKlermToolRole();
 			if (transition.state.kind !== "initial") {
@@ -1759,6 +1763,7 @@ export class AgentSession {
 				restoreThinkingLevel = thinkingBeforeRouting;
 			}
 			if (routedTransition) await this._applyKlermTransition(routedTransition, true);
+			else this._applyKlermToolRole();
 			if (this._klermRoutingController?.routingState.taskIntent === "workspace-change") {
 				this._klermWorkspaceBefore = await captureKlermWorkspaceSnapshot(this._cwd);
 			}

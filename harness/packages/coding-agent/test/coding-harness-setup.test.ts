@@ -8,6 +8,7 @@ import {
 	createCodingHarnessAgent,
 	createCodingHarnessSetup,
 	discoverCodingHarnesses,
+	discoverCodingHarnessModels,
 	nextCodingHarnessAgentId,
 	normalizeCodingHarnessKind,
 	normalizeCodingHarnessSlots,
@@ -65,21 +66,28 @@ describe("coding harness setup", () => {
 		expect(parseCodingHarnessSlots(slots)).toEqual(slots);
 		expect(parseCodingHarnessSlots({ agent1: "Claude Code", agent2: null })).toBeUndefined();
 		expect(parseCodingHarnessSlots({ externalHarnessesEnabled: true, agents: [] })).toBeUndefined();
-		expect(
-			parseCodingHarnessSlots({ externalHarnessesEnabled: true, agents: [agent("agent2", "klerm")] }),
-		).toBeUndefined();
+		expect(parseCodingHarnessSlots({ externalHarnessesEnabled: true, agents: [agent("agent2", "klerm")] })).toEqual({
+			externalHarnessesEnabled: true,
+			agents: [agent("agent2", "klerm")],
+		});
 		expect(parseCodingHarnessSlots({ ...slots, extra: true })).toBeUndefined();
 		expect(
 			normalizeCodingHarnessSlots({
 				externalHarnessesEnabled: true,
 				agents: [agent("agent3", "codex"), agent("agent1", "klerm")],
 			}),
-		).toMatchObject({ agents: [{ id: "agent1" }, { id: "agent3" }] });
+		).toMatchObject({ agents: [{ id: "agent3" }, { id: "agent1" }] });
+		expect(
+			parseCodingHarnessSlots({
+				externalHarnessesEnabled: true,
+				agents: [1, 2, 3, 4, 5].map((number) => agent(`agent${number}`, "klerm")),
+			}),
+		).toBeUndefined();
 	});
 
-	it("allocates stable increasing agent identifiers", () => {
-		expect(nextCodingHarnessAgentId([agent("agent1", "klerm"), agent("agent3", null)])).toBe("agent4");
-		expect(createCodingHarnessAgent("agent4")).toEqual(agent("agent4", "klerm"));
+	it("reuses the smallest available agent identifier", () => {
+		expect(nextCodingHarnessAgentId([agent("agent1", "klerm"), agent("agent3", null)])).toBe("agent2");
+		expect(createCodingHarnessAgent("agent2")).toEqual(agent("agent2", "klerm"));
 	});
 
 	it("enables Work together only for three enabled modeled agents and preserves memory assignments", () => {
@@ -152,6 +160,29 @@ describe("coding harness setup", () => {
 	it("bounds version output to the first line", async () => {
 		const setup = await discoverCodingHarnesses(async () => ({ stdout: "x".repeat(400) }));
 		expect(setup.slice(1).every((harness) => harness.version?.length === 256)).toBe(true);
+	});
+
+	it("discovers models through each harness native interface", async () => {
+		const run = vi.fn(async () => ({ stdout: "openai/gpt-5\nopenai/gpt-5\nxai/grok\ninvalid model\n" }));
+		await expect(discoverCodingHarnessModels("opencode", run)).resolves.toEqual(["openai/gpt-5", "xai/grok"]);
+		expect(run).toHaveBeenCalledWith("opencode", ["models"], 15_000, 1_048_576);
+
+		run.mockResolvedValueOnce({
+			stdout:
+				"provider   model            context  max-out  thinking  images\n" +
+				"anthropic  claude-sonnet    200K     64K      yes       yes\n" +
+				"openai     gpt-5            272K     128K     yes       yes\n",
+		});
+		await expect(discoverCodingHarnessModels("pi", run)).resolves.toEqual([
+			"anthropic/claude-sonnet",
+			"openai/gpt-5",
+		]);
+		expect(run).toHaveBeenLastCalledWith("pi", ["--list-models"], 15_000, 1_048_576);
+
+		const codexModels = vi.fn(async () => ["gpt-5-codex", "gpt-5"]);
+		await expect(discoverCodingHarnessModels("codex", run, codexModels)).resolves.toEqual(["gpt-5-codex", "gpt-5"]);
+		expect(codexModels).toHaveBeenCalledOnce();
+		await expect(discoverCodingHarnessModels("claude-code", run, codexModels)).resolves.toEqual([]);
 	});
 
 	it("persists the dynamic registry while preserving unrelated settings", async () => {

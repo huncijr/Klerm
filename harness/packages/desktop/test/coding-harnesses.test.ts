@@ -39,9 +39,11 @@ describe("desktop coding harness slots", () => {
 		expect(canEnableWorkTogether(updateCodingHarnessSlot(configured, "agent3", { enabled: false }))).toBe(false);
 	});
 
-	test("adds an enabled Klerm agent with a stable increasing id", () => {
+	test("adds an enabled Klerm agent with the smallest free id", () => {
 		const withGap = { ...slots, agents: [...slots.agents, { ...slots.agents[0]!, id: "agent3" }] };
-		expect(addCodingHarnessSlot(withGap).agents.at(-1)).toMatchObject({ id: "agent4", kind: "klerm", enabled: true });
+		expect(addCodingHarnessSlot(withGap).agents.at(-1)).toMatchObject({ id: "agent2", kind: "klerm", enabled: true });
+		const full = addCodingHarnessSlot(addCodingHarnessSlot(withGap));
+		expect(addCodingHarnessSlot(full)).toBe(full);
 	});
 
 	test("updates one agent without changing its other settings", () => {
@@ -51,11 +53,12 @@ describe("desktop coding harness slots", () => {
 		});
 	});
 
-	test("keeps Agent 1 but removes later agents", () => {
+	test("removes Agent 1 only when at least three agents are configured", () => {
 		const withAgent2 = addCodingHarnessSlot(slots);
 		expect(removeCodingHarnessSlot(withAgent2, "agent1")).toBe(withAgent2);
 		expect(removeCodingHarnessSlot(withAgent2, "agent2").agents.map((agent) => agent.id)).toEqual(["agent1"]);
 		const together = { ...addCodingHarnessSlot(addCodingHarnessSlot(slots)), workTogetherEnabled: true };
+		expect(removeCodingHarnessSlot(together, "agent1").agents.map((agent) => agent.id)).toEqual(["agent2", "agent3"]);
 		expect(removeCodingHarnessSlot(together, "agent3")).not.toHaveProperty("workTogetherEnabled");
 	});
 });

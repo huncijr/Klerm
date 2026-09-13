@@ -54,22 +54,21 @@ export function updateCodingHarnessSlot(
 }
 
 export function addCodingHarnessSlot(slots: CodingHarnessSlots): CodingHarnessSlots {
-	if (slots.agents.length >= 16) return slots;
-	const highest = slots.agents.reduce((max, agent) => {
-		const number = Number(agent.id.slice(5));
-		return Number.isSafeInteger(number) ? Math.max(max, number) : max;
-	}, 0);
+	if (slots.agents.length >= 4) return slots;
+	const used = new Set(slots.agents.map((agent) => Number(agent.id.slice(5))));
+	let number = 1;
+	while (used.has(number)) number += 1;
 	return {
 		...slots,
 		agents: [
 			...slots.agents,
-			{ id: `agent${highest + 1}`, kind: "klerm", enabled: true, role: "builder", effort: "off", tools: [] },
+			{ id: `agent${number}`, kind: "klerm", enabled: true, role: "builder", effort: "off", tools: [] },
 		],
 	};
 }
 
 export function removeCodingHarnessSlot(slots: CodingHarnessSlots, id: string): CodingHarnessSlots {
-	if (id === "agent1") return slots;
+	if (slots.agents.length <= 1 || (id === "agent1" && slots.agents.length < 3)) return slots;
 	const agents = slots.agents.filter((agent) => agent.id !== id);
 	return {
 		externalHarnessesEnabled: slots.externalHarnessesEnabled,

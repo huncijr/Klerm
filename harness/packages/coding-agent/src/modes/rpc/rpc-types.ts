@@ -18,7 +18,12 @@ import type {
 	SettingsScope,
 } from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
-import type { CodingHarnessSetup, CodingHarnessSlots } from "../../klerm/coding-harness-setup.ts";
+import type {
+	CodingHarnessDiscoveryResult,
+	CodingHarnessKind,
+	CodingHarnessSetup,
+	CodingHarnessSlots,
+} from "../../klerm/coding-harness-setup.ts";
 import type {
 	KlermActiveStartLane,
 	KlermBuilderApprovalMode,
@@ -220,6 +225,7 @@ export type RpcCommand =
 	| { id?: string; type: "desktop_handshake" }
 	| { id?: string; type: "get_local_runtimes" }
 	| { id?: string; type: "get_coding_harness_setup" }
+	| { id?: string; type: "refresh_coding_harness_models"; kind: CodingHarnessKind }
 	| { id?: string; type: "set_coding_harness_slots"; slots: RpcCodingHarnessSlots }
 	| { id?: string; type: "get_klerm_config" }
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
@@ -364,6 +370,13 @@ export type RpcResponse =
 			data: { runtimes: LocalRuntimeDiscoveryResult[] };
 	  }
 	| { id?: string; type: "response"; command: "get_coding_harness_setup"; success: true; data: RpcCodingHarnessSetup }
+	| {
+			id?: string;
+			type: "response";
+			command: "refresh_coding_harness_models";
+			success: true;
+			data: CodingHarnessDiscoveryResult;
+	  }
 	| { id?: string; type: "response"; command: "set_coding_harness_slots"; success: true; data: RpcCodingHarnessSetup }
 	| { id?: string; type: "response"; command: "get_klerm_config"; success: true; data: KlermConfig }
 	| {

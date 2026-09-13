@@ -11,7 +11,12 @@ import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
-import type { CodingHarnessSetup, CodingHarnessSlots } from "../../klerm/coding-harness-setup.ts";
+import type {
+	CodingHarnessDiscoveryResult,
+	CodingHarnessKind,
+	CodingHarnessSetup,
+	CodingHarnessSlots,
+} from "../../klerm/coding-harness-setup.ts";
 import type { KlermConfig } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { KlermRoutingState } from "../../klerm/router/types.ts";
@@ -227,6 +232,12 @@ export class RpcClient {
 	/** Discover coding harnesses and read their global slot assignments. */
 	async getCodingHarnessSetup(): Promise<CodingHarnessSetup> {
 		const response = await this.send({ type: "get_coding_harness_setup" });
+		return this.getData(response);
+	}
+
+	/** Refresh the native model catalog for one installed coding harness. */
+	async refreshCodingHarnessModels(kind: CodingHarnessKind): Promise<CodingHarnessDiscoveryResult> {
+		const response = await this.send({ type: "refresh_coding_harness_models", kind });
 		return this.getData(response);
 	}
 

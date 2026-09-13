@@ -50,6 +50,7 @@
 		onappearance,
 		onmaxdelegationcycles,
 		onrefreshharnesses,
+		onrefreshharnessmodels,
 		onsaveharnesses,
 		onaddmodel,
 		onconnectprovider,
@@ -83,6 +84,7 @@
 		onappearance: (value: DesktopAppearance) => Promise<boolean>;
 		onmaxdelegationcycles: (value: number) => Promise<boolean>;
 		onrefreshharnesses: () => void;
+		onrefreshharnessmodels: (kind: CodingHarnessKind) => Promise<void>;
 		onsaveharnesses: (slots: CodingHarnessSetup["slots"]) => Promise<boolean>;
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
 		onconnectprovider: (account: ProviderConnect) => Promise<boolean>;
@@ -121,6 +123,7 @@
 	let copiedUrl = $state("");
 	let connectNotice = $state("");
 	let connectNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+	let loadingHarnessModels = $state<CodingHarnessKind[]>([]);
 	let confirmDiscardSettings = $state(false);
 	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
 	let profileName = $state("");
@@ -268,6 +271,17 @@
 
 	function updateAgent(id: string, update: Partial<CodingHarnessSetup["slots"]["agents"][number]>): void {
 		draftHarnessSlots = updateCodingHarnessSlot(draftHarnessSlots, id, update);
+	}
+
+	async function selectHarness(id: string, kind: CodingHarnessKind): Promise<void> {
+		updateAgent(id, { kind, enabled: harnessAvailable(kind), model: undefined });
+		if (kind === "klerm") return;
+		loadingHarnessModels = [...new Set([...loadingHarnessModels, kind])];
+		try {
+			await onrefreshharnessmodels(kind);
+		} finally {
+			loadingHarnessModels = loadingHarnessModels.filter((candidate) => candidate !== kind);
+		}
 	}
 
 	function editProfile(profile: KlermProfile): void {
@@ -666,7 +680,7 @@
 								<ProviderLogo id={value.kind ?? "custom"} label={value.kind ? codingHarnessLabel(value.kind) : `Agent ${agentNumber(value.id)}`} size={24} decorative />
 								<strong class="mr-auto text-[12px] text-white">Agent {agentNumber(value.id)}{value.kind ? ` · ${codingHarnessLabel(value.kind)}` : ""}</strong>
 								<div class="flex items-center gap-1.5">
-									{#if value.id !== "agent1"}
+								{#if value.id !== "agent1" || draftHarnessSlots.agents.length >= 3}
 										<button type="button" class="font-mono text-[8px] text-[#8b969e] hover:text-[#f3a49c]" onclick={() => (draftHarnessSlots = removeCodingHarnessSlot(draftHarnessSlots, value.id))}>Remove</button>
 									{/if}
 									<button type="button" role="switch" aria-label={`Toggle Agent ${agentNumber(value.id)}`} aria-checked={value.enabled} disabled={value.kind !== null && !harnessAvailable(value.kind)} class="flex items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-not-allowed disabled:opacity-35" onclick={() => updateAgent(value.id, { kind: value.kind ?? "klerm", enabled: !value.enabled })}>
@@ -681,10 +695,7 @@
 								value={value.kind ?? ""}
 								disabled={!codingHarnessSetup}
 								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
-								onchange={(event) => {
-									const selected = event.currentTarget.value as CodingHarnessKind;
-									updateAgent(value.id, { kind: selected, enabled: harnessAvailable(selected), model: undefined });
-								}}
+								onchange={(event) => void selectHarness(value.id, event.currentTarget.value as CodingHarnessKind)}
 							>
 								{#if value.kind !== null && !harnessAvailable(value.kind)}
 									<option value={value.kind} disabled>{codingHarnessLabel(value.kind)} · Not installed</option>
@@ -694,15 +705,18 @@
 								{/each}
 							</select>
 							<p class={`m-0 mt-3 break-words font-mono text-[9px] ${value.kind !== null && !harnessAvailable(value.kind) ? "text-[#f3a49c]" : "text-[#7b868e]"}`}>{harnessStatus(value.kind)} · {value.enabled ? "On" : "Off"}</p>
+							{#if value.kind && codingHarnessSetup?.harnesses.find((item) => item.kind === value.kind)?.error}
+								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
+							{/if}
 							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
 							<select
 								id={`harness-model-${value.id}`}
 								value={value.model ?? ""}
-								disabled={models.length === 0}
+								disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
 								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
 								onchange={(event) => updateAgent(value.id, { model: event.currentTarget.value || undefined })}
 							>
-								<option value="">{value.kind === "klerm" ? "Use current Klerm model" : "Models available after adapter connection"}</option>
+								<option value="">{value.kind === "klerm" ? "Use current Klerm model" : value.kind && loadingHarnessModels.includes(value.kind) ? "Loading models..." : models.length > 0 ? "Select harness model" : "No models reported by this harness"}</option>
 								{#each models as model}<option value={model}>{model}</option>{/each}
 							</select>
 							<div class="mt-4 grid grid-cols-2 gap-2">
@@ -716,7 +730,7 @@
 						</section>
 					{/each}
 				</div>
-				<button type="button" disabled={draftHarnessSlots.agents.length >= 16} class="w-full rounded-lg border border-dashed border-[#3d4a54] bg-[#0a0f13] py-3 font-mono text-[9px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={addAgent}>+ Add agent</button>
+				<button type="button" disabled={draftHarnessSlots.agents.length >= 4} class="w-full rounded-lg border border-dashed border-[#3d4a54] bg-[#0a0f13] py-3 font-mono text-[9px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={addAgent}>+ Add agent</button>
 			</div>
 		{:else if tab === "models"}
 			<div class="mx-auto w-[min(720px,100%)]">

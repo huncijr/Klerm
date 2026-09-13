@@ -332,8 +332,10 @@ export {
 } from "./core/trust-manager.ts";
 export {
 	CODING_HARNESS_KINDS,
+	type CodingHarnessCommandRunner,
 	type CodingHarnessDiscoveryResult,
 	type CodingHarnessKind,
+	type CodingHarnessModelDiscovery,
 	type CodingHarnessProbe,
 	type CodingHarnessProbeOptions,
 	type CodingHarnessProbeResult,
@@ -341,6 +343,7 @@ export {
 	type CodingHarnessSlot,
 	type CodingHarnessSlots,
 	discoverCodingHarnesses,
+	discoverCodingHarnessModels,
 	normalizeCodingHarnessKind,
 	normalizeCodingHarnessSlots,
 	parseCodingHarnessSlots,

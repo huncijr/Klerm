@@ -15,7 +15,7 @@ type ToJsonEvent<T> = T extends {
 	: T;
 
 /** Session event shape emitted by the JSON and RPC stdout protocols. */
-export type JsonAgentSessionEvent = ToJsonEvent<AgentSessionEvent>;
+export type JsonAgentSessionEvent = ToJsonEvent<AgentSessionEvent> & { agentId?: string };
 
 type MessageUpdateEvent = Extract<AgentSessionEvent, { type: "message_update" }>;
 type JsonMessageUpdateEvent = Extract<JsonAgentSessionEvent, { type: "message_update" }>;

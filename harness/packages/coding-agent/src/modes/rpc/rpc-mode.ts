@@ -41,6 +41,8 @@ import {
 import {
 	createCodingHarnessSetup,
 	discoverCodingHarnesses,
+	discoverCodingHarnessModels,
+	normalizeCodingHarnessKind,
 	parseCodingHarnessSlots,
 } from "../../klerm/coding-harness-setup.ts";
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
@@ -104,6 +106,7 @@ export type {
 export interface RunRpcModeOptions {
 	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
 	discoverCodingHarnesses?: typeof discoverCodingHarnesses;
+	discoverCodingHarnessModels?: typeof discoverCodingHarnessModels;
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
@@ -113,6 +116,7 @@ const DESKTOP_COMMANDS = [
 	"desktop_handshake",
 	"get_local_runtimes",
 	"get_coding_harness_setup",
+	"refresh_coding_harness_models",
 	"set_coding_harness_slots",
 	"get_klerm_config",
 	"set_klerm_config",
@@ -684,7 +688,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		unsubscribe = session.subscribe((event) => {
-			output(toJsonEvent(event));
+			const jsonEvent = toJsonEvent(event);
+			const agentId = session.klermRouting?.activeCodingHarnessAgentId;
+			output(agentId ? { ...jsonEvent, agentId } : jsonEvent);
 			if (event.type === "tool_execution_start" && (event.toolName === "edit" || event.toolName === "write")) {
 				const args = event.args as Record<string, unknown>;
 				const path =
@@ -779,6 +785,35 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 			case "get_coding_harness_setup": {
 				return success(id, "get_coding_harness_setup", await getCodingHarnessSetup(true));
+			}
+
+			case "refresh_coding_harness_models": {
+				const kind = normalizeCodingHarnessKind(command.kind);
+				const harness = kind && (await loadCodingHarnesses(false)).find((candidate) => candidate.kind === kind);
+				if (!kind || !harness?.available) {
+					return error(
+						id,
+						"refresh_coding_harness_models",
+						"The selected coding harness is not installed.",
+						"CODING_HARNESS_UNAVAILABLE",
+					);
+				}
+				try {
+					const models = await (options.discoverCodingHarnessModels ?? discoverCodingHarnessModels)(kind);
+					const refreshed = { ...harness, models };
+					delete refreshed.error;
+					cachedCodingHarnesses = (await loadCodingHarnesses(false)).map((candidate) =>
+						candidate.kind === kind ? refreshed : candidate,
+					);
+					return success(id, "refresh_coding_harness_models", refreshed);
+				} catch (modelError) {
+					const message = modelError instanceof Error ? modelError.message : String(modelError);
+					const refreshed = { ...harness, error: message.slice(0, 512) };
+					cachedCodingHarnesses = (await loadCodingHarnesses(false)).map((candidate) =>
+						candidate.kind === kind ? refreshed : candidate,
+					);
+					return success(id, "refresh_coding_harness_models", refreshed);
+				}
 			}
 
 			case "set_coding_harness_slots": {

@@ -238,6 +238,65 @@ describe("Klerm routing runtime", () => {
 		expect(controller.getSystemPromptContribution()).toContain("You are Klerm Agent 3");
 	});
 
+	it("starts Work together with the earliest configured active agent and its thinking effort", async () => {
+		const specialist = createModel("anthropic", "claude-opus-4", "anthropic-messages");
+		const runtime = {
+			...createRoutingRuntime(),
+			getAvailableSnapshot: () => [local, frontier, specialist],
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "off",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store, undefined, undefined, undefined, () => ({
+			externalHarnessesEnabled: true,
+			workTogetherEnabled: true,
+			agents: [
+				{
+					id: "agent3",
+					kind: "klerm",
+					enabled: true,
+					model: "anthropic/claude-opus-4",
+					role: "planner",
+					effort: "high",
+					tools: [],
+				},
+				{
+					id: "agent1",
+					kind: "klerm",
+					enabled: true,
+					model: "ollama/qwen2.5-coder:7b",
+					role: "builder",
+					effort: "off",
+					tools: [],
+				},
+				{
+					id: "agent2",
+					kind: "klerm",
+					enabled: true,
+					model: "google/gemini-3.5-flash-lite",
+					role: "builder",
+					effort: "medium",
+					tools: [],
+				},
+			],
+		}));
+
+		const initial = await controller.routePrompt("Plan the implementation");
+		expect(initial?.model).toBe(specialist);
+		expect(initial?.thinkingLevel).toBe("high");
+		expect(initial?.reason).toContain("agent3");
+		expect(controller.activeCodingHarnessAgentId).toBe("agent3");
+		await initial?.commit();
+		expect(controller.activeCodingHarnessAgentId).toBe("agent3");
+
+		const forcedFrontier = await controller.routePrompt("Ask the frontier agent", "frontier");
+		expect(forcedFrontier?.model).toBe(frontier);
+		expect(forcedFrontier?.thinkingLevel).toBe("medium");
+		expect(controller.activeCodingHarnessAgentId).toBe("agent2");
+	});
+
 	it("lets Agent 1 and Agent 2 use mixed or two local models, but not the same one", async () => {
 		const extraLocal = createModel("lm-studio", "qwen2.5-coder:14b", "openai-completions");
 		const runtime = {
@@ -329,51 +388,81 @@ describe("Klerm routing runtime", () => {
 		expect((await KlermConfigStore.load(tempDir)).get().localRole).toBe("builder");
 	});
 
-	it("applies planner tools to the first provider request and restores builder tools after completion", async () => {
-		const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:planner" }] });
-		const localModel = localFaux.getModel();
-		const runtime = {
-			getAvailableSnapshot: () => [localModel],
-			checkAuth: async () => ({ source: "config" }),
-			hasConfiguredAuth: () => true,
-			isUsingOAuth: () => false,
-		} as unknown as ModelRuntime;
+	it.each([
+		{ routing: "off" as const, lane: "direct" as const, localRole: "planner" as const },
+		{ routing: "local" as const, lane: "local" as const, localRole: "planner" as const },
+		{ routing: "frontier" as const, lane: "frontier" as const, frontierRole: "planner" as const },
+	])("grounds project-improvement questions in the current workspace for $lane prompts", async (config) => {
 		const store = await KlermConfigStore.load(tempDir, {
-			routing: "local",
-			localModel: "ollama/qwen:planner",
-			localRole: "planner",
+			...config,
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
 		});
-		const controller = new KlermRoutingController(tempDir, runtime, store);
-		let requestToolNames: string[] = [];
-		const builderTools = Object.values(createAllTools(tempDir));
-		const agent = new Agent({
-			streamFn: (model, context, options) => {
-				requestToolNames = context.tools?.map((tool) => tool.name) ?? [];
-				return streamSimple(model, context, options);
-			},
-			initialState: { model: localModel, systemPrompt: "test", tools: builderTools, thinkingLevel: "off" },
-		});
-		const session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.inMemory(tempDir),
-			settingsManager: SettingsManager.inMemory(),
-			cwd: tempDir,
-			modelRuntime: runtime,
-			resourceLoader: createTestResourceLoader(),
-			klermRoutingController: controller,
-		});
-		try {
-			localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
-			await session.prompt("Plan the implementation");
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("What could we add to improve this project?"))?.commit();
 
-			expect(requestToolNames).toEqual(expect.arrayContaining(["read", "grep", "find", "ls", "bash"]));
-			expect(requestToolNames).not.toEqual(expect.arrayContaining(["edit", "write"]));
-			expect(agent.state.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["bash", "edit", "write"]));
-		} finally {
-			session.dispose();
-			localFaux.unregister();
-		}
+		expect(controller.routingState).toMatchObject({ lane: config.lane, taskIntent: "answer" });
+		expect(controller.activeWorkerRole).toBe("planner");
+		expect(controller.filterToolsForActiveRole([{ name: "read" }, { name: "edit" }])).toEqual([{ name: "read" }]);
+		expect(controller.getSystemPromptContribution()).toContain(`Current project workspace: ${tempDir}`);
+		expect(controller.getSystemPromptContribution()).toContain(
+			"they mean the project files in this current workspace",
+		);
+		expect(controller.getSystemPromptContribution()).toContain("Do not answer about Klerm internals");
 	});
+
+	it.each(["local", "off"] as const)(
+		"applies planner scope and tools to the first provider request with $ routing",
+		async (routing) => {
+			const localFaux = registerFauxProvider({ provider: "ollama", models: [{ id: "qwen:planner" }] });
+			const localModel = localFaux.getModel();
+			const runtime = {
+				getAvailableSnapshot: () => [localModel],
+				checkAuth: async () => ({ source: "config" }),
+				hasConfiguredAuth: () => true,
+				isUsingOAuth: () => false,
+			} as unknown as ModelRuntime;
+			const store = await KlermConfigStore.load(tempDir, {
+				routing,
+				localModel: "ollama/qwen:planner",
+				localRole: "planner",
+			});
+			const controller = new KlermRoutingController(tempDir, runtime, store);
+			let requestToolNames: string[] = [];
+			let requestSystemPrompt = "";
+			const builderTools = Object.values(createAllTools(tempDir));
+			const agent = new Agent({
+				streamFn: (model, context, options) => {
+					requestToolNames = context.tools?.map((tool) => tool.name) ?? [];
+					requestSystemPrompt = context.systemPrompt ?? "";
+					return streamSimple(model, context, options);
+				},
+				initialState: { model: localModel, systemPrompt: "test", tools: builderTools, thinkingLevel: "off" },
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(tempDir),
+				settingsManager: SettingsManager.inMemory(),
+				cwd: tempDir,
+				modelRuntime: runtime,
+				resourceLoader: createTestResourceLoader(),
+				klermRoutingController: controller,
+			});
+			try {
+				localFaux.setResponses([fauxAssistantMessage("Plan complete.")]);
+				await session.prompt("Plan the implementation");
+
+				expect(requestToolNames).toEqual(expect.arrayContaining(["read", "grep", "find", "ls", "bash"]));
+				expect(requestToolNames).not.toEqual(expect.arrayContaining(["edit", "write"]));
+				expect(requestSystemPrompt).toContain(`Current project workspace: ${tempDir}`);
+				expect(requestSystemPrompt).toContain("they mean the project files in this current workspace");
+				expect(agent.state.tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(["edit", "write"]));
+			} finally {
+				session.dispose();
+				localFaux.unregister();
+			}
+		},
+	);
 
 	it("keeps normal read-only output and hides sensitive or mutating output from planner context", () => {
 		const messages: AgentMessage[] = [

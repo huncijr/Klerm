@@ -30,6 +30,7 @@ export interface CodingHarnessSetup {
 		available: boolean;
 		builtin: boolean;
 		version?: string;
+		error?: string;
 		models: string[];
 	}>;
 	effectiveRouting: CodingHarnessEffectiveRouting;
@@ -368,6 +369,7 @@ export interface ChatMessage {
 	id: number;
 	role: "user" | "assistant";
 	text: string;
+	agentId?: string;
 	images?: ImageAttachment[];
 	model?: string;
 	streaming: boolean;
@@ -389,6 +391,7 @@ export interface TimelineItem {
 	detail: string;
 	status: TimelineStatus;
 	open: boolean;
+	agentId?: string;
 	detailType?: "text" | "diff" | "code";
 	images?: ImageAttachment[];
 	dedupeId?: string;

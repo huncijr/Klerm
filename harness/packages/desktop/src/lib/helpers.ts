@@ -8,6 +8,14 @@ export interface DesktopSettingsSaveOperation {
 	save: () => Promise<boolean>;
 }
 
+export function rpcImageAttachments(
+	images: readonly ImageAttachment[],
+): Array<{ type: "image"; data: string; mimeType: string }> | undefined {
+	return images.length > 0
+		? images.map(({ data, mimeType }) => ({ type: "image" as const, data, mimeType }))
+		: undefined;
+}
+
 export async function saveDesktopSettingsChanges(
 	operations: readonly DesktopSettingsSaveOperation[],
 ): Promise<string | undefined> {

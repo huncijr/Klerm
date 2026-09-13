@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
 	import { open as openDialog } from "@tauri-apps/plugin-dialog";
-	import { onMount } from "svelte";
+	import { onMount, untrack } from "svelte";
 	import {
 		contentImages,
 		describeToolCall,
 		messageText,
 		resultErrorText,
+		rpcImageAttachments,
 		taskCompletionTitle,
 		toolResultDetails,
 		toDisplayText,
@@ -24,6 +25,7 @@
 		AgentMessage,
 		BashResult,
 		ChatMessage,
+		CodingHarnessKind,
 		CodingHarnessSetup,
 		CodingHarnessSlotSettings,
 		CustomModelEntry,
@@ -61,6 +63,7 @@
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import Composer from "./components/Composer.svelte";
+	import AgentViews from "./components/AgentViews.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
 	import ConfirmDialog from "./components/ConfirmDialog.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
@@ -142,6 +145,8 @@
 	let codingHarnessSetup = $state<CodingHarnessSetup | undefined>(undefined);
 	let codingHarnessSetupLoading = $state(false);
 	let codingHarnessSetupError = $state("");
+	let visibleAgentIds = $state<string[]>([]);
+	let knownAgentIds: string[] = [];
 	let mcpNeedsReload = false;
 
 	let currentLocalRuntimes = $state<LocalRuntime[]>([]);
@@ -191,6 +196,27 @@
 	const workTogetherEnabled = $derived(
 		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
 	);
+	const activeHarnessAgentId = $derived.by(() => {
+		if (!workTogetherEnabled || !currentRoutingState) return undefined;
+		const activeAgents = configuredHarnessAgents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model);
+		return (
+			activeAgents.find((agent) => agent.model === currentRoutingState?.selectedTarget)?.id ??
+			(currentRoutingState.lane === "local" ? activeAgents[0]?.id : undefined)
+		);
+	});
+
+	$effect(() => {
+		const enabledIds = configuredHarnessAgents.filter((agent) => agent.enabled).map((agent) => agent.id);
+		const added = enabledIds.filter((id) => !knownAgentIds.includes(id));
+		knownAgentIds = enabledIds;
+		// Read the current visible ids without tracking: this effect must only
+		// re-run when the agent roster changes, never when it writes the list.
+		const current = untrack(() => visibleAgentIds);
+		const next = [...new Set([...current.filter((id) => enabledIds.includes(id)), ...added])].slice(0, 4);
+		if (next.length !== current.length || next.some((id, index) => id !== current[index])) {
+			visibleAgentIds = next;
+		}
+	});
 	const composerLocalOptions = $derived(
 		externalHarnessesEnabled && firstHarnessAgent?.kind !== "klerm"
 			? (codingHarnessSetup?.harnesses
@@ -488,7 +514,8 @@
 		const detail = [transition.reason, ...meta].filter((line) => line).join("\n");
 		const failed = transition.trigger === "provider-failure";
 		if (failed) recordTaskError(transition.reason ?? title);
-		pushTimeline("routing", failed ? "red" : "amber", title, detail, failed ? "error" : "settled", dedupeId);
+		const item = pushTimeline("routing", failed ? "red" : "amber", title, detail, failed ? "error" : "settled", dedupeId);
+		item.agentId = configuredHarnessAgents.find((agent) => agent.model === model)?.id;
 	}
 
 	function renderFallbackReason(state: RoutingState | undefined): void {
@@ -560,6 +587,7 @@
 				"running",
 				`tool-${toolCallId}`,
 			);
+			if (typeof event.agentId === "string") item.agentId = event.agentId;
 			item.detailType = described.detailType;
 			if (mcpServer) {
 				item.mcp = {
@@ -624,13 +652,19 @@
 		return message?.provider ? `${message.provider}/${model}` : model;
 	}
 
-	function appendAssistantMessage(message?: AgentMessage): void {
+	function agentIdForModel(model: string | undefined): string | undefined {
+		if (!model) return undefined;
+		return configuredHarnessAgents.find((agent) => agent.model === model)?.id;
+	}
+
+	function appendAssistantMessage(message?: AgentMessage, agentId?: string): void {
 		const item: ChatMessage = {
 			id: ++messageSeq,
 			role: "assistant",
 			text: "",
 			model: modelLabel(message),
 			streaming: true,
+			...(agentId ? { agentId } : {}),
 		};
 		pushMessage(item);
 		streamingMessageId = item.id;
@@ -653,6 +687,7 @@
 		}
 		activeBranch.reverse();
 		let displayPrompt: string | undefined;
+		let replayAgentId: string | undefined;
 		for (const entry of activeBranch) {
 			if (entry.type === "custom" && entry.customType === "klerm-desktop-display-prompt") {
 				const data = entry.data as { text?: unknown } | undefined;
@@ -661,12 +696,16 @@
 			}
 			if (entry.type === "custom" && entry.customType === "klerm-transition") {
 				const data = entry.data as { transition?: RoutingTransition } | undefined;
-				if (data?.transition) addRoutingTransitionCard(data.transition);
+				if (data?.transition) {
+					addRoutingTransitionCard(data.transition);
+					replayAgentId = agentIdForModel(data.transition.toTarget);
+				}
 				continue;
 			}
 			if (entry.type !== "message" || !entry.message) continue;
 			const message = entry.message;
 			if (message.role === "user" || message.role === "assistant") {
+				if (message.role === "assistant") replayAgentId = agentIdForModel(modelLabel(message)) ?? replayAgentId;
 				const text = message.role === "user" && displayPrompt ? displayPrompt : messageText(message);
 				const images = contentImages(message.content);
 				if (message.role === "user") displayPrompt = undefined;
@@ -677,17 +716,19 @@
 						text,
 						images,
 						model: message.role === "assistant" ? modelLabel(message) : undefined,
+						agentId: message.role === "assistant" ? replayAgentId : undefined,
 						streaming: false,
 					});
 				}
 				if (message.role === "assistant" && Array.isArray(message.content)) {
 					for (const part of message.content) {
 						if (part.type === "toolCall" && part.id && part.name) {
-							handleToolStart({
+								handleToolStart({
 								type: "tool_execution_start",
 								toolCallId: part.id,
 								toolName: part.name,
-								args: part.arguments ?? {},
+									args: part.arguments ?? {},
+									agentId: replayAgentId,
 							});
 						}
 					}
@@ -838,13 +879,13 @@
 			}
 			case "message_start": {
 				const startedMessage = event.message as AgentMessage | undefined;
-				if (startedMessage?.role === "assistant") appendAssistantMessage(startedMessage);
+				if (startedMessage?.role === "assistant") appendAssistantMessage(startedMessage, typeof event.agentId === "string" ? event.agentId : undefined);
 				return;
 			}
 			case "message_update": {
 				const update = event.assistantMessageEvent as JsonObject | undefined;
 				if (update?.type === "text_delta" && typeof update.delta === "string") {
-					if (streamingMessageId === undefined) appendAssistantMessage();
+					if (streamingMessageId === undefined) appendAssistantMessage(undefined, typeof event.agentId === "string" ? event.agentId : undefined);
 					const item = findMessage(streamingMessageId);
 					if (item) item.text += update.delta;
 				}
@@ -863,6 +904,7 @@
 					item.images = images;
 					item.streaming = false;
 					if (completedMessage.model) item.model = modelLabel(completedMessage);
+					if (typeof event.agentId === "string") item.agentId = event.agentId;
 					if (!item.text && images.length === 0) removeMessage(item.id);
 				} else if (finalText || images.length > 0) {
 					pushMessage({
@@ -871,6 +913,7 @@
 						text: finalText,
 						images,
 						model: modelLabel(completedMessage),
+						agentId: typeof event.agentId === "string" ? event.agentId : undefined,
 						streaming: false,
 					});
 				}
@@ -1130,15 +1173,49 @@
 
 	async function refreshCodingHarnessSetup(): Promise<void> {
 		if (!backendReady || !supportsCommand("get_coding_harness_setup")) return;
+		let missingModelKinds: CodingHarnessKind[] = [];
 		await enqueueCodingHarnessSetup(async () => {
 			codingHarnessSetupLoading = true;
 			codingHarnessSetupError = "";
 			try {
 				codingHarnessSetup = await bridge.send<CodingHarnessSetup>("get_coding_harness_setup");
+				missingModelKinds = [
+					...new Set(
+						codingHarnessSetup.slots.agents
+							.map((agent) => agent.kind)
+							.filter(
+								(kind): kind is "pi" | "codex" | "opencode" =>
+									(kind === "pi" || kind === "codex" || kind === "opencode") &&
+									codingHarnessSetup?.harnesses.find((harness) => harness.kind === kind)?.models.length === 0,
+							),
+					),
+				];
 			} catch (error) {
 				codingHarnessSetupError = toError(error).message;
 			} finally {
 				codingHarnessSetupLoading = false;
+			}
+		});
+		for (const kind of missingModelKinds) await refreshCodingHarnessModels(kind);
+	}
+
+	async function refreshCodingHarnessModels(kind: CodingHarnessKind): Promise<void> {
+		if (!backendReady || !supportsCommand("refresh_coding_harness_models")) return;
+		await enqueueCodingHarnessSetup(async () => {
+			try {
+				const harness = await bridge.send<CodingHarnessSetup["harnesses"][number]>(
+					"refresh_coding_harness_models",
+					{ kind },
+				);
+				if (!codingHarnessSetup) return;
+				codingHarnessSetup = {
+					...codingHarnessSetup,
+					harnesses: codingHarnessSetup.harnesses.map((candidate) =>
+						candidate.kind === kind ? harness : candidate,
+					),
+				};
+			} catch (error) {
+				codingHarnessSetupError = toError(error).message;
 			}
 		});
 	}
@@ -1175,19 +1252,32 @@
 		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierModel: model });
 	}
 
+	async function setCodingHarnessAgentKind(id: string, kind: CodingHarnessKind): Promise<void> {
+		await refreshCodingHarnessModels(kind);
+		await updateCodingHarnessAgent(id, { kind, model: undefined });
+	}
+
 	async function setCodingHarnessAgentMemory(id: string, profileId: string): Promise<void> {
 		if (!(await updateCodingHarnessAgent(id, { memoryProfileId: profileId || undefined }))) return;
 		if (id === "agent1") await assignProfile("local", profileId);
 		if (id === "agent2") await assignProfile("frontier", profileId);
 	}
 
+	async function setCodingHarnessAgentEffort(id: string, effort: ThinkingLevel): Promise<void> {
+		if (!(await updateCodingHarnessAgent(id, { effort }))) return;
+		if (activeHarnessAgentId !== id || !currentRoutingState) return;
+		if (currentRoutingState.lane === "local" || currentRoutingState.lane === "frontier") {
+			await applyThinkingLevel(currentRoutingState.lane, effort);
+		}
+	}
+
 	async function addCodingHarnessAgent(): Promise<void> {
-		if (!codingHarnessSetup || codingHarnessSetup.slots.agents.length >= 16) return;
+		if (!codingHarnessSetup || codingHarnessSetup.slots.agents.length >= 4) return;
 		await saveCodingHarnessSlots(addCodingHarnessSlot(codingHarnessSetup.slots));
 	}
 
 	async function removeCodingHarnessAgent(id: string): Promise<void> {
-		if (!codingHarnessSetup || id === "agent1") return;
+		if (!codingHarnessSetup) return;
 		await saveCodingHarnessSlots(removeCodingHarnessSlot(codingHarnessSetup.slots, id));
 	}
 
@@ -1717,15 +1807,17 @@
 		resetTerminal(handshake.state.cwd);
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
-		await refreshLocalModels();
-		await Promise.all([
+		// Optional catalogs and integrations must not keep the app splash visible.
+		// Some providers can legitimately take several seconds or wait on a local service.
+		void Promise.all([
+			refreshLocalModels(),
 			refreshFrontierModels(),
 			refreshThinkingLevels(),
 			refreshMcpStatus(),
 			refreshDesktopSettings(),
 			refreshProviderStatus(),
 			refreshCodingHarnessSetup(),
-		]);
+		]).catch((error) => showError(toError(error).message));
 		const entries = await entriesPromise;
 		clearFeed();
 		renderSessionEntries(entries.entries ?? [], entries.leafId);
@@ -1810,11 +1902,12 @@
 		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, images: [...images], streaming: false });
 		try {
 			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
+			const rpcImages = rpcImageAttachments(images);
 			await bridge.send("prompt", {
 				message: preparedPrompt.message,
 				displayMessage: text,
 				mcpMentions: preparedPrompt.mentions,
-				images: images.map(({ data, mimeType }) => ({ type: "image", data, mimeType })),
+				...(rpcImages ? { images: rpcImages } : {}),
 			});
 			if (draft.trim() === text) draft = "";
 			attachments = [];
@@ -1985,6 +2078,7 @@
 				onappearance={setDesktopAppearance}
 				onmaxdelegationcycles={(value) => applyConfigUpdate({ maxDelegationCycles: value })}
 				onrefreshharnesses={() => void refreshCodingHarnessSetup()}
+				onrefreshharnessmodels={refreshCodingHarnessModels}
 				onsaveharnesses={saveCodingHarnessSlots}
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
@@ -2019,7 +2113,7 @@
 
 		<section class="relative min-h-0 overflow-y-auto">
 			<div
-				class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]"
+				class={`mx-auto flex min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)] ${externalHarnessesEnabled && visibleAgentIds.length > 0 ? "w-[min(1400px,calc(100%-48px))]" : "w-[min(820px,calc(100%-48px))]"}`}
 			>
 				{#if heroVisible}
 					<EmptyState
@@ -2029,6 +2123,20 @@
 							draft = prompt;
 							composerFocusRequest += 1;
 						}}
+					/>
+				{/if}
+				{#if externalHarnessesEnabled}
+					<AgentViews
+						agents={configuredHarnessAgents}
+						visibleIds={visibleAgentIds}
+						items={feed}
+						activeAgentId={activeHarnessAgentId}
+						{taskActive}
+						mcpServers={mcpServers}
+						onclose={(id) => (visibleAgentIds = visibleAgentIds.filter((candidate) => candidate !== id))}
+						oneffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
+						onrerun={rerunPrompt}
+						ontoggle={toggleTimeline}
 					/>
 				{/if}
 				<Feed items={feed} {taskActive} {mcpServers} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
@@ -2106,11 +2214,14 @@
 			onlocalprofilechange={(id) => void assignProfile("local", id)}
 			onfrontierprofilechange={(id) => void assignProfile("frontier", id)}
 			onexternalharnesschange={(id, enabled) => void updateCodingHarnessAgent(id, { enabled })}
-			onexternalharnesskindchange={(id, kind) => void updateCodingHarnessAgent(id, { kind, model: undefined })}
+			onexternalharnesskindchange={(id, kind) => void setCodingHarnessAgentKind(id, kind)}
 			onexternalmodelchange={(id, model) => void setCodingHarnessAgentModel(id, model)}
 			onexternalmemorychange={(id, profileId) => void setCodingHarnessAgentMemory(id, profileId)}
 			onaddexternalagent={() => void addCodingHarnessAgent()}
 			onremoveexternalagent={(id) => void removeCodingHarnessAgent(id)}
+			onviewexternalagent={(id) => {
+				if (!visibleAgentIds.includes(id)) visibleAgentIds = [...visibleAgentIds, id].slice(-4);
+			}}
 			onworktogetherchange={(enabled) => void setWorkTogetherMode(enabled)}
 		/>
 

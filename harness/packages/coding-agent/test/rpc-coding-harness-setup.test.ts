@@ -86,9 +86,12 @@ describe("coding harness setup RPC", () => {
 			{ kind: "claude-code" as const, available: true, builtin: false, models: [], version: "2.0" },
 			{ kind: "codex" as const, available: false, builtin: false, models: [] },
 		]);
+		const discoverCodingHarnessModels = vi.fn(async (kind: CodingHarnessKind) =>
+			kind === "claude-code" ? ["claude-sonnet"] : [],
+		);
 
 		try {
-			void runRpcMode(createRuntimeHost(harness), { discoverCodingHarnesses });
+			void runRpcMode(createRuntimeHost(harness), { discoverCodingHarnesses, discoverCodingHarnessModels });
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 
 			const handshake = await send({ id: "handshake", type: "desktop_handshake" });
@@ -96,7 +99,11 @@ describe("coding harness setup RPC", () => {
 				success: true,
 				data: {
 					capabilities: {
-						commands: expect.arrayContaining(["get_coding_harness_setup", "set_coding_harness_slots"]),
+						commands: expect.arrayContaining([
+							"get_coding_harness_setup",
+							"refresh_coding_harness_models",
+							"set_coding_harness_slots",
+						]),
 					},
 				},
 			});
@@ -113,6 +120,32 @@ describe("coding harness setup RPC", () => {
 					harnesses: expect.arrayContaining([
 						expect.objectContaining({ kind: "claude-code", available: true, version: "2.0" }),
 					]),
+				},
+			});
+
+			const models = await send({
+				id: "models",
+				type: "refresh_coding_harness_models",
+				kind: "claude-code",
+			});
+			expect(models).toMatchObject({
+				success: true,
+				data: { kind: "claude-code", models: ["claude-sonnet"] },
+			});
+			expect(discoverCodingHarnessModels).toHaveBeenCalledWith("claude-code");
+
+			discoverCodingHarnessModels.mockRejectedValueOnce(new Error("temporary discovery failure"));
+			const failedRefresh = await send({
+				id: "failed-models",
+				type: "refresh_coding_harness_models",
+				kind: "claude-code",
+			});
+			expect(failedRefresh).toMatchObject({
+				success: true,
+				data: {
+					kind: "claude-code",
+					models: ["claude-sonnet"],
+					error: "temporary discovery failure",
 				},
 			});
 

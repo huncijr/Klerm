@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
 	contentImages,
 	imageDataUrl,
+	rpcImageAttachments,
 	saveDesktopSettingsChanges,
 	shouldReplaceSettingsDrafts,
 	taskCompletionTitle,
@@ -17,6 +18,13 @@ describe("desktop image and task helpers", () => {
 		]);
 		expect(images).toEqual([{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
 		expect(imageDataUrl(images[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
+	});
+
+	test("omits the RPC images field for a text-only prompt", () => {
+		expect(rpcImageAttachments([])).toBeUndefined();
+		expect(rpcImageAttachments([{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }])).toEqual([
+			{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+		]);
 	});
 
 	test("manual stop always has the exact stopped title", () => {

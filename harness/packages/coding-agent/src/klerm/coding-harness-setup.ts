@@ -1,4 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 
 export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline"] as const;
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -42,7 +46,7 @@ export interface CodingHarnessSetup {
 }
 
 export interface CodingHarnessProbeOptions {
-	args: readonly ["--version"];
+	args: readonly string[];
 	timeoutMs: number;
 	maxOutputBytes: number;
 	shell: false;
@@ -56,6 +60,14 @@ export interface CodingHarnessProbeResult {
 export type CodingHarnessProbe = (
 	command: "pi" | "claude" | "codex" | "opencode" | "cline",
 	options: CodingHarnessProbeOptions,
+) => Promise<CodingHarnessProbeResult>;
+
+export type CodingHarnessModelDiscovery = (kind: CodingHarnessKind) => Promise<string[]>;
+export type CodingHarnessCommandRunner = (
+	command: string,
+	args: readonly string[],
+	timeoutMs: number,
+	maxOutputBytes: number,
 ) => Promise<CodingHarnessProbeResult>;
 
 const DEFAULT_AGENT: CodingHarnessAgentSettings = {
@@ -74,7 +86,8 @@ const VERSION_PROBE_OPTIONS: CodingHarnessProbeOptions = {
 };
 const MAX_VERSION_LENGTH = 256;
 const MAX_MODEL_LENGTH = 256;
-const MAX_AGENTS = 16;
+const MAX_MODEL_COUNT = 1000;
+const MAX_AGENTS = 4;
 const AGENT_ID_PATTERN = /^agent([1-9]\d*)$/;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 
@@ -147,8 +160,6 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 	const seen = new Set<string>();
 	agents = agents.filter((agent) => !seen.has(agent.id) && seen.add(agent.id));
 	if (agents.length === 0) agents = [structuredClone(DEFAULT_AGENT)];
-	if (!agents.some((agent) => agent.id === "agent1")) agents.push(structuredClone(DEFAULT_AGENT));
-	agents.sort((left, right) => Number(left.id.slice(5)) - Number(right.id.slice(5)));
 	return {
 		externalHarnessesEnabled: stored.externalHarnessesEnabled === true,
 		...(stored.externalHarnessesEnabled === true &&
@@ -223,7 +234,6 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 	if (agents.some((agent) => !agent)) return undefined;
 	const parsedAgents = agents as CodingHarnessAgentSettings[];
 	if (new Set(parsedAgents.map((agent) => agent.id)).size !== parsedAgents.length) return undefined;
-	if (!parsedAgents.some((agent) => agent.id === "agent1")) return undefined;
 	const workTogetherEnabled =
 		setup.externalHarnessesEnabled &&
 		setup.workTogetherEnabled === true &&
@@ -236,11 +246,10 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 }
 
 export function nextCodingHarnessAgentId(agents: readonly CodingHarnessAgentSettings[]): string {
-	const highest = agents.reduce((max, agent) => {
-		const match = AGENT_ID_PATTERN.exec(agent.id);
-		return Math.max(max, match ? Number(match[1]) : 0);
-	}, 0);
-	return `agent${highest + 1}`;
+	const used = new Set(agents.map((agent) => Number(AGENT_ID_PATTERN.exec(agent.id)?.[1] ?? 0)));
+	let number = 1;
+	while (used.has(number)) number += 1;
+	return `agent${number}`;
 }
 
 export function createCodingHarnessAgent(id: string, kind: CodingHarnessSlot = "klerm"): CodingHarnessAgentSettings {
@@ -273,16 +282,43 @@ export function createCodingHarnessSetup(
 	};
 }
 
-export const probeCodingHarnessVersion: CodingHarnessProbe = (command, options) =>
-	new Promise((resolve, reject) => {
+async function resolveCodingHarnessExecutable(command: string): Promise<string> {
+	const home = homedir();
+	const directories = [
+		...(process.env.PATH ?? "").split(delimiter),
+		join(home, ".npm-global", "bin"),
+		join(home, ".local", "bin"),
+		join(home, ".bun", "bin"),
+		join(home, ".cargo", "bin"),
+	].filter(Boolean);
+	for (const directory of new Set(directories)) {
+		const candidate = join(directory, process.platform === "win32" ? `${command}.cmd` : command);
+		try {
+			await access(candidate, constants.X_OK);
+			return candidate;
+		} catch {
+			// Continue through known user-level executable locations.
+		}
+	}
+	return command;
+}
+
+const runCodingHarnessCommand: CodingHarnessCommandRunner = async (
+	command: string,
+	args: readonly string[],
+	timeoutMs: number,
+	maxOutputBytes: number,
+): Promise<CodingHarnessProbeResult> => {
+	const executable = await resolveCodingHarnessExecutable(command);
+	return new Promise((resolve, reject) => {
 		execFile(
-			command,
-			[...options.args],
+			executable,
+			[...args],
 			{
 				encoding: "utf8",
-				maxBuffer: options.maxOutputBytes,
-				shell: options.shell,
-				timeout: options.timeoutMs,
+				maxBuffer: maxOutputBytes,
+				shell: false,
+				timeout: timeoutMs,
 				windowsHide: true,
 			},
 			(error, stdout, stderr) => {
@@ -291,6 +327,133 @@ export const probeCodingHarnessVersion: CodingHarnessProbe = (command, options) 
 			},
 		);
 	});
+};
+
+export const probeCodingHarnessVersion: CodingHarnessProbe = (command, options) =>
+	runCodingHarnessCommand(command, options.args, options.timeoutMs, options.maxOutputBytes);
+
+function parseModelLines(output: string): string[] {
+	return [
+		...new Set(
+			output
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0 && line.length <= MAX_MODEL_LENGTH && !/\s/.test(line)),
+		),
+	].slice(0, MAX_MODEL_COUNT);
+}
+
+function parsePiModels(output: string): string[] {
+	return [
+		...new Set(
+			output
+				.split(/\r?\n/)
+				.slice(1)
+				.map((line) => line.trim().split(/\s{2,}/))
+				.filter((columns) => columns.length >= 2)
+				.map(([provider, model]) => `${provider}/${model}`)
+				.filter((model) => model.length <= MAX_MODEL_LENGTH && !/\s/.test(model)),
+		),
+	].slice(0, MAX_MODEL_COUNT);
+}
+
+async function discoverCodexModels(): Promise<string[]> {
+	const executable = await resolveCodingHarnessExecutable("codex");
+	return new Promise((resolve, reject) => {
+		const child = spawn(executable, ["app-server", "--listen", "stdio://"], {
+			stdio: ["pipe", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout>;
+
+		const finish = (error?: Error, models?: string[]) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			if (!child.killed) child.kill();
+			if (error) reject(error);
+			else resolve(models ?? []);
+		};
+		const send = (message: Record<string, unknown>) => child.stdin.write(`${JSON.stringify(message)}\n`);
+		timer = setTimeout(() => finish(new Error("Codex model discovery timed out.")), 15_000);
+
+		child.on("error", (error) => finish(error));
+		child.stderr.on("data", (chunk: Buffer) => {
+			if (stderr.length < 8192) stderr += chunk.toString("utf8");
+		});
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf8");
+			if (stdout.length > 1_048_576) return finish(new Error("Codex model discovery returned too much data."));
+			let newline = stdout.indexOf("\n");
+			while (newline >= 0) {
+				const line = stdout.slice(0, newline).trim();
+				stdout = stdout.slice(newline + 1);
+				newline = stdout.indexOf("\n");
+				if (!line) continue;
+				let message: Record<string, unknown>;
+				try {
+					message = JSON.parse(line) as Record<string, unknown>;
+				} catch {
+					continue;
+				}
+				if (message.id === 1 && message.result) {
+					send({ method: "initialized", params: {} });
+					send({ method: "model/list", id: 2, params: { limit: 1000, includeHidden: false } });
+				}
+				if (message.id !== 2) continue;
+				if (message.error)
+					return finish(new Error(`Codex model discovery failed: ${JSON.stringify(message.error)}`));
+				const result = message.result;
+				if (!result || typeof result !== "object" || Array.isArray(result)) {
+					return finish(new Error("Codex returned an invalid model list."));
+				}
+				const data = (result as Record<string, unknown>).data;
+				if (!Array.isArray(data)) return finish(new Error("Codex returned an invalid model list."));
+				const models = data
+					.map((item) => {
+						if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+						const record = item as Record<string, unknown>;
+						return typeof record.model === "string"
+							? record.model
+							: typeof record.id === "string"
+								? record.id
+								: "";
+					})
+					.filter((model) => model.length > 0 && model.length <= MAX_MODEL_LENGTH);
+				return finish(undefined, [...new Set(models)].slice(0, MAX_MODEL_COUNT));
+			}
+		});
+		child.on("exit", (code) => {
+			if (!settled)
+				finish(new Error(stderr.trim() || `Codex model discovery exited with code ${code ?? "unknown"}.`));
+		});
+		send({
+			method: "initialize",
+			id: 1,
+			params: { clientInfo: { name: "klerm", title: "Klerm", version: "0.0.3" } },
+		});
+	});
+}
+
+export async function discoverCodingHarnessModels(
+	kind: CodingHarnessKind,
+	run: CodingHarnessCommandRunner = runCodingHarnessCommand,
+	codexModels: () => Promise<string[]> = discoverCodexModels,
+): Promise<string[]> {
+	if (kind === "opencode") {
+		const result = await run("opencode", ["models"], 15_000, 1_048_576);
+		return parseModelLines(result.stdout ?? "");
+	}
+	if (kind === "codex") return codexModels();
+	if (kind === "pi") {
+		const result = await run("pi", ["--list-models"], 15_000, 1_048_576);
+		return parsePiModels(result.stdout ?? "");
+	}
+	return [];
+}
 
 function firstOutputLine(result: CodingHarnessProbeResult): string | undefined {
 	const line = `${result.stdout ?? ""}\n${result.stderr ?? ""}`

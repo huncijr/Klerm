@@ -5363,6 +5363,10 @@ export class InteractiveMode {
 
 	private async addCodingAgent(): Promise<void> {
 		const slots = this.settingsManager.getCodingHarnessSlots();
+		if (slots.agents.length >= 4) {
+			this.showError("Klerm supports at most four configured agents.");
+			return;
+		}
 		const id = nextCodingHarnessAgentId(slots.agents);
 		slots.agents.push(createCodingHarnessAgent(id));
 		slots.externalHarnessesEnabled = true;
@@ -5581,11 +5585,11 @@ export class InteractiveMode {
 	}
 
 	private async removeCodingAgent(agentNumber: number): Promise<void> {
-		if (agentNumber === 1) {
-			this.showError("Agent 1 cannot be removed; turn it off or change its harness instead.");
+		const slots = this.settingsManager.getCodingHarnessSlots();
+		if (slots.agents.length <= 1 || (agentNumber === 1 && slots.agents.length < 3)) {
+			this.showError("Agent 1 can be removed only when at least three agents are configured.");
 			return;
 		}
-		const slots = this.settingsManager.getCodingHarnessSlots();
 		const remaining = slots.agents.filter((agent) => agent.id !== `agent${agentNumber}`);
 		if (remaining.length === slots.agents.length) {
 			this.showError(`Agent ${agentNumber} does not exist.`);

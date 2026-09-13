@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
+	import { ChevronDown, Eye, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -91,6 +91,7 @@
 		onexternalmemorychange,
 		onaddexternalagent,
 		onremoveexternalagent,
+		onviewexternalagent,
 		onworktogetherchange,
 	}: {
 		draft: string;
@@ -156,6 +157,7 @@
 		onexternalmemorychange: (id: string, profileId: string) => void;
 		onaddexternalagent: () => void;
 		onremoveexternalagent: (id: string) => void;
+		onviewexternalagent: (id: string) => void;
 		onworktogetherchange: (enabled: boolean) => void;
 	} = $props();
 
@@ -553,6 +555,14 @@
 						<div class={`flex h-7 items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
 							<button
 								type="button"
+								aria-label={`View ${label}`}
+								class="grid h-5 w-5 place-items-center rounded text-[#78858d] hover:bg-[#222d1a] hover:text-[#d5dfbe]"
+								onclick={() => onviewexternalagent(slot.id)}
+							>
+								<Eye size={10} />
+							</button>
+							<button
+								type="button"
 								aria-expanded={pinnedAgentId === slot.id}
 								aria-label={`Configure ${label} ${harnessDisplayName(slot.kind)}`}
 								class="flex h-full items-center gap-1.5 px-1.5 font-mono text-[8px]"
@@ -575,7 +585,7 @@
 							>
 								<span class={`relative h-3.5 w-6 rounded-full transition-colors ${slot.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${slot.enabled ? "translate-x-2.5" : "translate-x-0"}`}></span></span>
 							</button>
-							{#if slot.id !== "agent1"}
+							{#if slot.id !== "agent1" || externalAgentSlots.length >= 3}
 								<button
 									type="button"
 									aria-label={`Remove ${label}`}
@@ -599,7 +609,7 @@
 								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
 								onchange={(event) => onexternalmodelchange(slot.id, event.currentTarget.value)}
 							>
-								<option value="">{slot.kind === "klerm" ? "Choose a model" : "Models available after adapter connection"}</option>
+								<option value="">{slot.kind === "klerm" ? "Choose a model" : models.length > 0 ? "Choose a harness model" : "No models reported by this harness"}</option>
 								{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}
 							</select>
 							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-harness-${slot.id}`}>Harness</label>
@@ -629,7 +639,7 @@
 						</div>
 					</div>
 				{/each}
-				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 16} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[#3d4a54] bg-[#0a0f13] font-mono text-[13px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
+				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 4} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[#3d4a54] bg-[#0a0f13] font-mono text-[13px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
 			</div>
 		{/if}
 		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-[55px] narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[49px]">
