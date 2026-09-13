@@ -29,12 +29,28 @@ export interface CodingHarnessSetup {
 		kind: CodingHarnessKind;
 		available: boolean;
 		builtin: boolean;
+		adapterConnected?: boolean;
 		version?: string;
 		error?: string;
 		models: string[];
+		acp?: {
+			command: string;
+			protocolVersion: number;
+			agentName?: string;
+			agentTitle?: string;
+			agentVersion?: string;
+			loadSession?: boolean;
+		};
 	}>;
 	effectiveRouting: CodingHarnessEffectiveRouting;
 	externalPromptingAvailable: boolean;
+	workTogetherAvailable: boolean;
+	runnableAgents: Array<{
+		order: number;
+		agentId: string;
+		harness: CodingHarnessKind;
+		model: string;
+	}>;
 	blockingReason?: string;
 }
 
@@ -148,6 +164,10 @@ export interface RoutingState {
 	localModel?: string;
 	frontierModel?: string;
 	selectedTarget?: string;
+	selectedAgentId?: string;
+	selectedHarness?: CodingHarnessKind;
+	routingSequence?: number;
+	reason?: string;
 	handoffReason?: string;
 	fallbackReason?: string;
 	lastTransition?: RoutingTransition;

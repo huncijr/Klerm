@@ -1,3 +1,4 @@
+import type { CodingHarnessKind, RunnableCodingHarnessAgent } from "../coding-harness-setup.ts";
 import type { KlermActiveStartLane } from "../config.ts";
 
 export type KlermRouteMode = "mock";
@@ -152,6 +153,9 @@ export interface KlermRoutingState {
 	localModel?: string;
 	frontierModel?: string;
 	selectedTarget?: string;
+	selectedAgentId?: string;
+	selectedHarness?: CodingHarnessKind;
+	routingSequence?: number;
 	otherModelCalled?: string;
 	handoffReason?: string;
 	reason?: string;
@@ -172,4 +176,20 @@ export interface KlermRoutingState {
 	lastTransition?: KlermTransitionState;
 	explicitFrontierRequestSatisfied?: boolean;
 	taskIntent?: KlermTaskIntent;
+}
+
+export interface CodingHarnessRouteDecision {
+	timestamp: string;
+	taskId: string;
+	sessionId: string;
+	event: "CODING_HARNESS_ROUTE";
+	sender: "user";
+	recipient: string;
+	sequence: number;
+	selectedAgentId: string;
+	selectedHarness: CodingHarnessKind;
+	selectedTarget: string;
+	reason: string;
+	roster: RunnableCodingHarnessAgent[];
+	cwd: string;
 }

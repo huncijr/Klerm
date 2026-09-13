@@ -2,7 +2,7 @@
 	import { Maximize2, Shrink } from "@lucide/svelte";
 	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
-	import { addCodingHarnessSlot, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
+	import { addCodingHarnessSlot, codingHarnessSlotsEqual, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
 	import type {
 		CodingHarnessKind,
 		CodingHarnessSetup,
@@ -22,6 +22,7 @@
 		ThinkingLevel,
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
+	import ModelSelect from "./ModelSelect.svelte";
 	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
 	import ProviderLogo from "./ProviderLogo.svelte";
 	import { profileIcon } from "../lib/profiles.ts";
@@ -232,7 +233,10 @@
 		const harness = codingHarnessSetup?.harnesses.find((item) => item.kind === kind);
 		if (!harness) return "Discovery state unavailable";
 		const state = harness.available ? (harness.builtin ? "Built-in · Available" : "Available") : "Not installed";
-		return harness.version ? `${state} · ${harness.version}` : state;
+		const detail = harness.acp
+			? `ACP${harness.acp.agentName ? ` · ${harness.acp.agentName}` : ""}`
+			: harness.version;
+		return detail ? `${state} · ${detail}` : state;
 	}
 
 	function codingHarnessLabel(kind: CodingHarnessKind): string {
@@ -252,7 +256,10 @@
 		const harness = codingHarnessSetup?.harnesses.find((item) => item.kind === option.kind);
 		if (!harness) return option.label;
 		const state = harness.available ? (harness.builtin ? "Built-in · Available" : "Available") : "Not installed";
-		return `${option.label} · ${state}${harness.version ? ` · ${harness.version}` : ""}`;
+		const detail = harness.acp
+			? `ACP${harness.acp.agentName ? ` · ${harness.acp.agentName}` : ""}`
+			: harness.version;
+		return `${option.label} · ${state}${detail ? ` · ${detail}` : ""}`;
 	}
 
 	function harnessModels(kind: CodingHarnessKind | null): string[] {
@@ -403,6 +410,18 @@
 		}
 	}
 
+	function discardMcp(): void {
+		addingMcp = false;
+		mcpName = "";
+		mcpColor = "base";
+		mcpTransport = "stdio";
+		mcpCommand = "";
+		mcpArgs = "";
+		mcpUrl = "";
+		mcpHeaders = "";
+		mcpFormError = "";
+	}
+
 	function mcpDot(server: McpServerStatus): string {
 		if (server.state === "failed") return "#f09b93";
 		if (server.color) return MCP_COLOR_CSS[server.color];
@@ -426,13 +445,15 @@
 		return () => window.removeEventListener("keydown", onKey);
 	});
 
+	const harnessDirty = $derived(
+		codingHarnessSetup !== undefined && !codingHarnessSlotsEqual(draftHarnessSlots, codingHarnessSetup.slots),
+	);
 	const dirty = $derived(
 		draftAppearance !== settings.appearance ||
 			draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0) ||
-			(codingHarnessSetup !== undefined && draftHarnessSlots !== codingHarnessSetup.slots) ||
+			harnessDirty ||
 			draftShortcuts !== settings.shortcuts,
 	);
-	const harnessDirty = $derived(codingHarnessSetup !== undefined && draftHarnessSlots !== codingHarnessSetup.slots);
 
 	$effect(() => {
 		const nextAppearance = settings.appearance;
@@ -521,8 +542,33 @@
 				saveError = "Could not save external harness settings.";
 				return;
 			}
-			const saved = codingHarnessSetup?.slots ?? next;
-			draftHarnessSlots = structuredClone(saved);
+			draftHarnessSlots = structuredClone(next);
+			saveNotice = "Changes saved";
+		} finally {
+			savingChanges = false;
+		}
+	}
+
+	async function toggleAgentEnabled(
+		agent: CodingHarnessSetup["slots"]["agents"][number],
+	): Promise<void> {
+		if (!codingHarnessSetup || savingChanges) return;
+		const previous = structuredClone(draftHarnessSlots);
+		const next = updateCodingHarnessSlot(draftHarnessSlots, agent.id, {
+			kind: agent.kind ?? "klerm",
+			enabled: !agent.enabled,
+		});
+		draftHarnessSlots = next;
+		savingChanges = true;
+		saveNotice = "";
+		saveError = "";
+		try {
+			if (!(await onsaveharnesses(structuredClone(next)))) {
+				draftHarnessSlots = previous;
+				saveError = "Could not save external agent settings.";
+				return;
+			}
+			draftHarnessSlots = structuredClone(next);
 			saveNotice = "Changes saved";
 		} finally {
 			savingChanges = false;
@@ -683,7 +729,7 @@
 								{#if value.id !== "agent1" || draftHarnessSlots.agents.length >= 3}
 										<button type="button" class="font-mono text-[8px] text-[#8b969e] hover:text-[#f3a49c]" onclick={() => (draftHarnessSlots = removeCodingHarnessSlot(draftHarnessSlots, value.id))}>Remove</button>
 									{/if}
-									<button type="button" role="switch" aria-label={`Toggle Agent ${agentNumber(value.id)}`} aria-checked={value.enabled} disabled={value.kind !== null && !harnessAvailable(value.kind)} class="flex items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-not-allowed disabled:opacity-35" onclick={() => updateAgent(value.id, { kind: value.kind ?? "klerm", enabled: !value.enabled })}>
+									<button type="button" role="switch" aria-label={`Toggle Agent ${agentNumber(value.id)}`} aria-checked={value.enabled} disabled={savingChanges || (value.kind !== null && !harnessAvailable(value.kind))} class={`flex items-center gap-1.5 font-mono text-[8px] text-[#8b969e] disabled:cursor-not-allowed disabled:opacity-35 ${savingChanges ? "cursor-wait" : "cursor-pointer"}`} onclick={() => void toggleAgentEnabled(value)}>
 										<span>{value.enabled ? "On" : "Off"}</span>
 										<span class={`relative h-4 w-7 rounded-full transition-colors ${value.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${value.enabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
 									</button>
@@ -709,16 +755,27 @@
 								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
 							{/if}
 							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
-							<select
-								id={`harness-model-${value.id}`}
-								value={value.model ?? ""}
-								disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
-								class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white outline-0 [color-scheme:dark] disabled:opacity-50"
-								onchange={(event) => updateAgent(value.id, { model: event.currentTarget.value || undefined })}
-							>
-								<option value="">{value.kind === "klerm" ? "Use current Klerm model" : value.kind && loadingHarnessModels.includes(value.kind) ? "Loading models..." : models.length > 0 ? "Select harness model" : "No models reported by this harness"}</option>
-								{#each models as model}<option value={model}>{model}</option>{/each}
-							</select>
+							<div class="mt-2" id={`harness-model-${value.id}`}>
+								<ModelSelect
+									label={`Agent ${agentNumber(value.id)} model`}
+									options={models.map((model) => ({ value: model, label: model }))}
+									value={value.model ?? ""}
+									disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
+									placeholder={
+										value.kind === "klerm"
+											? "Use current Klerm model"
+											: value.kind && loadingHarnessModels.includes(value.kind)
+												? "Loading models..."
+												: models.length > 0
+													? "Select harness model"
+													: "No models reported by this harness"
+									}
+									direction="down"
+									allowEmpty
+									emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
+									onchange={(next) => updateAgent(value.id, { model: next || undefined })}
+								/>
+							</div>
 							<div class="mt-4 grid grid-cols-2 gap-2">
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`role-${value.id}`}>Role</label>
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`effort-${value.id}`}>Effort</label>
@@ -812,7 +869,18 @@
 					</section>
 				{/each}
 				{#if addingMcp}
-					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveMcp(); }}>
+					<form
+						class="space-y-2 rounded-xl border border-[rgba(143,196,237,.4)] bg-[linear-gradient(160deg,rgba(38,70,96,.35),rgba(10,15,19,.96))] p-4 shadow-[0_14px_40px_rgba(0,0,0,.35)]"
+						onsubmit={(event) => { event.preventDefault(); void saveMcp(); }}
+					>
+						<div class="flex items-center gap-2">
+							<span class="h-2 w-2 shrink-0 rounded-full" style={`background:${MCP_COLOR_CSS[mcpColor]}`}></span>
+							<strong class="min-w-0 truncate font-mono text-[11px] text-white">{mcpName.trim() || "New MCP server"}</strong>
+							<span class="ml-auto shrink-0 rounded border border-[rgba(214,166,63,.4)] bg-[rgba(76,58,24,.3)] px-1.5 py-0.5 font-mono text-[7px] tracking-[.08em] text-[#d6b16e] uppercase">Pending · not saved</span>
+						</div>
+						<p class="m-0 font-mono text-[8px] text-[#7b868e]">
+							{mcpTransport === "stdio" ? `${mcpCommand.trim() || "command"} ${mcpArgs.trim()}`.trim() || "stdio transport" : `${mcpTransport} · ${mcpUrl.trim() || "url"}`}
+						</p>
 						<input bind:value={mcpName} placeholder="name, e.g. Google Maps" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
 						<div class="flex gap-1.5">
 							{#each MCP_COLORS as color}
@@ -832,7 +900,10 @@
 							<textarea bind:value={mcpHeaders} placeholder="non-secret headers, one Header-Name=value per line" class="min-h-16 w-full rounded-md border border-[#2d3740] bg-[#05080b] p-2 font-mono text-[10px] text-white outline-0"></textarea>
 						{/if}
 						{#if mcpFormError}<p class="m-0 text-[9px] text-[#f3a49c]">{mcpFormError}</p>{/if}
-						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>Save</button>
+						<div class="flex items-center gap-2 pt-1">
+							<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]" disabled={mcpBusy}>Save</button>
+							<button type="button" class="h-8 rounded-md border border-[#4a3a3a] bg-transparent px-3 font-mono text-[9px] text-[#f3a49c] hover:bg-[#1c1214]" onclick={discardMcp}>Discard changes</button>
+						</div>
 					</form>
 				{:else}
 					<button type="button" class="h-9 w-full rounded-lg border border-[#34414a] bg-[#05080b] font-mono text-[10px] text-[#d6dde1]" onclick={() => (addingMcp = true)}>Add more</button>

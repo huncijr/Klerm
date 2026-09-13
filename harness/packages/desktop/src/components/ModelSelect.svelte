@@ -14,6 +14,9 @@
 		selectedProfile,
 		onprofile,
 		flyout = "right",
+		direction = "up",
+		allowEmpty = false,
+		emptyLabel = "None",
 	}: {
 		label: string;
 		options: SelectOption[];
@@ -25,15 +28,27 @@
 		selectedProfile?: KlermProfile;
 		onprofile?: (model: string, profileId: string) => void;
 		flyout?: "left" | "right";
+		direction?: "up" | "down";
+		allowEmpty?: boolean;
+		emptyLabel?: string;
 	} = $props();
 
 	let open = $state(false);
 	let hovered = $state("");
+	let query = $state("");
+	let queryInput: HTMLInputElement | undefined = $state();
 	let rootEl: HTMLElement | undefined = $state();
 	let buttonEl: HTMLButtonElement | undefined = $state();
 
 	const selected = $derived(options.find((option) => option.value === value));
 	const displayLabel = $derived(selected?.label ?? placeholder);
+	const filteredOptions = $derived.by(() => {
+		const needle = query.trim().toLowerCase();
+		if (!needle) return options;
+		return options.filter(
+			(option) => option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle),
+		);
+	});
 
 	$effect(() => {
 		if (disabled) open = false;
@@ -50,10 +65,15 @@
 	function toggle(): void {
 		if (disabled) return;
 		open = !open;
+		if (open) {
+			query = "";
+			void tick().then(() => queryInput?.focus());
+		}
 	}
 
 	function select(option: SelectOption): void {
-		if (disabled || !option.value) return;
+		if (disabled) return;
+		if (!option.value && !allowEmpty) return;
 		open = false;
 		hovered = "";
 		onchange(option.value);
@@ -141,7 +161,7 @@
 			></i>
 		</button>
 		{#if open}
-			<div class="absolute right-0 bottom-[calc(100%+12px)] left-0 z-30">
+			<div class="absolute right-0 left-0 z-30" class:top-[calc(100%+8px)]={direction === "down"} class:bottom-[calc(100%+12px)]={direction === "up"}>
 				<div
 					role="listbox"
 					aria-label={`${label} options`}
@@ -149,7 +169,43 @@
 					class="max-h-[min(280px,45vh)] overflow-y-auto rounded-lg border border-[#1b2228] bg-[#05080b] p-[5px] shadow-[0_18px_55px_rgba(0,0,0,.62)]"
 					onkeydown={handleMenuKeydown}
 				>
-					{#each options as option (option.value || option.label)}
+					<input
+						bind:this={queryInput}
+						bind:value={query}
+						type="text"
+						placeholder="Search models..."
+						aria-label={`Search ${label} options`}
+						class="mb-1 h-7 w-full rounded-md border border-[#2d3740] bg-[#0b1014] px-2 font-mono text-[9px] text-[#e5eaed] outline-0 placeholder:text-[#59636b] focus:border-[#4a5861]"
+						onkeydown={(event) => {
+							if (event.key === "Escape") {
+								event.preventDefault();
+								open = false;
+								buttonEl?.focus();
+							} else if (event.key === "Enter") {
+								event.preventDefault();
+								const first = filteredOptions.find((option) => option.value);
+								if (first) select(first);
+							} else if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+								event.stopPropagation();
+							}
+						}}
+					/>
+					{#if allowEmpty}
+						<button
+							type="button"
+							role="option"
+							aria-selected={value === ""}
+							disabled={disabled}
+							class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#141a1f] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#141a1f] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
+								value === "" ? "bg-[#141a1f] text-[#f1f4f5]" : "bg-transparent text-[#77828a]"
+							}`}
+							onmouseenter={() => hovered = ""}
+							onclick={() => select({ value: "", label: emptyLabel })}
+						>
+							{emptyLabel}
+						</button>
+					{/if}
+					{#each filteredOptions as option (option.value || option.label)}
 						<button
 							type="button"
 							role="option"
@@ -162,10 +218,13 @@
 								if (option.value) hovered = option.value;
 							}}
 							onclick={() => select(option)}
-						>
+							>
 							{option.label}
-						</button>
-					{/each}
+							</button>
+							{/each}
+							{#if filteredOptions.length === 0}
+							<p class="m-0 px-2.5 py-2 font-mono text-[9px] text-[#59636b]">No models match "{query.trim()}".</p>
+							{/if}
 				</div>
 				{#if profiles.length > 0 && hovered}
 					<div class={`absolute top-0 w-[158px] rounded-lg border border-[#1b2228] bg-[#05080b] p-1 shadow-[0_18px_55px_rgba(0,0,0,.62)] ${flyout === "left" ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"}`}>

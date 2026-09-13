@@ -2,15 +2,15 @@ export const EMPTY_HEADLINES: readonly string[] = [
 	"What should we build?",
 	"What are we shipping today?",
 	"Point the swarm at something hard.",
-	"What deserves two brains?",
 	"Give them something worth delegating.",
-	"Local hands, frontier mind — what's first?",
+	"Your orchestrator is standing by.",
+	"Multiple agents, one mission — what's first?",
 	"What's the mission?",
-	"Two agents are waiting. What's the job?",
+	"The roster is ready. What's the job?",
 ];
 
 export const EMPTY_SUBTITLE =
-	"More agents, one mission. Mix speed with intelligence, local privacy with frontier depth.";
+	"Klerm orchestrates multiple coding agents on one mission: routing prompts, sharing progress, and coordinating work across harnesses.";
 
 /** Pick a headline index different from the previous one. */
 export function pickHeadline(previous: number | undefined): number {

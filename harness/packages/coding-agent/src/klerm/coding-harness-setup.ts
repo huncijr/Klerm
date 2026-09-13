@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
 
 export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline"] as const;
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -32,9 +33,19 @@ export interface CodingHarnessDiscoveryResult {
 	kind: CodingHarnessKind;
 	available: boolean;
 	builtin: boolean;
+	adapterConnected?: boolean;
 	version?: string;
 	error?: string;
 	models: string[];
+	/** Present when the harness was identified through an ACP `initialize` handshake. */
+	acp?: AcpAgentScan;
+}
+
+export interface RunnableCodingHarnessAgent {
+	order: number;
+	agentId: string;
+	harness: CodingHarnessKind;
+	model: string;
 }
 
 export interface CodingHarnessSetup {
@@ -42,6 +53,8 @@ export interface CodingHarnessSetup {
 	harnesses: CodingHarnessDiscoveryResult[];
 	effectiveRouting: "auto" | "none" | "disabled";
 	externalPromptingAvailable: boolean;
+	workTogetherAvailable: boolean;
+	runnableAgents: RunnableCodingHarnessAgent[];
 	blockingReason?: string;
 }
 
@@ -259,25 +272,70 @@ export function createCodingHarnessAgent(id: string, kind: CodingHarnessSlot = "
 export function createCodingHarnessSetup(
 	slots: CodingHarnessSlots,
 	harnesses: CodingHarnessDiscoveryResult[],
-	externalPromptingAvailable = false,
+	connectedAdapters: ReadonlySet<CodingHarnessKind> = new Set(),
 ): CodingHarnessSetup {
-	const available = new Set(harnesses.filter((harness) => harness.available).map((harness) => harness.kind));
-	const activeCount = slots.agents.filter(
-		(agent) => agent.enabled && agent.kind !== null && available.has(agent.kind),
-	).length;
+	const discovery = new Map(harnesses.map((harness) => [harness.kind, harness]));
+	const byAgentId = (left: CodingHarnessAgentSettings, right: CodingHarnessAgentSettings) =>
+		left.id.localeCompare(right.id, undefined, { numeric: true });
+	const runnable = (
+		agent: CodingHarnessAgentSettings,
+	): agent is CodingHarnessAgentSettings & { kind: CodingHarnessKind; model: string } => {
+		if (!agent.enabled || !agent.kind || !agent.model || !discovery.get(agent.kind)?.available) return false;
+		if (agent.kind === "klerm") return discovery.get("klerm")?.models.includes(agent.model) === true;
+		return connectedAdapters.has(agent.kind);
+	};
+	const runnableExternal = (
+		agent: CodingHarnessAgentSettings,
+	): agent is CodingHarnessAgentSettings & { kind: Exclude<CodingHarnessKind, "klerm">; model: string } =>
+		agent.kind !== "klerm" && runnable(agent);
+	const runnableKlerm = (
+		agent: CodingHarnessAgentSettings,
+	): agent is CodingHarnessAgentSettings & { kind: "klerm"; model: string } =>
+		agent.kind === "klerm" && runnable(agent);
+	const external = slots.agents.filter(runnableExternal).sort(byAgentId);
+	const klerm = slots.agents.filter(runnableKlerm).sort(byAgentId);
+	const ordered = external.length > 0 ? [external[0]!, ...klerm, ...external.slice(1)] : klerm;
+	const runnableAgents = ordered.map((agent, index) => ({
+		order: index + 1,
+		agentId: agent.id,
+		harness: agent.kind,
+		model: agent.model,
+	}));
+	const activeCount = runnableAgents.length;
 	const effectiveRouting =
 		!slots.externalHarnessesEnabled || activeCount === 0 ? "disabled" : activeCount === 1 ? "none" : "auto";
-	const blockingReason =
-		slots.externalHarnessesEnabled && activeCount === 0
-			? "Enable at least one available coding harness before sending a prompt."
-			: slots.externalHarnessesEnabled && !externalPromptingAvailable
-				? "External agent prompting is not available until a native harness adapter is connected."
-				: undefined;
+	const unavailableExternal = slots.agents
+		.filter((agent) => agent.enabled && agent.kind && agent.kind !== "klerm")
+		.sort(byAgentId)
+		.find((agent) => !discovery.get(agent.kind!)?.available || !agent.model || !connectedAdapters.has(agent.kind!));
+	const harnessLabel = (kind: CodingHarnessKind) =>
+		kind === "opencode"
+			? "OpenCode"
+			: kind === "claude-code"
+				? "Claude Code"
+				: kind.charAt(0).toUpperCase() + kind.slice(1);
+	let blockingReason: string | undefined;
+	if (slots.externalHarnessesEnabled && unavailableExternal?.kind) {
+		const label = `Agent ${unavailableExternal.id.slice(5)} (${harnessLabel(unavailableExternal.kind)})`;
+		if (!discovery.get(unavailableExternal.kind)?.available) blockingReason = `${label} is not available.`;
+		else if (!unavailableExternal.model) blockingReason = `${label} has no configured model.`;
+		else if (!connectedAdapters.has(unavailableExternal.kind)) {
+			blockingReason = `${label} has no connected prompt adapter.`;
+		}
+	} else if (slots.externalHarnessesEnabled && activeCount === 0) {
+		blockingReason = "Enable at least one runnable coding agent before sending a prompt.";
+	}
+	const externalPromptingAvailable = runnableAgents.some((agent) => agent.harness !== "klerm") && !blockingReason;
 	return {
 		slots,
-		harnesses,
+		harnesses: harnesses.map((harness) => ({
+			...harness,
+			adapterConnected: harness.kind === "klerm" || connectedAdapters.has(harness.kind),
+		})),
 		effectiveRouting,
 		externalPromptingAvailable,
+		workTogetherAvailable: activeCount >= 3,
+		runnableAgents,
 		...(blockingReason ? { blockingReason } : {}),
 	};
 }
@@ -465,6 +523,7 @@ function firstOutputLine(result: CodingHarnessProbeResult): string | undefined {
 
 export async function discoverCodingHarnesses(
 	probe: CodingHarnessProbe = probeCodingHarnessVersion,
+	acpScan: (kind: CodingHarnessScanKind) => Promise<AcpAgentScan | undefined> = scanAcpHarness,
 ): Promise<CodingHarnessDiscoveryResult[]> {
 	const external = await Promise.all(
 		(
@@ -476,6 +535,19 @@ export async function discoverCodingHarnesses(
 				["cline", "cline"],
 			] as const
 		).map(async ([kind, command]) => {
+			// ACP-first discovery (Zed style): a completed `initialize` handshake
+			// identifies the agent, its version, and its capabilities.
+			const acp = await acpScan(kind);
+			if (acp) {
+				return {
+					kind,
+					available: true,
+					builtin: false,
+					models: [],
+					...(acp.agentVersion ? { version: acp.agentVersion.slice(0, MAX_VERSION_LENGTH) } : {}),
+					acp,
+				};
+			}
 			try {
 				const version = firstOutputLine(await probe(command, VERSION_PROBE_OPTIONS));
 				return { kind, available: true, builtin: false, models: [], ...(version ? { version } : {}) };

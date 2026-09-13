@@ -85,6 +85,35 @@ fn default_working_directory() -> Result<PathBuf, String> {
     env::current_dir().map_err(|error| format!("Could not resolve the working directory: {error}"))
 }
 
+fn workspace_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("Could not resolve the Klerm config directory: {error}"))?;
+    Ok(config_dir.join("workspace.txt"))
+}
+
+fn read_stored_workspace(app: &AppHandle) -> Option<PathBuf> {
+    let path = workspace_store_path(app).ok()?;
+    let stored = std::fs::read_to_string(path).ok()?;
+    let trimmed = stored.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+fn store_workspace(app: &AppHandle, working_directory: &Path) {
+    let Ok(path) = workspace_store_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, working_directory.display().to_string());
+}
+
 #[tauri::command]
 fn start_backend(
     app: AppHandle,
@@ -121,7 +150,10 @@ fn start_backend(
 
     let working_directory = match cwd {
         Some(path) => PathBuf::from(path),
-        None => default_working_directory()?,
+        None => match read_stored_workspace(&app) {
+            Some(directory) if directory.is_dir() => directory,
+            _ => default_working_directory()?,
+        },
     };
     if !working_directory.is_dir() {
         return Err(format!(
@@ -129,6 +161,7 @@ fn start_backend(
             working_directory.display()
         ));
     }
+    store_workspace(&app, &working_directory);
 
     let node = env::var_os("KLERM_DESKTOP_NODE").unwrap_or_else(|| "node".into());
     let mut command = Command::new(node);

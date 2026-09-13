@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFile, readlink, stat, writeFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readdir, readFile, readlink, stat, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnProcess } from "../../utils/child-process.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
@@ -13,6 +13,24 @@ import type {
 } from "./rpc-types.ts";
 
 const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_LISTED_FILES = 5000;
+const SKIPPED_DIRECTORY_NAMES = new Set([
+	".git",
+	".klerm",
+	"node_modules",
+	"target",
+	"dist",
+	"build",
+	"out",
+	".next",
+	".cache",
+	".venv",
+	"venv",
+	"__pycache__",
+	".idea",
+	".vscode",
+	"coverage",
+]);
 
 interface CommandResult {
 	stdout: string;
@@ -100,6 +118,36 @@ export async function getWorkspaceStatus(
 		isGit: true,
 		files: parseStatus(status.stdout, attributions),
 	};
+}
+
+export async function listWorkspaceFiles(
+	cwd: string,
+): Promise<{ projectRoot: string; files: string[]; truncated: boolean }> {
+	const status = await getWorkspaceStatus(cwd);
+	const projectRoot = status.projectRoot;
+	const files: string[] = [];
+	let truncated = false;
+	const walk = async (directory: string): Promise<void> => {
+		if (truncated) return;
+		const entries = await readdir(directory, { withFileTypes: true });
+		entries.sort((left, right) => left.name.localeCompare(right.name));
+		for (const entry of entries) {
+			if (files.length >= MAX_LISTED_FILES) {
+				truncated = true;
+				return;
+			}
+			if (SKIPPED_DIRECTORY_NAMES.has(entry.name)) continue;
+			const absolute = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				await walk(absolute);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			files.push(relative(projectRoot, absolute).split(sep).join("/"));
+		}
+	};
+	await walk(projectRoot);
+	return { projectRoot, files, truncated };
 }
 
 function resolveWorkspaceFile(root: string, filePath: string): string {

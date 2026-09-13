@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { KlermRouteDecision } from "./types.ts";
+import type { CodingHarnessRouteDecision, KlermRouteDecision } from "./types.ts";
 
 export const KLERM_DECISION_LOG_DIRECTORY = ".klerm";
 export const KLERM_DECISION_LOG_FILE = "router-decisions.jsonl";
@@ -10,6 +10,15 @@ export function getKlermDecisionLogPath(cwd: string): string {
 }
 
 export async function appendKlermRouteDecision(cwd: string, decision: KlermRouteDecision): Promise<void> {
+	const directory = join(cwd, KLERM_DECISION_LOG_DIRECTORY);
+	await mkdir(directory, { recursive: true });
+	await appendFile(getKlermDecisionLogPath(cwd), `${JSON.stringify(decision)}\n`, "utf8");
+}
+
+export async function appendCodingHarnessRouteDecision(
+	cwd: string,
+	decision: CodingHarnessRouteDecision,
+): Promise<void> {
 	const directory = join(cwd, KLERM_DECISION_LOG_DIRECTORY);
 	await mkdir(directory, { recursive: true });
 	await appendFile(getKlermDecisionLogPath(cwd), `${JSON.stringify(decision)}\n`, "utf8");

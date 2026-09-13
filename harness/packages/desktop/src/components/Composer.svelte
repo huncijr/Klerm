@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, Eye, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
+	import { ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -46,6 +46,7 @@
 		taskStateText,
 		errorBanner,
 		externalHarnessSetup,
+		visibleAgentIds,
 		externalHarnessBusy,
 		workTogetherEnabled,
 		workTogetherAvailable,
@@ -91,6 +92,9 @@
 		onexternalmemorychange,
 		onaddexternalagent,
 		onremoveexternalagent,
+		ondisableallexternalagents,
+		onenableallexternalagents,
+		onturnoffexternalagents,
 		onviewexternalagent,
 		onworktogetherchange,
 	}: {
@@ -112,6 +116,7 @@
 		taskStateText: string;
 		errorBanner: string;
 		externalHarnessSetup: CodingHarnessSetup | undefined;
+		visibleAgentIds: string[];
 		externalHarnessBusy: boolean;
 		workTogetherEnabled: boolean;
 		workTogetherAvailable: boolean;
@@ -157,6 +162,9 @@
 		onexternalmemorychange: (id: string, profileId: string) => void;
 		onaddexternalagent: () => void;
 		onremoveexternalagent: (id: string) => void;
+		ondisableallexternalagents: () => void;
+		onenableallexternalagents: () => void;
+		onturnoffexternalagents: () => void;
 		onviewexternalagent: (id: string) => void;
 		onworktogetherchange: (enabled: boolean) => void;
 	} = $props();
@@ -177,6 +185,7 @@
 	let roleMenuRoot: HTMLElement | undefined = $state();
 	let agentStripRoot: HTMLElement | undefined = $state();
 	let pinnedAgentId = $state("");
+	let externalAgentsCollapsed = $state(false);
 	let mcpPickerOpen = $state(false);
 	let mcpQuery = $state("");
 	let mcpTokenStart = $state(-1);
@@ -197,6 +206,9 @@
 			: [],
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const allExternalAgentsDisabled = $derived(
+		externalAgentSlots.length > 0 && externalAgentSlots.every(({ slot }) => !slot.enabled),
+	);
 	const compactWorkTogetherLayout = $derived(externalMode && workTogetherVisible);
 
 	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
@@ -261,6 +273,12 @@
 
 	$effect(() => {
 		if (roleDisabled) roleMenuOpen = false;
+	});
+
+	$effect(() => {
+		if (!allExternalAgentsDisabled) return;
+		externalAgentsCollapsed = true;
+		pinnedAgentId = "";
 	});
 
 	$effect(() => {
@@ -549,30 +567,41 @@
 	>
 		{#if externalAgentSlots.length > 0}
 			<div bind:this={agentStripRoot} class="flex min-h-9 flex-wrap items-center gap-1.5 border-b border-[#232c34] px-2.5 py-1.5">
+				{#if externalAgentsCollapsed}
+					<span class="mr-auto font-mono text-[8px] tracking-[.08em] text-[#78858d] uppercase">External Agents · {externalAgentSlots.length}</span>
+					{#if allExternalAgentsDisabled}
+						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-[#40512e] bg-[#11180c] px-2 py-1 font-mono text-[7px] text-[#c8d6a9] hover:bg-[#18220f] disabled:cursor-wait disabled:opacity-45" onclick={onenableallexternalagents}>Enable all</button>
+						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={onturnoffexternalagents}>Turn off</button>
+					{/if}
+				{:else}
 				{#each externalAgentSlots as { label, slot }, index (slot.id)}
 					{@const models = harnessModels(slot)}
+					{@const viewVisible = visibleAgentIds.includes(slot.id)}
 					<div class="group relative">
-						<div class={`flex h-7 items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
+						<div class={`flex h-11 min-w-[190px] items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
 							<button
 								type="button"
-								aria-label={`View ${label}`}
-								class="grid h-5 w-5 place-items-center rounded text-[#78858d] hover:bg-[#222d1a] hover:text-[#d5dfbe]"
+								aria-label={`${viewVisible ? "Hide" : "Show"} ${label} view`}
+								aria-pressed={viewVisible}
+								title={`${viewVisible ? "Hide" : "Show"} ${label} context`}
+								class={`ml-1 grid h-7 w-7 place-items-center rounded hover:bg-[#222d1a] ${viewVisible ? "text-[#d5dfbe]" : "text-[#68747c]"}`}
 								onclick={() => onviewexternalagent(slot.id)}
 							>
-								<Eye size={10} />
+								{#if viewVisible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
 							</button>
 							<button
 								type="button"
 								aria-expanded={pinnedAgentId === slot.id}
 								aria-label={`Configure ${label} ${harnessDisplayName(slot.kind)}`}
-								class="flex h-full items-center gap-1.5 px-1.5 font-mono text-[8px]"
+								class="flex h-full min-w-0 flex-1 items-center gap-2 px-1.5 text-left font-mono"
 								onfocus={() => (pinnedAgentId = slot.id)}
 								onclick={() => (pinnedAgentId = pinnedAgentId === slot.id ? "" : slot.id)}
 							>
-								<span>{label}</span>
-								<span class="text-[#3f4a52]">·</span>
 								<ProviderLogo id={slot.kind ?? "klerm"} label={harnessDisplayName(slot.kind)} size={16} decorative />
-								<span>{harnessDisplayName(slot.kind)}</span>
+								<span class="min-w-0 flex-1">
+									<span class="block text-[8px] text-[#d5dfbe]">{label} · {harnessDisplayName(slot.kind)}</span>
+									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · thinking {slot.effort}</span>
+								</span>
 							</button>
 							<button
 								type="button"
@@ -640,6 +669,29 @@
 					</div>
 				{/each}
 				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 4} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[#3d4a54] bg-[#0a0f13] font-mono text-[13px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
+				{/if}
+				{#if externalAgentSlots.length >= 3}
+					<div class="ml-auto flex shrink-0 flex-col items-stretch gap-1">
+						{#if !externalAgentsCollapsed}
+							<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="rounded-md border border-[#4a3030] px-1.5 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
+						{/if}
+						<button
+							type="button"
+							aria-label={externalAgentsCollapsed ? "Expand External Agents" : "Collapse External Agents"}
+							aria-expanded={!externalAgentsCollapsed}
+							title={externalAgentsCollapsed ? "Expand External Agents" : "Collapse External Agents"}
+							class={`grid h-7 w-full shrink-0 place-items-center rounded-md border border-[#303a42] text-[#85929a] transition-colors hover:border-[#53616a] hover:bg-[#151c21] hover:text-white ${externalAgentsCollapsed ? "" : "rotate-180"}`}
+							onclick={() => {
+								externalAgentsCollapsed = !externalAgentsCollapsed;
+								pinnedAgentId = "";
+							}}
+						>
+							<ChevronDown size={13} />
+						</button>
+					</div>
+				{:else if !externalAgentsCollapsed}
+					<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="ml-auto rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
+				{/if}
 			</div>
 		{/if}
 		<div class="relative min-h-[58px] pt-1 pr-[116px] pb-1 pl-[55px] narrow-520:min-h-[52px] narrow-520:pt-[3px] narrow-520:pr-[101px] narrow-520:pb-[3px] narrow-520:pl-[49px]">
@@ -771,6 +823,11 @@
 			</div>
 		</div>
 	</form>
+	{#if externalHarnessSetup?.blockingReason}
+		<p class="mx-auto mt-1.5 w-[min(820px,100%)] px-1 font-mono text-[8px] text-[#e18b82]" role="alert">
+			{externalHarnessSetup.blockingReason}
+		</p>
+	{/if}
 	<div class="mx-auto mt-1.5 flex w-[min(820px,100%)] justify-end px-1">
 		<label class="flex items-center gap-2 font-mono text-[8px] text-[#66727b]">
 			<span>All agents approval</span>
@@ -869,7 +926,7 @@
 				aria-checked={workTogetherEnabled}
 				aria-label="Toggle Work together mode"
 				disabled={externalHarnessBusy || !workTogetherAvailable}
-				title={externalHarnessBusy ? "Saving harness setup" : workTogetherAvailable ? "Toggle Work together mode" : "Enable three Klerm agents with distinct models"}
+				title={externalHarnessBusy ? "Saving harness setup" : workTogetherAvailable ? "Toggle Work together mode" : "Enable three runnable agents"}
 				class={`flex min-w-0 items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left disabled:opacity-50 ${externalHarnessBusy ? "disabled:cursor-wait" : "disabled:cursor-not-allowed"}`}
 				onclick={() => onworktogetherchange(!workTogetherEnabled)}
 			>

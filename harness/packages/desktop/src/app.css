@@ -41,22 +41,32 @@
 		color: inherit;
 	}
 	* {
-		scrollbar-width: thin;
-		scrollbar-color: #3a454d transparent;
+		/* Scrollbars are fully hidden; scrolling still works with the wheel,
+		   drag, and keyboard. */
+		scrollbar-width: none;
 	}
 	*::-webkit-scrollbar {
-		width: 7px;
-		height: 7px;
+		width: 0;
+		height: 0;
+		display: none;
 	}
-	*::-webkit-scrollbar-track {
-		background: transparent;
+	html[data-theme="light"] {
+		color-scheme: light;
 	}
-	*::-webkit-scrollbar-thumb {
-		border-radius: 999px;
-		background: #3a454d;
+	html[data-theme="dark"] {
+		color-scheme: dark;
 	}
-	*::-webkit-scrollbar-thumb:hover {
-		background: #536069;
+	html[data-theme="light"] body {
+		background: #fbfbfa;
+	}
+	/* Light mode derives from the dark theme by inverting the rendered UI and
+	   rotating hues back, so neutral grays become light and every accent keeps
+	   its hue. Images are inverted a second time to keep brand colors intact. */
+	html[data-theme="light"] #app {
+		filter: invert(1) hue-rotate(180deg);
+	}
+	html[data-theme="light"] #app img {
+		filter: invert(1) hue-rotate(180deg);
 	}
 }
 

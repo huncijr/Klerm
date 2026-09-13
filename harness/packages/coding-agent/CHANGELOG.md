@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added Agent Client Protocol (ACP) harness discovery: coding harnesses are scanned Zed-style by launching their known ACP adapter commands (`claude-code-acp`, `codex-acp`, `opencode-acp`, `cline-acp`), completing the JSON-RPC `initialize` handshake over stdio, and reporting the agent's identity, version, and capabilities, with the legacy version probe as fallback.
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
 - Added bounded bidirectional Klerm routing with native local/frontier delegation and returns, owner verification, deterministic transition logs, and interactive handback controls.
 - Added automatic local model discovery for LM Studio, vLLM, standalone llama.cpp servers, and configurable OpenAI-compatible endpoints.
@@ -24,10 +25,12 @@
 - Added `klerm session list [--json] [--dir <dir>]` for listing stored sessions with metadata, and `--session`, `--provider`, `--model` filters plus `--export <file>` (with a sharing warning) for `klerm debug decisions`.
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
 - Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
-- Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards; native external session prompting remains disabled until adapters are available.
+- Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards.
 - Added desktop Work together orchestration for three or more distinct Klerm models, with shared capability rosters, task-aware peer selection, per-agent memory profiles, and target-attributed transition logs.
 - Added typed on-demand coding-harness model discovery through the native Pi, Codex, and OpenCode interfaces, with desktop refresh, loading, and error states.
-- Added up to four closable desktop agent activity views with model, status, and per-agent thinking-effort controls backed by agent-attributed RPC events.
+- Added eye-toggleable desktop agent context views independent of Work together mode, split the workspace across up to four agents, show model, connection status, thinking effort, and Plan/Build controls, provide bulk enable, disable, collapse, and turn-off actions, and retain the shared prompt and handoff feed in a vertically resizable lower pane.
+- Added typed OpenCode and Codex coding-harness prompt adapters with `startSession`, `prompt`, `abort`, `closeSession`, agent-attributed message, tool-start, tool-end, settled, and error events, native session reuse, and desktop RPC forwarding of those events.
+- Added a deterministic runnable-agent roster for external prompting: lowest-ID external agent first, then Klerm agents, then remaining externals, with `CODING_HARNESS_ROUTE` decision-log events carrying sender, recipient, sequence, selected agent/harness/target, reason, and roster order.
 
 ### Changed
 

@@ -129,7 +129,8 @@ describe("coding harness setup", () => {
 			if (command === "codex" || command === "cline") throw new Error("not installed");
 			return { stdout: `${command} 2.0\n${"ignored".repeat(100)}` };
 		});
-		await expect(discoverCodingHarnesses(probe)).resolves.toEqual([
+		const acpScan = vi.fn(async () => undefined);
+		await expect(discoverCodingHarnesses(probe, acpScan)).resolves.toEqual([
 			{ kind: "klerm", available: true, builtin: true, models: [] },
 			{ kind: "pi", available: true, builtin: false, models: [], version: "pi 2.0" },
 			{ kind: "claude-code", available: true, builtin: false, models: [], version: "claude 2.0" },
@@ -158,8 +159,52 @@ describe("coding harness setup", () => {
 	});
 
 	it("bounds version output to the first line", async () => {
-		const setup = await discoverCodingHarnesses(async () => ({ stdout: "x".repeat(400) }));
+		const setup = await discoverCodingHarnesses(
+			async () => ({ stdout: "x".repeat(400) }),
+			async () => undefined,
+		);
 		expect(setup.slice(1).every((harness) => harness.version?.length === 256)).toBe(true);
+	});
+
+	it("prefers an ACP initialize handshake over the version probe", async () => {
+		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline") => {
+			if (command === "opencode") throw new Error("should not be called when ACP succeeds");
+			return { stdout: `${command} 2.0` };
+		});
+		const acpScan = vi.fn(async (kind: string) =>
+			kind === "opencode"
+				? {
+						command: "opencode-acp",
+						protocolVersion: 1,
+						agentName: "opencode",
+						agentTitle: "OpenCode",
+						agentVersion: "1.2.3",
+						loadSession: true,
+					}
+				: undefined,
+		);
+		await expect(discoverCodingHarnesses(probe, acpScan)).resolves.toEqual([
+			{ kind: "klerm", available: true, builtin: true, models: [] },
+			{ kind: "pi", available: true, builtin: false, models: [], version: "pi 2.0" },
+			{ kind: "claude-code", available: true, builtin: false, models: [], version: "claude 2.0" },
+			{ kind: "codex", available: true, builtin: false, models: [], version: "codex 2.0" },
+			{
+				kind: "opencode",
+				available: true,
+				builtin: false,
+				models: [],
+				version: "1.2.3",
+				acp: {
+					command: "opencode-acp",
+					protocolVersion: 1,
+					agentName: "opencode",
+					agentTitle: "OpenCode",
+					agentVersion: "1.2.3",
+					loadSession: true,
+				},
+			},
+			{ kind: "cline", available: true, builtin: false, models: [], version: "cline 2.0" },
+		]);
 	});
 
 	it("discovers models through each harness native interface", async () => {
@@ -209,20 +254,43 @@ describe("coding harness setup", () => {
 	it("derives routing from all enabled and available agents", () => {
 		const harnesses = [
 			{ kind: "klerm" as const, available: true, builtin: true, models: ["ollama/qwen"] },
-			{ kind: "codex" as const, available: true, builtin: false, models: [] },
+			{ kind: "codex" as const, available: true, builtin: false, models: ["gpt-5"] },
+			{ kind: "opencode" as const, available: true, builtin: false, models: ["openai/gpt-5.6-terra"] },
 			{ kind: "claude-code" as const, available: false, builtin: false, models: [] },
 		];
+		const setup = createCodingHarnessSetup(
+			{
+				externalHarnessesEnabled: true,
+				agents: [
+					{ ...agent("agent1", "klerm"), model: "ollama/qwen" },
+					{ ...agent("agent7", "codex"), model: "gpt-5" },
+					{ ...agent("agent5", "opencode"), model: "openai/gpt-5.6-terra" },
+				],
+			},
+			harnesses,
+			new Set(["opencode", "codex"]),
+		);
+		expect(setup).toMatchObject({
+			effectiveRouting: "auto",
+			externalPromptingAvailable: true,
+			workTogetherAvailable: true,
+		});
+		expect(setup.runnableAgents).toEqual([
+			{ order: 1, agentId: "agent5", harness: "opencode", model: "openai/gpt-5.6-terra" },
+			{ order: 2, agentId: "agent1", harness: "klerm", model: "ollama/qwen" },
+			{ order: 3, agentId: "agent7", harness: "codex", model: "gpt-5" },
+		]);
 		expect(
 			createCodingHarnessSetup(
-				{ externalHarnessesEnabled: true, agents: [agent("agent1", "klerm"), agent("agent2", "codex")] },
+				{
+					externalHarnessesEnabled: true,
+					agents: [
+						{ ...agent("agent1", "klerm"), model: "ollama/qwen" },
+						{ ...agent("agent5", "claude-code"), model: "sonnet" },
+					],
+				},
 				harnesses,
 			),
-		).toMatchObject({ effectiveRouting: "auto", externalPromptingAvailable: false });
-		expect(
-			createCodingHarnessSetup(
-				{ externalHarnessesEnabled: true, agents: [agent("agent1", "klerm"), agent("agent2", "codex", false)] },
-				harnesses,
-			),
-		).toMatchObject({ effectiveRouting: "none" });
+		).toMatchObject({ effectiveRouting: "none", blockingReason: "Agent 5 (Claude Code) is not available." });
 	});
 });

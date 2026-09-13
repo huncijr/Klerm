@@ -16,9 +16,10 @@
 	import {
 		addCodingHarnessSlot,
 		assignWorkTogetherModels,
-		canEnableWorkTogether,
-		hasThreeEnabledCodingHarnessAgents,
 		removeCodingHarnessSlot,
+		setAllCodingHarnessAgentsEnabled,
+		setExternalCodingHarnessesEnabled,
+		shouldShowAgentContext,
 		updateCodingHarnessSlot,
 	} from "./lib/coding-harnesses.ts";
 	import type {
@@ -58,6 +59,7 @@
 		TimelineTone,
 		ThinkingLevel,
 		ThinkingSetting,
+		WorkerRole,
 		WorkspaceStatus,
 	} from "./lib/model.ts";
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
@@ -93,6 +95,7 @@
 	let settingsOpen = $state(false);
 	let settingsFullscreen = $state(false);
 	let desktopSettings = $state<DesktopSettings | undefined>(undefined);
+	let systemPrefersDark = $state(true);
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
@@ -132,6 +135,9 @@
 	let selectedFileContent = $state<string | undefined>(undefined);
 	let fileLoading = $state(false);
 	let fileSaving = $state(false);
+	let projectFiles = $state<string[] | undefined>(undefined);
+	let projectFilesTruncated = $state(false);
+	let projectFilesLoading = $state(false);
 	let terminalOutput = $state("");
 	let terminalBusy = $state(false);
 	let terminalCurrentCommand = $state("");
@@ -146,7 +152,18 @@
 	let codingHarnessSetupLoading = $state(false);
 	let codingHarnessSetupError = $state("");
 	let visibleAgentIds = $state<string[]>([]);
-	let knownAgentIds: string[] = [];
+	// Agent view visibility is per session: each session restores exactly the
+	// views that were opened in it, and a first visit opens none.
+	const agentViewsBySession = new Map<string, string[]>();
+	function rememberAgentViews(): void {
+		const sessionId = lastState?.sessionId;
+		if (sessionId) agentViewsBySession.set(sessionId, [...visibleAgentIds]);
+	}
+	function restoreAgentViews(sessionId: string | undefined): void {
+		visibleAgentIds = sessionId ? [...(agentViewsBySession.get(sessionId) ?? [])] : [];
+	}
+	let agentViewsHeight = $state(260);
+	let agentContextContainer: HTMLElement | undefined = $state();
 	let mcpNeedsReload = false;
 
 	let currentLocalRuntimes = $state<LocalRuntime[]>([]);
@@ -164,7 +181,7 @@
 	const interactionActive = $derived(
 		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
 	);
-	const sendDisabled = $derived(!backendReady || interactionActive);
+	const sendDisabled = $derived(!backendReady || interactionActive || Boolean(codingHarnessSetup?.blockingReason));
 	const externalHarnessesEnabled = $derived(codingHarnessSetup?.slots.externalHarnessesEnabled === true);
 	const codingHarnessOptions = $derived<SelectOption[]>(
 		codingHarnessSetup?.harnesses
@@ -182,22 +199,22 @@
 	const configuredHarnessAgents = $derived(codingHarnessSetup?.slots.agents ?? []);
 	const firstHarnessAgent = $derived(configuredHarnessAgents[0]);
 	const secondHarnessAgent = $derived(configuredHarnessAgents[1]);
-	const workTogetherVisible = $derived(
-		codingHarnessSetup ? hasThreeEnabledCodingHarnessAgents(codingHarnessSetup.slots) : false,
-	);
+	const workTogetherVisible = $derived((codingHarnessSetup?.runnableAgents.length ?? 0) >= 3);
 	const klermModelCatalog = $derived(
 		[...localOptions, ...frontierOptions]
 			.map((option) => option.value)
 			.filter((model, index, models) => model && models.indexOf(model) === index),
 	);
-	const workTogetherAvailable = $derived(
-		codingHarnessSetup ? canEnableWorkTogether(codingHarnessSetup.slots) : false,
-	);
+	const workTogetherAvailable = $derived(codingHarnessSetup?.workTogetherAvailable === true);
 	const workTogetherEnabled = $derived(
 		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
 	);
+	const agentContextVisible = $derived(
+		codingHarnessSetup ? shouldShowAgentContext(codingHarnessSetup.slots, visibleAgentIds) : false,
+	);
 	const activeHarnessAgentId = $derived.by(() => {
-		if (!workTogetherEnabled || !currentRoutingState) return undefined;
+		if (!currentRoutingState) return undefined;
+		if (currentRoutingState.selectedAgentId) return currentRoutingState.selectedAgentId;
 		const activeAgents = configuredHarnessAgents.filter((agent) => agent.enabled && agent.kind === "klerm" && agent.model);
 		return (
 			activeAgents.find((agent) => agent.model === currentRoutingState?.selectedTarget)?.id ??
@@ -206,13 +223,32 @@
 	});
 
 	$effect(() => {
+		const query = window.matchMedia("(prefers-color-scheme: dark)");
+		systemPrefersDark = query.matches;
+		const update = (event: MediaQueryListEvent) => {
+			systemPrefersDark = event.matches;
+		};
+		query.addEventListener("change", update);
+		return () => query.removeEventListener("change", update);
+	});
+
+	$effect(() => {
+		const appearance = desktopSettings?.appearance;
+		if (appearance) localStorage.setItem("klerm-appearance", appearance);
+		// The persisted appearance is read from localStorage so the theme is
+		// correct from the first paint, before the backend handshake arrives.
+		const effective =
+			appearance ?? ((localStorage.getItem("klerm-appearance") as DesktopAppearance | null) ?? "dark");
+		document.documentElement.dataset.theme =
+			effective === "system" ? (systemPrefersDark ? "dark" : "light") : effective;
+	});
+
+	$effect(() => {
 		const enabledIds = configuredHarnessAgents.filter((agent) => agent.enabled).map((agent) => agent.id);
-		const added = enabledIds.filter((id) => !knownAgentIds.includes(id));
-		knownAgentIds = enabledIds;
 		// Read the current visible ids without tracking: this effect must only
 		// re-run when the agent roster changes, never when it writes the list.
 		const current = untrack(() => visibleAgentIds);
-		const next = [...new Set([...current.filter((id) => enabledIds.includes(id)), ...added])].slice(0, 4);
+		const next = current.filter((id) => enabledIds.includes(id)).slice(0, 4);
 		if (next.length !== current.length || next.some((id, index) => id !== current[index])) {
 			visibleAgentIds = next;
 		}
@@ -301,12 +337,21 @@
 			else if (routing === "local" || routing === "auto") reference = currentConfig?.localModel;
 			else if (lastState?.model) reference = `${lastState.model.provider}/${lastState.model.id}`;
 		}
+		const enabledAgentCount = configuredHarnessAgents.filter((agent) => agent.enabled && agent.kind).length;
+		const enabledHarnessKinds = [
+			...new Set(configuredHarnessAgents.filter((agent) => agent.enabled && agent.kind).map((agent) => agent.kind)),
+		];
+		if (enabledAgentCount > 1) {
+			reference = `AGENT MODE — ${enabledAgentCount} agents, one swarm`;
+		}
 		const activeLane = currentRoutingState?.lane;
 		return {
 			reference: reference ?? "Not configured",
 			statusClass: backendReady && reference ? "online" : backendReady ? "starting" : "error",
 			badge:
-				activeLane && activeLane !== "direct"
+				enabledAgentCount > 1
+					? `Orchestrated · ${enabledHarnessKinds.join(" + ")}`
+					: activeLane && activeLane !== "direct"
 					? activeLane === "local"
 						? "Agent 1"
 						: "Agent 2"
@@ -435,6 +480,26 @@
 		const onMove = (move: PointerEvent) => {
 			applyFilesWidth(startWidth - (move.clientX - origin));
 		};
+		const onUp = () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+		};
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
+	}
+
+	function applyAgentViewsHeight(requested: number): void {
+		const available = agentContextContainer?.clientHeight ?? 520;
+		const maximum = Math.max(140, available - 140);
+		const minimum = Math.min(180, maximum);
+		agentViewsHeight = Math.max(minimum, Math.min(maximum, requested));
+	}
+
+	function startAgentViewsResize(event: PointerEvent): void {
+		if (window.innerWidth <= 720 || !agentContextContainer) return;
+		event.preventDefault();
+		const top = agentContextContainer.getBoundingClientRect().top;
+		const onMove = (move: PointerEvent) => applyAgentViewsHeight(move.clientY - top);
 		const onUp = () => {
 			window.removeEventListener("pointermove", onMove);
 			window.removeEventListener("pointerup", onUp);
@@ -946,6 +1011,16 @@
 			case "routing_changed": {
 				const state = event.state as RoutingState | undefined;
 				currentRoutingState = state;
+				if (state?.selectedAgentId && state.selectedHarness && state.selectedTarget) {
+					pushTimeline(
+						"routing",
+						"amber",
+						`→ Agent ${state.selectedAgentId.slice(5)} / ${state.selectedHarness === "opencode" ? "OpenCode" : state.selectedHarness === "codex" ? "Codex" : state.selectedHarness} / ${state.selectedTarget}`,
+						state.reason ?? "Selected from the runnable coding-agent roster.",
+						"settled",
+						`harness-route-${state.routingSequence ?? activeTaskKey}`,
+					);
+				}
 				if (currentConfig && state) {
 					currentConfig = {
 						...currentConfig,
@@ -1050,6 +1125,24 @@
 			workspace = undefined;
 			showError(toError(error).message);
 		}
+	}
+
+	function openProjectFiles(): void {
+		if (!backendReady || projectFilesLoading) return;
+		projectFilesLoading = true;
+		void bridge
+			.send<{ projectRoot: string; files: string[]; truncated: boolean }>("list_workspace_files")
+			.then((result) => {
+				projectFiles = result.files;
+				projectFilesTruncated = result.truncated;
+			})
+			.catch((error) => {
+				projectFiles = [];
+				showError(toError(error).message);
+			})
+			.finally(() => {
+				projectFilesLoading = false;
+			});
 	}
 
 	async function selectWorkspaceFile(path: string): Promise<void> {
@@ -1271,6 +1364,42 @@
 		}
 	}
 
+	async function setCodingHarnessAgentRole(id: string, role: WorkerRole): Promise<void> {
+		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
+		if (!agent || !(await updateCodingHarnessAgent(id, { role }))) return;
+		buildModeOffer = undefined;
+		if (agent.kind === "klerm" && id === "agent1") await applyConfigUpdate({ localRole: role });
+		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierRole: role });
+	}
+
+	async function setAllCodingHarnessAgents(enabled: boolean): Promise<void> {
+		if (!codingHarnessSetup) return;
+		if (await saveCodingHarnessSlots(setAllCodingHarnessAgentsEnabled(codingHarnessSetup.slots, enabled))) {
+			if (!enabled) visibleAgentIds = [];
+			rememberAgentViews();
+		}
+	}
+
+	async function turnOffExternalCodingHarnesses(): Promise<void> {
+		if (!codingHarnessSetup) return;
+		if (await saveCodingHarnessSlots(setExternalCodingHarnessesEnabled(codingHarnessSetup.slots, false))) {
+			visibleAgentIds = [];
+			rememberAgentViews();
+		}
+	}
+
+	function closeAgentView(id: string): void {
+		visibleAgentIds = visibleAgentIds.filter((candidate) => candidate !== id);
+		rememberAgentViews();
+	}
+
+	function toggleAgentView(id: string): void {
+		visibleAgentIds = visibleAgentIds.includes(id)
+			? visibleAgentIds.filter((candidate) => candidate !== id)
+			: [...visibleAgentIds, id].slice(-4);
+		rememberAgentViews();
+	}
+
 	async function addCodingHarnessAgent(): Promise<void> {
 		if (!codingHarnessSetup || codingHarnessSetup.slots.agents.length >= 4) return;
 		await saveCodingHarnessSlots(addCodingHarnessSlot(codingHarnessSetup.slots));
@@ -1289,7 +1418,7 @@
 			currentConfig?.frontierModel,
 			klermModelCatalog,
 		);
-		if (enabled && !canEnableWorkTogether(next)) {
+		if (enabled && !workTogetherAvailable) {
 			return;
 		}
 		await saveCodingHarnessSlots({
@@ -1516,6 +1645,7 @@
 		sessionTransitionActive = true;
 		clearError();
 		try {
+			rememberAgentViews();
 			const transition = await bridge.send<{ cancelled: boolean }>("switch_session", {
 				sessionPath: session.sessionToken,
 			});
@@ -1524,6 +1654,7 @@
 				bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries"),
 				bridge.send<SessionState>("get_state"),
 			]);
+			restoreAgentViews(state.sessionId);
 			lastState = state;
 			clearFeed();
 			attachments = [];
@@ -1555,6 +1686,7 @@
 				attachments = [];
 				sessionTitle = "New Agent 1 session";
 				lastState = await bridge.send<SessionState>("get_state");
+				restoreAgentViews(lastState.sessionId);
 				sessionCwd = lastState.cwd;
 				resetTerminal(lastState.cwd);
 				currentRoutingState = currentRoutingState
@@ -1801,6 +1933,7 @@
 			showError("Rebuild the desktop backend. This sidecar does not support MCP commands.");
 		}
 		lastState = handshake.state;
+		restoreAgentViews(handshake.state.sessionId);
 		currentRoutingState = handshake.routingState;
 		sessionTitle = handshake.state.sessionName ?? "New Agent 1 session";
 		sessionCwd = handshake.state.cwd;
@@ -1835,6 +1968,7 @@
 			clearFeed();
 			attachments = [];
 			lastState = await bridge.send<SessionState>("get_state");
+			restoreAgentViews(lastState.sessionId);
 			sessionTitle = "New Agent 1 session";
 			sessionCwd = lastState.cwd;
 			resetTerminal(lastState.cwd);
@@ -1968,6 +2102,7 @@
 			if (window.innerWidth > 720) sidebarOpen = false;
 			else sessionsExpanded = true;
 			if (workspacePanelOpen) applyFilesWidth(filesWidth);
+			if (agentContextVisible) applyAgentViewsHeight(agentViewsHeight);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape") return;
@@ -2111,10 +2246,54 @@
 			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
 		/>
 
-		<section class="relative min-h-0 overflow-y-auto">
-			<div
-				class={`mx-auto flex min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)] ${externalHarnessesEnabled && visibleAgentIds.length > 0 ? "w-[min(1400px,calc(100%-48px))]" : "w-[min(820px,calc(100%-48px))]"}`}
-			>
+		<section bind:this={agentContextContainer} class={`relative min-h-0 ${agentContextVisible ? "overflow-hidden" : "overflow-y-auto"}`}>
+			{#if agentContextVisible}
+				<div
+					class="grid h-full min-h-0 grid-rows-[minmax(140px,var(--agent-views-height))_8px_minmax(120px,1fr)] narrow-720:grid-rows-[minmax(180px,1fr)_minmax(140px,1fr)]"
+					style={`--agent-views-height: ${agentViewsHeight}px;`}
+				>
+					<div class="min-h-0 overflow-hidden p-3 pb-2 narrow-720:p-2">
+						<AgentViews
+							agents={configuredHarnessAgents}
+							visibleIds={visibleAgentIds}
+							items={feed}
+							activeAgentId={activeHarnessAgentId}
+							{taskActive}
+							mcpServers={mcpServers}
+							connectedHarnessKinds={codingHarnessSetup?.harnesses.filter((harness) => harness.adapterConnected).map((harness) => harness.kind) ?? []}
+							controlsDisabled={codingHarnessSetupLoading}
+							onclose={closeAgentView}
+							oneffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
+							onrolechange={(id, role) => void setCodingHarnessAgentRole(id, role)}
+							onrerun={rerunPrompt}
+							ontoggle={toggleTimeline}
+						/>
+					</div>
+					<button
+						type="button"
+						aria-label="Resize agent views and shared conversation"
+						class="group relative cursor-row-resize border-0 bg-transparent narrow-720:hidden"
+						onpointerdown={startAgentViewsResize}
+						onkeydown={(event) => {
+							if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+							event.preventDefault();
+							applyAgentViewsHeight(agentViewsHeight + (event.key === "ArrowDown" ? 24 : -24));
+						}}
+					>
+						<span class="absolute top-1/2 right-3 left-3 h-px -translate-y-1/2 bg-[#273139] transition-colors group-hover:bg-[#65747d] group-focus-visible:bg-[#8d9aa2]"></span>
+						<span class="absolute top-1/2 left-1/2 h-1.5 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#3b474f] bg-[#11181d] transition-colors group-hover:border-[#65747d]"></span>
+					</button>
+					<div class="min-h-0 overflow-y-auto border-t border-[#273139] bg-[rgba(5,9,12,.38)]">
+						<div class="sticky top-0 z-[1] border-b border-[#222b32] bg-[#090e12]/95 px-4 py-1.5 backdrop-blur">
+							<span class="font-mono text-[8px] tracking-[.1em] text-[#75828a] uppercase">Shared conversation</span>
+						</div>
+						<div class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col py-4 narrow-720:w-[calc(100%-30px)] narrow-720:py-3">
+							<Feed items={feed} {taskActive} {mcpServers} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
+						</div>
+					</div>
+				</div>
+			{:else}
+			<div class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col pt-11 pb-9 narrow-720:w-[calc(100%-30px)]">
 				{#if heroVisible}
 					<EmptyState
 						{runtimeStatus}
@@ -2125,22 +2304,9 @@
 						}}
 					/>
 				{/if}
-				{#if externalHarnessesEnabled}
-					<AgentViews
-						agents={configuredHarnessAgents}
-						visibleIds={visibleAgentIds}
-						items={feed}
-						activeAgentId={activeHarnessAgentId}
-						{taskActive}
-						mcpServers={mcpServers}
-						onclose={(id) => (visibleAgentIds = visibleAgentIds.filter((candidate) => candidate !== id))}
-						oneffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
-						onrerun={rerunPrompt}
-						ontoggle={toggleTimeline}
-					/>
-				{/if}
 				<Feed items={feed} {taskActive} {mcpServers} onrerun={rerunPrompt} ontoggle={toggleTimeline} />
 			</div>
+			{/if}
 		</section>
 
 		<Composer
@@ -2162,6 +2328,7 @@
 			{taskStateText}
 			{errorBanner}
 			externalHarnessSetup={codingHarnessSetup}
+			{visibleAgentIds}
 			externalHarnessBusy={codingHarnessSetupLoading}
 			{workTogetherEnabled}
 			{workTogetherAvailable}
@@ -2219,9 +2386,10 @@
 			onexternalmemorychange={(id, profileId) => void setCodingHarnessAgentMemory(id, profileId)}
 			onaddexternalagent={() => void addCodingHarnessAgent()}
 			onremoveexternalagent={(id) => void removeCodingHarnessAgent(id)}
-			onviewexternalagent={(id) => {
-				if (!visibleAgentIds.includes(id)) visibleAgentIds = [...visibleAgentIds, id].slice(-4);
-			}}
+			ondisableallexternalagents={() => void setAllCodingHarnessAgents(false)}
+			onenableallexternalagents={() => void setAllCodingHarnessAgents(true)}
+			onturnoffexternalagents={() => void turnOffExternalCodingHarnesses()}
+			onviewexternalagent={toggleAgentView}
 			onworktogetherchange={(enabled) => void setWorkTogetherMode(enabled)}
 		/>
 
@@ -2264,11 +2432,15 @@
 			content={selectedFileContent}
 			loading={fileLoading}
 			saving={fileSaving}
+			{projectFiles}
+			{projectFilesTruncated}
+			{projectFilesLoading}
 			onclose={() => (workspacePanelOpen = false)}
 			onrefresh={() => void refreshWorkspace()}
 			onselect={(path) => void selectWorkspaceFile(path)}
 			onsave={saveWorkspaceFile}
 			onopeneditor={(editor) => void openWorkspaceEditor(editor)}
+			onviewprojectfiles={openProjectFiles}
 		/>
 	{/if}
 </div>

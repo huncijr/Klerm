@@ -22,6 +22,28 @@ export function canEnableWorkTogether(slots: CodingHarnessSlots): boolean {
 	return hasThreeEnabledCodingHarnessAgents(slots);
 }
 
+export function shouldShowAgentContext(slots: CodingHarnessSlots, visibleIds: readonly string[]): boolean {
+	return (
+		slots.externalHarnessesEnabled && slots.agents.some((agent) => agent.enabled && visibleIds.includes(agent.id))
+	);
+}
+
+export function setAllCodingHarnessAgentsEnabled(slots: CodingHarnessSlots, enabled: boolean): CodingHarnessSlots {
+	return {
+		externalHarnessesEnabled: slots.externalHarnessesEnabled,
+		agents: slots.agents.map((agent) => ({ ...agent, enabled })),
+		...(enabled && slots.workTogetherEnabled === true ? { workTogetherEnabled: true } : {}),
+	};
+}
+
+export function setExternalCodingHarnessesEnabled(slots: CodingHarnessSlots, enabled: boolean): CodingHarnessSlots {
+	return {
+		externalHarnessesEnabled: enabled,
+		agents: slots.agents,
+		...(enabled && slots.workTogetherEnabled === true ? { workTogetherEnabled: true } : {}),
+	};
+}
+
 export function assignWorkTogetherModels(
 	slots: CodingHarnessSlots,
 	localModel?: string,
@@ -51,6 +73,15 @@ export function updateCodingHarnessSlot(
 		...slots,
 		agents: slots.agents.map((agent) => (agent.id === id ? { ...agent, ...update } : agent)),
 	};
+}
+
+/** Deep compare for slot drafts, so saved-but-recreated objects do not look dirty. */
+export function codingHarnessSlotsEqual(left: CodingHarnessSlots, right: CodingHarnessSlots): boolean {
+	return (
+		left.externalHarnessesEnabled === right.externalHarnessesEnabled &&
+		(left.workTogetherEnabled ?? false) === (right.workTogetherEnabled ?? false) &&
+		JSON.stringify(left.agents) === JSON.stringify(right.agents)
+	);
 }
 
 export function addCodingHarnessSlot(slots: CodingHarnessSlots): CodingHarnessSlots {

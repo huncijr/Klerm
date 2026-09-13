@@ -15,7 +15,7 @@ import * as crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { constants as errnoConstants } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AuthEvent, AuthPrompt, UserMessage } from "@earendil-works/pi-ai";
 import { VERSION } from "../../config.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
@@ -39,6 +39,13 @@ import {
 	type SettingsScope,
 } from "../../core/settings-manager.ts";
 import {
+	type CodingHarnessAdapter,
+	type CodingHarnessAdapterEvent,
+	type CodingHarnessSessionRef,
+	type ConnectedCodingHarnessKind,
+	createCodingHarnessAdapters,
+} from "../../klerm/coding-harness-adapter.ts";
+import {
 	createCodingHarnessSetup,
 	discoverCodingHarnesses,
 	discoverCodingHarnessModels,
@@ -57,6 +64,7 @@ import {
 	disconnectProviderAccount,
 	getProviderAccountStatus,
 } from "../../klerm/provider-accounts.ts";
+import { appendCodingHarnessRouteDecision } from "../../klerm/router/decision-log.ts";
 import { createSessionTitle } from "../../klerm/session-title.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -85,6 +93,7 @@ import {
 	getRunningServices,
 	getWorkspaceDiff,
 	getWorkspaceStatus,
+	listWorkspaceFiles,
 	openLocalUrl,
 	openWorkspaceEditor,
 	readWorkspaceTextFile,
@@ -107,6 +116,7 @@ export interface RunRpcModeOptions {
 	discoverLocalRuntimes?: typeof discoverLocalRuntimes;
 	discoverCodingHarnesses?: typeof discoverCodingHarnesses;
 	discoverCodingHarnessModels?: typeof discoverCodingHarnessModels;
+	codingHarnessAdapters?: Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>;
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
@@ -124,6 +134,7 @@ const DESKTOP_COMMANDS = [
 	"rename_session",
 	"delete_session",
 	"get_workspace_status",
+	"list_workspace_files",
 	"get_workspace_diff",
 	"read_workspace_file",
 	"write_workspace_file",
@@ -247,10 +258,92 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	>();
 	const fileAttributions = new Map<string, RpcWorkspaceAttribution>();
 	let workspaceProjectRoot = session.sessionManager.getCwd();
+	const codingHarnessAdapters = options.codingHarnessAdapters ?? createCodingHarnessAdapters();
+	const codingHarnessSessions = new Map<string, CodingHarnessSessionRef>();
+	let activeCodingHarnessSession: CodingHarnessSessionRef | undefined;
+	let codingHarnessRouteSequence = 0;
+	const closeCodingHarnessSessions = async () => {
+		await Promise.all(
+			[...codingHarnessSessions.values()].map((adapterSession) =>
+				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
+			),
+		);
+		codingHarnessSessions.clear();
+		activeCodingHarnessSession = undefined;
+	};
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
 	};
+
+	const emptyUsage = () => ({
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	});
+	const handleCodingHarnessEvent = (event: CodingHarnessAdapterEvent) => {
+		if (event.type === "message") {
+			const active = activeCodingHarnessSession;
+			if (!active || active.agentId !== event.agentId) return;
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: event.text }],
+				api: "openai-responses",
+				provider: active.harness,
+				model: active.model,
+				usage: emptyUsage(),
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
+			session.sessionManager.appendMessage(message);
+			output({ type: "message_start", message, agentId: event.agentId });
+			output({ type: "message_end", message, agentId: event.agentId });
+			return;
+		}
+		if (event.type === "tool-start") {
+			output({
+				type: "tool_execution_start",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: event.input,
+				agentId: event.agentId,
+			});
+			return;
+		}
+		if (event.type === "tool-end") {
+			output({
+				type: "tool_execution_end",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				result: {
+					content: [
+						{
+							type: "text",
+							text: typeof event.output === "string" ? event.output : JSON.stringify(event.output),
+						},
+					],
+				},
+				isError: event.isError,
+				agentId: event.agentId,
+			});
+			return;
+		}
+		if (event.type === "error") {
+			output({ type: "backend_error", message: event.message, agentId: event.agentId });
+			return;
+		}
+		output({
+			type: "agent_settled",
+			agentId: event.agentId,
+			outcome:
+				event.status === "failed" ? { status: "failed", changedFileCount: 0, verificationCount: 0 } : undefined,
+		});
+		activeCodingHarnessSession = undefined;
+	};
+	for (const adapter of codingHarnessAdapters.values()) adapter.subscribe(handleCodingHarnessEvent);
 
 	const success = <T extends RpcCommand["type"]>(
 		id: string | undefined,
@@ -374,6 +467,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		return createCodingHarnessSetup(
 			session.settingsManager.getCodingHarnessSlots(),
 			harnesses.map((harness) => (harness.kind === "klerm" ? { ...harness, models: klermModels } : harness)),
+			new Set(codingHarnessAdapters.keys()),
 		);
 	};
 
@@ -1112,6 +1206,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				return success(id, "get_workspace_status", workspace);
 			}
 
+			case "list_workspace_files": {
+				return success(id, "list_workspace_files", await listWorkspaceFiles(session.sessionManager.getCwd()));
+			}
+
 			case "get_workspace_diff": {
 				if (typeof command.path !== "string") {
 					return error(id, "get_workspace_diff", "A workspace-relative file path is required.", "INVALID_PATH");
@@ -1646,6 +1744,94 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				if (!normalizedImages.ok) {
 					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
 				}
+				const codingHarnessSetup = await getCodingHarnessSetup();
+				if (codingHarnessSetup.slots.externalHarnessesEnabled) {
+					if (codingHarnessSetup.blockingReason) {
+						return error(id, "prompt", codingHarnessSetup.blockingReason, "CODING_HARNESS_UNAVAILABLE");
+					}
+					const target = codingHarnessSetup.runnableAgents.find((agent) => agent.harness !== "klerm");
+					if (target) {
+						if ((normalizedImages.images?.length ?? 0) > 0) {
+							return error(
+								id,
+								"External coding harness image forwarding is not available yet.",
+								"CODING_HARNESS_IMAGES_UNAVAILABLE",
+							);
+						}
+						const adapter = codingHarnessAdapters.get(target.harness as ConnectedCodingHarnessKind);
+						const configuredAgent = codingHarnessSetup.slots.agents.find((agent) => agent.id === target.agentId);
+						if (!adapter || !configuredAgent) {
+							return error(
+								id,
+								`Agent ${target.agentId.slice(5)} has no connected prompt adapter.`,
+								"CODING_HARNESS_ADAPTER_UNAVAILABLE",
+							);
+						}
+						let adapterSession = codingHarnessSessions.get(target.agentId);
+						if (
+							adapterSession &&
+							(adapterSession.harness !== target.harness || adapterSession.model !== target.model)
+						) {
+							const previousAdapter = codingHarnessAdapters.get(adapterSession.harness);
+							await previousAdapter?.closeSession(adapterSession);
+							codingHarnessSessions.delete(target.agentId);
+							adapterSession = undefined;
+						}
+						adapterSession ??= await adapter.startSession(configuredAgent, session.sessionManager.getCwd());
+						codingHarnessSessions.set(target.agentId, adapterSession);
+						activeCodingHarnessSession = adapterSession;
+						const timestamp = new Date().toISOString();
+						const sequence = ++codingHarnessRouteSequence;
+						const reason = `${target.agentId} is the lowest-ID runnable external agent`;
+						const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${command.message}`).digest("hex").slice(0, 16)}`;
+						await appendCodingHarnessRouteDecision(session.sessionManager.getCwd(), {
+							timestamp,
+							taskId,
+							sessionId: session.sessionId,
+							event: "CODING_HARNESS_ROUTE",
+							sender: "user",
+							recipient: target.agentId,
+							sequence,
+							selectedAgentId: target.agentId,
+							selectedHarness: target.harness,
+							selectedTarget: target.model,
+							reason,
+							roster: codingHarnessSetup.runnableAgents,
+							cwd: session.sessionManager.getCwd(),
+						});
+						const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
+						session.sessionManager.appendMessage(userMessage);
+						if (command.displayMessage && command.displayMessage !== command.message) {
+							session.sessionManager.appendCustomEntry("klerm-desktop-display-prompt", {
+								text: command.displayMessage,
+							});
+						}
+						output({
+							type: "routing_changed",
+							state: {
+								mode: codingHarnessSetup.effectiveRouting === "auto" ? "auto" : "off",
+								activeStartLane: "auto",
+								lane: "direct",
+								selectedTarget: target.model,
+								selectedAgentId: target.agentId,
+								selectedHarness: target.harness,
+								routingSequence: sequence,
+								reason,
+							},
+						});
+						output({ type: "agent_start", agentId: target.agentId });
+						output(success(id, "prompt"));
+						void adapter.prompt(adapterSession, command.message).catch((promptError) => {
+							handleCodingHarnessEvent({
+								type: "error",
+								agentId: target.agentId,
+								message: promptError instanceof Error ? promptError.message : String(promptError),
+							});
+							handleCodingHarnessEvent({ type: "settled", agentId: target.agentId, status: "failed" });
+						});
+						return undefined;
+					}
+				}
 				const mcpMentions: unknown = command.mcpMentions;
 				if (
 					mcpMentions !== undefined &&
@@ -1710,11 +1896,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "abort": {
+				if (activeCodingHarnessSession) {
+					const adapter = codingHarnessAdapters.get(activeCodingHarnessSession.harness);
+					await adapter?.abort(activeCodingHarnessSession);
+					return success(id, "abort");
+				}
 				await session.abort();
 				return success(id, "abort");
 			}
 
 			case "new_session": {
+				await closeCodingHarnessSessions();
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
 				return success(id, "new_session", result);
@@ -1890,6 +2082,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				if (!storedSession) {
 					return error(id, "switch_session", "Session not found.", "SESSION_NOT_FOUND");
 				}
+				await closeCodingHarnessSessions();
 				const result = await runtimeHost.switchSession(storedSession.path);
 				return success(id, "switch_session", result);
 			}

@@ -233,6 +233,7 @@ export type RpcCommand =
 	| { id?: string; type: "rename_session"; sessionToken: string; name: string }
 	| { id?: string; type: "delete_session"; sessionToken: string }
 	| { id?: string; type: "get_workspace_status" }
+	| { id?: string; type: "list_workspace_files" }
 	| { id?: string; type: "get_workspace_diff"; path: string }
 	| { id?: string; type: "read_workspace_file"; path: string }
 	| { id?: string; type: "write_workspace_file"; path: string; content: string }
@@ -401,6 +402,13 @@ export type RpcResponse =
 			data: { sessionId: string };
 	  }
 	| { id?: string; type: "response"; command: "get_workspace_status"; success: true; data: RpcWorkspaceStatus }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_workspace_files";
+			success: true;
+			data: { projectRoot: string; files: string[]; truncated: boolean };
+	  }
 	| {
 			id?: string;
 			type: "response";

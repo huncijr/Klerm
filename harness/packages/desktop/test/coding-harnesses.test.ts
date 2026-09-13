@@ -5,6 +5,9 @@ import {
 	canEnableWorkTogether,
 	hasThreeEnabledCodingHarnessAgents,
 	removeCodingHarnessSlot,
+	setAllCodingHarnessAgentsEnabled,
+	setExternalCodingHarnessesEnabled,
+	shouldShowAgentContext,
 	updateCodingHarnessSlot,
 } from "../src/lib/coding-harnesses.ts";
 import type { CodingHarnessSetup } from "../src/lib/model.ts";
@@ -37,6 +40,31 @@ describe("desktop coding harness slots", () => {
 			]).agents.map((agent) => agent.model),
 		).toEqual(["provider/one", "provider/two", "provider/three"]);
 		expect(canEnableWorkTogether(updateCodingHarnessSlot(configured, "agent3", { enabled: false }))).toBe(false);
+	});
+
+	test("shows selected enabled agent context without requiring Work together", () => {
+		const configured = { ...addCodingHarnessSlot(addCodingHarnessSlot(slots)), workTogetherEnabled: true };
+		expect(shouldShowAgentContext(configured, [])).toBe(false);
+		expect(shouldShowAgentContext(configured, ["agent2"])).toBe(true);
+		expect(shouldShowAgentContext({ ...configured, workTogetherEnabled: undefined }, ["agent2"])).toBe(true);
+		expect(
+			shouldShowAgentContext(updateCodingHarnessSlot(configured, "agent2", { enabled: false }), ["agent2"]),
+		).toBe(false);
+		expect(shouldShowAgentContext({ ...configured, externalHarnessesEnabled: false }, ["agent2"])).toBe(false);
+	});
+
+	test("disables, restores, and turns off configured agents without losing their settings", () => {
+		const configured = { ...addCodingHarnessSlot(addCodingHarnessSlot(slots)), workTogetherEnabled: true };
+		const disabled = setAllCodingHarnessAgentsEnabled(configured, false);
+		expect(disabled.agents.every((agent) => !agent.enabled)).toBe(true);
+		expect(disabled).not.toHaveProperty("workTogetherEnabled");
+		expect(setAllCodingHarnessAgentsEnabled(disabled, true).agents).toEqual(
+			configured.agents.map((agent) => ({ ...agent, enabled: true })),
+		);
+		const turnedOff = setExternalCodingHarnessesEnabled(configured, false);
+		expect(turnedOff.externalHarnessesEnabled).toBe(false);
+		expect(turnedOff.agents).toBe(configured.agents);
+		expect(turnedOff).not.toHaveProperty("workTogetherEnabled");
 	});
 
 	test("adds an enabled Klerm agent with the smallest free id", () => {

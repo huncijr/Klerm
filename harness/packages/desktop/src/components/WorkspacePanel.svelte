@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, RefreshCw, Save, X } from "@lucide/svelte";
+	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, RefreshCw, Save, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type { EditorInfo, WorkspaceFileStatus, WorkspaceStatus } from "../lib/model.ts";
 
@@ -11,11 +11,15 @@
 		content,
 		loading,
 		saving,
+		projectFiles,
+		projectFilesTruncated,
+		projectFilesLoading,
 		onclose,
 		onrefresh,
 		onselect,
 		onsave,
 		onopeneditor,
+		onviewprojectfiles,
 	}: {
 		workspace: WorkspaceStatus | undefined;
 		editors: EditorInfo[];
@@ -24,14 +28,20 @@
 		content: string | undefined;
 		loading: boolean;
 		saving: boolean;
+		projectFiles: string[] | undefined;
+		projectFilesTruncated: boolean;
+		projectFilesLoading: boolean;
 		onclose: () => void;
 		onrefresh: () => void;
 		onselect: (path: string) => void;
 		onsave: (path: string, content: string) => Promise<boolean>;
 		onopeneditor: (editor: EditorInfo["id"]) => void;
+		onviewprojectfiles: () => void;
 	} = $props();
 
 	let tab = $state<"diff" | "edit">("diff");
+	let listTab = $state<"changes" | "files">("changes");
+	let collapsedPaths = $state<string[]>([]);
 	let editContent = $state("");
 	let originalContent = $state("");
 	let editorMenuOpen = $state(false);
@@ -62,6 +72,38 @@
 		return "text-[#9aa3aa]";
 	}
 
+	interface ProjectFileNode {
+		name: string;
+		path: string;
+		isFile: boolean;
+		children: ProjectFileNode[];
+	}
+
+	function buildFileTree(paths: string[]): ProjectFileNode[] {
+		const root: ProjectFileNode = { name: "", path: "", isFile: false, children: [] };
+		for (const path of paths) {
+			let current = root;
+			const parts = path.split("/").filter(Boolean);
+			parts.forEach((part, index) => {
+				const isFile = index === parts.length - 1;
+				const nodePath = current.path ? `${current.path}/${part}` : part;
+				let child = current.children.find((candidate) => candidate.name === part);
+				if (!child) {
+					child = { name: part, path: nodePath, isFile, children: [] };
+					current.children.push(child);
+				}
+				current = child;
+			});
+		}
+		const sortNodes = (nodes: ProjectFileNode[]): ProjectFileNode[] =>
+			nodes
+				.map((node) => ({ ...node, children: sortNodes(node.children) }))
+				.sort((a, b) => (a.isFile === b.isFile ? a.name.localeCompare(b.name) : a.isFile ? 1 : -1));
+		return sortNodes(root.children);
+	}
+
+	const projectFileTree = $derived(buildFileTree(projectFiles ?? []));
+
 	function actorLabel(file: WorkspaceFileStatus): string {
 		const actor = file.attribution;
 		if (actor.source === "manual" || actor.source === "external") return actor.source;
@@ -88,6 +130,17 @@
 		if (line.startsWith("-") && !line.startsWith("---")) return "bg-[rgba(93,31,31,.3)] text-[#f0aaa3]";
 		if (line.startsWith("@@")) return "bg-[rgba(47,67,92,.25)] text-[#91b4df]";
 		return "text-[#7f8991]";
+	}
+
+	function showListTab(next: "changes" | "files"): void {
+		listTab = next;
+		if (next === "files") onviewprojectfiles();
+	}
+
+	function toggleTreeFolder(path: string): void {
+		collapsedPaths = collapsedPaths.includes(path)
+			? collapsedPaths.filter((candidate) => candidate !== path)
+			: [...collapsedPaths, path];
 	}
 
 	async function save(): Promise<void> {
@@ -133,8 +186,50 @@
 		<button type="button" aria-label="Close file panel" class="grid h-8 w-8 place-items-center rounded text-[#6f7b83] hover:bg-[#171d22] hover:text-[#d7dee2]" onclick={onclose}><X size={14} /></button>
 	</header>
 
+	<div class="flex shrink-0 items-center justify-end gap-1 bg-[#131c23] px-2 pt-2">
+		<button
+			type="button"
+			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "changes" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
+			onclick={() => showListTab("changes")}
+		>Changes</button>
+		<button
+			type="button"
+			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "files" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
+			onclick={() => showListTab("files")}
+		><FolderTree size={10} /> View project files</button>
+	</div>
 	<div class="shrink-0 overflow-y-auto bg-[#131c23] p-2" style={`height: ${listHeight}px;`}>
-		{#if !workspace?.isGit}
+		{#if listTab === "files"}
+			{#if projectFilesLoading}
+				<p class="px-2 py-3 text-[10px] text-[#68747c]">Loading project files...</p>
+			{:else if !projectFiles || projectFiles.length === 0}
+				<p class="px-2 py-3 text-[10px] text-[#68747c]">No files found in the project root.</p>
+			{:else}
+				{#snippet fileNode(node: ProjectFileNode, depth: number)}
+					{#if node.isFile}
+						<button type="button" class={`flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left ${selectedPath === node.path ? "bg-[#151b20]" : "hover:bg-[#11171c]"}`} style={`padding-left: ${8 + depth * 14}px;`} onclick={() => onselect(node.path)}>
+							<span class="min-w-0 flex-1 truncate font-mono text-[9px] text-[#bdc6cb]" title={node.path}>{node.name}</span>
+						</button>
+					{:else}
+						<button type="button" class="flex w-full min-w-0 items-center gap-1 rounded py-1 pr-2 text-left font-mono text-[9px] text-[#8fa3b0] hover:bg-[#11171c]" style={`padding-left: ${8 + depth * 14}px;`} onclick={() => toggleTreeFolder(node.path)}>
+							<ChevronDown size={10} class={`shrink-0 transition-transform ${collapsedPaths.includes(node.path) ? "-rotate-90" : ""}`} />
+							<span class="min-w-0 truncate">{node.name}/</span>
+						</button>
+						{#if !collapsedPaths.includes(node.path)}
+							{#each node.children as child (child.path)}
+								{@render fileNode(child, depth + 1)}
+							{/each}
+						{/if}
+					{/if}
+				{/snippet}
+				{#if projectFilesTruncated}
+					<p class="px-2 pb-1 text-[8px] text-[#d6a63f]">List truncated — showing the first {projectFiles.length} files.</p>
+				{/if}
+				{#each projectFileTree as node (node.path)}
+					{@render fileNode(node, 0)}
+				{/each}
+			{/if}
+		{:else if !workspace?.isGit}
 			<p class="px-2 py-3 text-[10px]/[1.5] text-[#68747c]">The selected root is not inside a Git repository. Klerm tool changes still appear in the activity feed.</p>
 		{:else if workspace.files.length === 0}
 			<p class="px-2 py-3 text-[10px] text-[#68747c]">Working tree clean.</p>

@@ -20,7 +20,7 @@
 		{ icon: "code", text: "Create a simple website in this folder" },
 		{ icon: "search", text: "Inspect this workspace and summarize folder sizes" },
 		{ icon: "risk", text: "Review this repo and list the riskiest files to change" },
-		{ icon: "terminal", text: "Scaffold an Agent 1-first todo CLI here" },
+		{ icon: "terminal", text: "Scaffold a todo CLI with your agent team" },
 	];
 
 	const dotClass = $derived(
@@ -41,7 +41,7 @@
 		class="mb-6 h-[78px] w-[78px] object-contain short-650:mb-3.5 short-650:h-[54px] short-650:w-[54px] short-500:hidden"
 	/>
 	<p class="mb-3.5 font-mono text-[9px] tracking-[.2em] text-accent short-500:mb-[9px] short-500:text-[7px]">
-		LOCAL-FIRST CODING AGENT
+		MULTI-AGENT CODING ORCHESTRATOR
 	</p>
 	<h1
 		class="m-0 text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-.045em] narrow-900:text-[clamp(30px,5vw,42px)] narrow-520:text-[28px] short-650:text-[clamp(27px,4vw,38px)] short-500:text-[25px]"
