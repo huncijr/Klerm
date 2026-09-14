@@ -450,6 +450,7 @@ export class KlermRoutingController {
 	private repeatedToolCalls = 0;
 	private task = "";
 	private explicitFrontierRequest = false;
+	private activeTaskAgents?: CodingHarnessAgentSettings[];
 	private readonly getSessionId?: () => string | undefined;
 	private readonly profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined;
 	private readonly sharedMemory?: () => string;
@@ -558,7 +559,7 @@ export class KlermRoutingController {
 		return compareStrength(self, other) === "stronger";
 	}
 
-	private workTogetherAgents(): CodingHarnessAgentSettings[] {
+	private configuredWorkTogetherAgents(): CodingHarnessAgentSettings[] {
 		const slots = this.codingHarnessSlots?.();
 		if (!slots?.externalHarnessesEnabled || !slots.workTogetherEnabled) return [];
 		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
@@ -570,6 +571,10 @@ export class KlermRoutingController {
 			return true;
 		});
 		return agents;
+	}
+
+	private workTogetherAgents(): CodingHarnessAgentSettings[] {
+		return this.activeTaskAgents ?? this.configuredWorkTogetherAgents();
 	}
 
 	private activeWorkTogetherAgent(lane: "local" | "frontier"): CodingHarnessAgentSettings | undefined {
@@ -687,7 +692,7 @@ export class KlermRoutingController {
 				this.state.delegationRecommended === true &&
 				!returnedFromFrontier &&
 				(this.state.delegationCycle ?? 0) === 0 &&
-				this.hasAvailablePeerModel("frontier");
+				(this.selectWorkTogetherPeer() !== undefined || this.hasAvailablePeerModel("frontier"));
 			return [
 				this.identityBlock("local"),
 				this.workspaceScopeBlock(),
@@ -984,6 +989,7 @@ export class KlermRoutingController {
 				`Model "${reference}" is unavailable. Use /${lane === "local" ? "agent1" : "agent2"} to select an available model.`,
 			);
 		}
+		if (this.workTogetherAgents().some((agent) => agent.model === reference)) return model;
 		const other = lane === "local" ? this.config.frontierModel : this.config.localModel;
 		if (other && modelReference(model) === other) {
 			throw new Error(
@@ -1240,6 +1246,11 @@ export class KlermRoutingController {
 		this.lastToolSignature = undefined;
 		this.repeatedToolCalls = 0;
 		this.explicitFrontierRequest = explicitlyRequestsFrontier(task);
+		this.activeTaskAgents = this.configuredWorkTogetherAgents().map((agent) => ({
+			...agent,
+			tools: [...agent.tools],
+			...(agent.specialties ? { specialties: [...agent.specialties] } : {}),
+		}));
 		const config = this.config;
 		const workTogetherAgents = this.workTogetherAgents();
 		if (
@@ -1673,6 +1684,7 @@ export class KlermRoutingController {
 	}
 
 	async enforceRequiredFrontierDelegation(localResponse: string): Promise<KlermEnforcedDelegation | undefined> {
+		const selectedWorkTogetherPeer = this.selectWorkTogetherPeer();
 		const recommendedEnforcement =
 			this.state.mode === "auto" &&
 			this.state.delegationRecommended === true &&
@@ -1685,7 +1697,7 @@ export class KlermRoutingController {
 			this.pendingDelegation
 		)
 			return undefined;
-		if (recommendedEnforcement && !this.hasAvailablePeerModel("frontier")) {
+		if (recommendedEnforcement && !selectedWorkTogetherPeer && !this.hasAvailablePeerModel("frontier")) {
 			await this.logLifecycle(
 				"HANDOFF_REJECTED",
 				"LOCAL",
@@ -1707,6 +1719,7 @@ export class KlermRoutingController {
 				reason,
 				summary,
 				remainingWork: this.task,
+				...(selectedWorkTogetherPeer ? { targetAgentId: selectedWorkTogetherPeer.id } : {}),
 			},
 			trigger,
 		);
@@ -2373,6 +2386,7 @@ export class KlermRoutingController {
 			this.pendingReturnToFrontier = undefined;
 			this.preparedTransitionId = undefined;
 			this.preparedAgentId = undefined;
+			this.activeTaskAgents = undefined;
 		}
 	}
 

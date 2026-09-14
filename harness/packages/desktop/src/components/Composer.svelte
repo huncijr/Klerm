@@ -97,6 +97,9 @@
 		onturnoffexternalagents,
 		onviewexternalagent,
 		onworktogetherchange,
+		teamRole,
+		pendingTeamRole,
+		onallrolechange,
 	}: {
 		draft: string;
 		attachments: ImageAttachment[];
@@ -167,6 +170,9 @@
 		onturnoffexternalagents: () => void;
 		onviewexternalagent: (id: string) => void;
 		onworktogetherchange: (enabled: boolean) => void;
+		teamRole?: WorkerRole;
+		pendingTeamRole?: WorkerRole;
+		onallrolechange: (role: WorkerRole) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -192,6 +198,7 @@
 	let mcpSelectedIndex = $state(0);
 	const activeAgentLabel = $derived(activeAgent === "agent1" ? "Agent 1" : "Agent 2");
 	const activeRole = $derived(activeAgent === "agent1" ? localRole : frontierRole);
+	const displayedTeamRole = $derived(pendingTeamRole ?? teamRole);
 	const approvalModes: ApprovalMode[] = ["never", "risky", "always"];
 	const approvalLabel = $derived(
 		approvalMode === "always" ? "Always allow" : approvalMode === "never" ? "Block risky" : "Ask risky",
@@ -206,10 +213,11 @@
 			: [],
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const roleControlDisabled = $derived(externalMode ? externalHarnessBusy : roleDisabled);
 	const allExternalAgentsDisabled = $derived(
 		externalAgentSlots.length > 0 && externalAgentSlots.every(({ slot }) => !slot.enabled),
 	);
-	const compactWorkTogetherLayout = $derived(externalMode && workTogetherVisible);
+	const compactWorkTogetherLayout = $derived(externalMode && workTogetherVisible && externalAgentSlots.length > 2);
 
 	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
 		if (kind === "claude-code") return "Claude Code";
@@ -272,7 +280,7 @@
 	});
 
 	$effect(() => {
-		if (roleDisabled) roleMenuOpen = false;
+		if (roleControlDisabled) roleMenuOpen = false;
 	});
 
 	$effect(() => {
@@ -528,7 +536,7 @@
 			{errorBanner}
 		</div>
 	{/if}
-	{#if buildModeOffer}
+	{#if buildModeOffer && !externalMode}
 		{#key buildModeOffer.id}
 			<div class="mx-auto mb-2 flex w-[min(820px,100%)] flex-wrap items-center gap-3 rounded-lg border border-[rgba(255,82,82,.5)] bg-[linear-gradient(90deg,rgba(105,25,25,.45),rgba(50,16,20,.72))] px-3 py-2 shadow-[0_10px_30px_rgba(75,0,0,.2)]" role="status" aria-live="polite">
 				<div class="relative grid h-8 w-8 shrink-0 place-items-center" aria-label="This suggestion expires in 10 seconds">
@@ -554,7 +562,11 @@
 			class="border-0 bg-transparent p-0 font-mono text-[8px] uppercase tracking-[.1em] text-[#737f87] cursor-pointer hover:text-[#cbd2d6] disabled:cursor-not-allowed disabled:opacity-45"
 			onclick={() => (roleMenuOpen = !roleMenuOpen)}
 		>
-			{activeAgentLabel} Mode: {activeRole === "planner" ? "Plan" : "Build"}
+			{#if externalMode}
+				All agents: {displayedTeamRole === "planner" ? "Plan" : displayedTeamRole === "builder" ? "Build" : "Mixed"}{pendingTeamRole ? " · next prompt" : ""}
+			{:else}
+				{activeAgentLabel} Mode: {activeRole === "planner" ? "Plan" : "Build"}
+			{/if}
 		</button>
 	</div>
 
@@ -770,33 +782,42 @@
 					type="button"
 					aria-label="Configure worker roles"
 					aria-expanded={roleMenuOpen}
-					disabled={roleDisabled}
+					disabled={roleControlDisabled}
 					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
 					onclick={() => (roleMenuOpen = !roleMenuOpen)}
 				>
-					{#if activeRole === "planner"}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
+					{#if displayedTeamRole === "planner" || (!externalMode && activeRole === "planner")}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
 					<ChevronDown size={11} />
 				</button>
 				{#if roleMenuOpen}
 					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
-						{#each [["agent1", localRole], ["agent2", frontierRole]] as [agent, role]}
-							<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
-								<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
+						{#if externalMode}
+							<div class="grid grid-cols-2 gap-1 py-1">
 								{#each ["planner", "builder"] as option}
 									<button
 										type="button"
-										class={`rounded-md border px-2 py-1.5 font-mono text-[8px] capitalize cursor-pointer ${role === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`}
+										class={`rounded-md border px-2 py-2 font-mono text-[8px] cursor-pointer ${displayedTeamRole === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`}
 										onclick={() => {
-											if (agent === "agent1") onlocalrolechange(option as WorkerRole);
-											else onfrontierrolechange(option as WorkerRole);
+											onallrolechange(option as WorkerRole);
+											roleMenuOpen = false;
 										}}
 									>
-										{option === "planner" ? "Plan" : "Build"}
+										{option === "planner" ? "All Plan" : "All Build"}
 									</button>
 								{/each}
 							</div>
-						{/each}
-						<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build has full tools and asks before risky actions.</p>
+							<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Applies to every enabled agent on the next prompt. External Plan is read-only only when its adapter enforces it.</p>
+						{:else}
+							{#each [["agent1", localRole], ["agent2", frontierRole]] as [agent, role]}
+								<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
+									<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
+									{#each ["planner", "builder"] as option}
+										<button type="button" class={`rounded-md border px-2 py-1.5 font-mono text-[8px] capitalize cursor-pointer ${role === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`} onclick={() => { if (agent === "agent1") onlocalrolechange(option as WorkerRole); else onfrontierrolechange(option as WorkerRole); }}>{option === "planner" ? "Plan" : "Build"}</button>
+									{/each}
+								</div>
+							{/each}
+							<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build has full tools and asks before risky actions.</p>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -849,7 +870,7 @@
 		</label>
 	</div>
 
-	<div class={`mx-auto mt-1.5 grid w-[min(820px,100%)] gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px] ${compactWorkTogetherLayout || (externalMode && externalAgentSlots.length < 2) ? "grid-cols-2" : "grid-cols-3"}`}>
+	<div class={`mx-auto mt-1.5 grid w-[min(820px,100%)] gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px] ${compactWorkTogetherLayout || (externalMode && externalAgentSlots.length < 2) ? "grid-cols-2" : externalMode && workTogetherVisible ? "grid-cols-2 min-[760px]:grid-cols-4" : "grid-cols-3"}`}>
 		{#if !compactWorkTogetherLayout}
 			<div class="min-w-0">
 			<ModelSelect
@@ -919,14 +940,14 @@
 			placeholder="Choose routing"
 			onchange={onroutingchange}
 		/>
-		{#if compactWorkTogetherLayout}
+		{#if workTogetherVisible}
 			<button
 				type="button"
 				role="switch"
 				aria-checked={workTogetherEnabled}
 				aria-label="Toggle Work together mode"
 				disabled={externalHarnessBusy || !workTogetherAvailable}
-				title={externalHarnessBusy ? "Saving harness setup" : workTogetherAvailable ? "Toggle Work together mode" : "Enable three runnable agents"}
+				title={externalHarnessBusy ? "Saving harness setup" : workTogetherAvailable ? "Toggle Work together mode" : "Enable two runnable agents"}
 				class={`flex min-w-0 items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-left disabled:opacity-50 ${externalHarnessBusy ? "disabled:cursor-wait" : "disabled:cursor-not-allowed"}`}
 				onclick={() => onworktogetherchange(!workTogetherEnabled)}
 			>

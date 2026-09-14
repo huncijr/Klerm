@@ -49,6 +49,33 @@ function processSpawner(runs: string[][]) {
 }
 
 describe("coding harness adapters", () => {
+	test("waits for an aborted child to settle before closing its session", async () => {
+		let child: ChildProcessWithoutNullStreams | undefined;
+		const spawnProcess: CodingHarnessProcessSpawner = () => {
+			child = new EventEmitter() as ChildProcessWithoutNullStreams;
+			Object.assign(child, {
+				stdin: new PassThrough(),
+				stdout: new PassThrough(),
+				stderr: new PassThrough(),
+				killed: false,
+			});
+			child.kill = vi.fn(() => {
+				queueMicrotask(() => child?.emit("close", null, "SIGTERM"));
+				return true;
+			});
+			return child;
+		};
+		const adapter = new OpenCodeAdapter(spawnProcess);
+		const events: CodingHarnessAdapterEvent[] = [];
+		adapter.subscribe((event) => events.push(event));
+		const session = await adapter.startSession(agent("opencode"), "/repo");
+		const prompt = adapter.prompt(session, "long task");
+		await adapter.closeSession(session);
+		await prompt;
+		expect(child?.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(events.at(-1)).toEqual({ type: "settled", agentId: "agent5", status: "aborted" });
+	});
+
 	test("OpenCode preserves its native session and attributes message and tool events", async () => {
 		const fake = processSpawner([
 			[

@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
+import { describeModelProfile, type KlermStrengthBand } from "./model-profile.ts";
 
 export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline"] as const;
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -21,6 +22,7 @@ export interface CodingHarnessAgentSettings {
 	role: CodingHarnessRole;
 	effort: CodingHarnessEffort;
 	tools: string[];
+	specialties?: string[];
 }
 
 export interface CodingHarnessSlots {
@@ -46,6 +48,26 @@ export interface RunnableCodingHarnessAgent {
 	agentId: string;
 	harness: CodingHarnessKind;
 	model: string;
+	role: CodingHarnessRole;
+	effort: CodingHarnessEffort;
+	tools: string[];
+	specialties: string[];
+	strengthBand: KlermStrengthBand;
+	strengths: string[];
+	limits: string[];
+	capabilitySource: "model-profile-inference";
+	adapterCapabilities: {
+		prompt: true;
+		abort: true;
+		resumeSession: boolean;
+		roleEnforcement: boolean;
+		childTaskEvents: false;
+	};
+}
+
+export interface ExcludedCodingHarnessAgent {
+	agentId: string;
+	reason: string;
 }
 
 export interface CodingHarnessSetup {
@@ -55,6 +77,7 @@ export interface CodingHarnessSetup {
 	externalPromptingAvailable: boolean;
 	workTogetherAvailable: boolean;
 	runnableAgents: RunnableCodingHarnessAgent[];
+	excludedAgents: ExcludedCodingHarnessAgent[];
 	blockingReason?: string;
 }
 
@@ -103,6 +126,7 @@ const MAX_MODEL_COUNT = 1000;
 const MAX_AGENTS = 4;
 const AGENT_ID_PATTERN = /^agent([1-9]\d*)$/;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+const SPECIALTY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 +#./_-]{0,63}$/;
 
 export function normalizeCodingHarnessKind(value: unknown): CodingHarnessKind | undefined {
 	if (typeof value !== "string") return undefined;
@@ -138,6 +162,17 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 				),
 			].slice(0, 64)
 		: [...fallback.tools];
+	const specialties = Array.isArray(candidate.specialties)
+		? [
+				...new Set(
+					candidate.specialties.flatMap((specialty) =>
+						typeof specialty === "string" && SPECIALTY_PATTERN.test(specialty.trim())
+							? [specialty.trim()]
+							: [],
+					),
+				),
+			].slice(0, 16)
+		: fallback.specialties;
 	return {
 		id,
 		kind,
@@ -147,6 +182,7 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		role,
 		effort,
 		tools,
+		...(specialties && specialties.length > 0 ? { specialties } : {}),
 	};
 }
 
@@ -176,7 +212,7 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 	return {
 		externalHarnessesEnabled: stored.externalHarnessesEnabled === true,
 		...(stored.externalHarnessesEnabled === true &&
-		agents.filter((agent) => agent.enabled).length >= 3 &&
+		agents.filter((agent) => agent.enabled).length >= 2 &&
 		stored.workTogetherEnabled === true
 			? { workTogetherEnabled: true }
 			: {}),
@@ -189,7 +225,10 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	const agent = value as Record<string, unknown>;
 	if (
 		Object.keys(agent).some(
-			(key) => !["id", "kind", "enabled", "model", "memoryProfileId", "role", "effort", "tools"].includes(key),
+			(key) =>
+				!["id", "kind", "enabled", "model", "memoryProfileId", "role", "effort", "tools", "specialties"].includes(
+					key,
+				),
 		)
 	) {
 		return undefined;
@@ -217,6 +256,15 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	) {
 		return undefined;
 	}
+	if (
+		agent.specialties !== undefined &&
+		(!Array.isArray(agent.specialties) ||
+			agent.specialties.some(
+				(specialty) => typeof specialty !== "string" || !SPECIALTY_PATTERN.test(specialty.trim()),
+			))
+	) {
+		return undefined;
+	}
 	return {
 		id: agent.id,
 		kind: agent.kind as CodingHarnessSlot,
@@ -226,6 +274,9 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,
 		tools: [...new Set(agent.tools as string[])],
+		...(Array.isArray(agent.specialties)
+			? { specialties: [...new Set((agent.specialties as string[]).map((specialty) => specialty.trim()))] }
+			: {}),
 	};
 }
 
@@ -250,7 +301,7 @@ export function parseCodingHarnessSlots(value: unknown): CodingHarnessSlots | un
 	const workTogetherEnabled =
 		setup.externalHarnessesEnabled &&
 		setup.workTogetherEnabled === true &&
-		parsedAgents.filter((agent) => agent.enabled).length >= 3;
+		parsedAgents.filter((agent) => agent.enabled).length >= 2;
 	return {
 		externalHarnessesEnabled: setup.externalHarnessesEnabled,
 		...(workTogetherEnabled ? { workTogetherEnabled: true } : {}),
@@ -280,51 +331,66 @@ export function createCodingHarnessSetup(
 	const runnable = (
 		agent: CodingHarnessAgentSettings,
 	): agent is CodingHarnessAgentSettings & { kind: CodingHarnessKind; model: string } => {
+		if (!slots.externalHarnessesEnabled) return false;
 		if (!agent.enabled || !agent.kind || !agent.model || !discovery.get(agent.kind)?.available) return false;
 		if (agent.kind === "klerm") return discovery.get("klerm")?.models.includes(agent.model) === true;
 		return connectedAdapters.has(agent.kind);
 	};
-	const runnableExternal = (
-		agent: CodingHarnessAgentSettings,
-	): agent is CodingHarnessAgentSettings & { kind: Exclude<CodingHarnessKind, "klerm">; model: string } =>
-		agent.kind !== "klerm" && runnable(agent);
-	const runnableKlerm = (
-		agent: CodingHarnessAgentSettings,
-	): agent is CodingHarnessAgentSettings & { kind: "klerm"; model: string } =>
-		agent.kind === "klerm" && runnable(agent);
-	const external = slots.agents.filter(runnableExternal).sort(byAgentId);
-	const klerm = slots.agents.filter(runnableKlerm).sort(byAgentId);
-	const ordered = external.length > 0 ? [external[0]!, ...klerm, ...external.slice(1)] : klerm;
-	const runnableAgents = ordered.map((agent, index) => ({
-		order: index + 1,
-		agentId: agent.id,
-		harness: agent.kind,
-		model: agent.model,
-	}));
+	const ordered = slots.agents.filter(runnable).sort(byAgentId);
+	const runnableAgents = ordered.map((agent, index) => {
+		const profile = describeModelProfile(agent.model);
+		return {
+			order: index + 1,
+			agentId: agent.id,
+			harness: agent.kind,
+			model: agent.model,
+			role: agent.role,
+			effort: agent.effort,
+			tools: [...agent.tools],
+			specialties: [...(agent.specialties ?? [])],
+			strengthBand: profile.band,
+			strengths: profile.strengths,
+			limits: profile.limits,
+			capabilitySource: "model-profile-inference" as const,
+			adapterCapabilities: {
+				prompt: true as const,
+				abort: true as const,
+				resumeSession: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
+				roleEnforcement: agent.kind === "klerm" || agent.kind === "codex",
+				childTaskEvents: false as const,
+			},
+		};
+	});
 	const activeCount = runnableAgents.length;
 	const effectiveRouting =
 		!slots.externalHarnessesEnabled || activeCount === 0 ? "disabled" : activeCount === 1 ? "none" : "auto";
-	const unavailableExternal = slots.agents
-		.filter((agent) => agent.enabled && agent.kind && agent.kind !== "klerm")
-		.sort(byAgentId)
-		.find((agent) => !discovery.get(agent.kind!)?.available || !agent.model || !connectedAdapters.has(agent.kind!));
 	const harnessLabel = (kind: CodingHarnessKind) =>
 		kind === "opencode"
 			? "OpenCode"
 			: kind === "claude-code"
 				? "Claude Code"
 				: kind.charAt(0).toUpperCase() + kind.slice(1);
-	let blockingReason: string | undefined;
-	if (slots.externalHarnessesEnabled && unavailableExternal?.kind) {
-		const label = `Agent ${unavailableExternal.id.slice(5)} (${harnessLabel(unavailableExternal.kind)})`;
-		if (!discovery.get(unavailableExternal.kind)?.available) blockingReason = `${label} is not available.`;
-		else if (!unavailableExternal.model) blockingReason = `${label} has no configured model.`;
-		else if (!connectedAdapters.has(unavailableExternal.kind)) {
-			blockingReason = `${label} has no connected prompt adapter.`;
-		}
-	} else if (slots.externalHarnessesEnabled && activeCount === 0) {
-		blockingReason = "Enable at least one runnable coding agent before sending a prompt.";
-	}
+	const excludedAgents: ExcludedCodingHarnessAgent[] = slots.agents
+		.filter((agent) => agent.enabled)
+		.sort(byAgentId)
+		.flatMap((agent) => {
+			const label = `Agent ${agent.id.slice(5)}${agent.kind ? ` (${harnessLabel(agent.kind)})` : ""}`;
+			if (!agent.kind) return [{ agentId: agent.id, reason: `${label} has no configured harness.` }];
+			if (!discovery.get(agent.kind)?.available)
+				return [{ agentId: agent.id, reason: `${label} is not available.` }];
+			if (!agent.model) return [{ agentId: agent.id, reason: `${label} has no configured model.` }];
+			if (agent.kind === "klerm" && !discovery.get("klerm")?.models.includes(agent.model)) {
+				return [{ agentId: agent.id, reason: `${label} model is not available.` }];
+			}
+			if (agent.kind !== "klerm" && !connectedAdapters.has(agent.kind)) {
+				return [{ agentId: agent.id, reason: `${label} has no connected prompt adapter.` }];
+			}
+			return [];
+		});
+	const blockingReason =
+		slots.externalHarnessesEnabled && activeCount === 0
+			? (excludedAgents[0]?.reason ?? "Enable at least one runnable coding agent before sending a prompt.")
+			: undefined;
 	const externalPromptingAvailable = runnableAgents.some((agent) => agent.harness !== "klerm") && !blockingReason;
 	return {
 		slots,
@@ -334,8 +400,9 @@ export function createCodingHarnessSetup(
 		})),
 		effectiveRouting,
 		externalPromptingAvailable,
-		workTogetherAvailable: activeCount >= 3,
+		workTogetherAvailable: activeCount >= 2,
 		runnableAgents,
+		excludedAgents,
 		...(blockingReason ? { blockingReason } : {}),
 	};
 }

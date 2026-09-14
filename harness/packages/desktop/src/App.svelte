@@ -3,6 +3,12 @@
 	import { open as openDialog } from "@tauri-apps/plugin-dialog";
 	import { onMount, untrack } from "svelte";
 	import {
+		bridgeEventCard,
+		preventDesktopContextMenu,
+		teamRoleChange,
+		type WorkspaceEditDraft,
+	} from "./lib/agent-workspace.ts";
+	import {
 		contentImages,
 		describeToolCall,
 		messageText,
@@ -17,6 +23,7 @@
 		addCodingHarnessSlot,
 		assignWorkTogetherModels,
 		removeCodingHarnessSlot,
+		setAllCodingHarnessAgentRoles,
 		setAllCodingHarnessAgentsEnabled,
 		setExternalCodingHarnessesEnabled,
 		shouldShowAgentContext,
@@ -26,12 +33,14 @@
 		AgentMessage,
 		BashResult,
 		ChatMessage,
+		CodingHarnessBridgeEvent,
 		CodingHarnessKind,
 		CodingHarnessSetup,
 		CodingHarnessSlotSettings,
 		CustomModelEntry,
 		DesktopAppearance,
 		DesktopHandshake,
+		DesktopProject,
 		DesktopSettings,
 		DesktopSession,
 		EditorInfo,
@@ -99,6 +108,8 @@
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
+	let projects = $state<DesktopProject[]>(loadStoredProjects());
+	let sessionProjects = $state<Record<string, string>>(loadStoredSessionProjects());
 	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
@@ -152,15 +163,24 @@
 	let codingHarnessSetupLoading = $state(false);
 	let codingHarnessSetupError = $state("");
 	let visibleAgentIds = $state<string[]>([]);
+	let pendingTeamRole = $state<WorkerRole | undefined>(undefined);
+	let teamRoleApplying = $state(false);
+	let workspaceEditDrafts = $state<Record<string, WorkspaceEditDraft>>({});
 	// Agent view visibility is per session: each session restores exactly the
 	// views that were opened in it, and a first visit opens none.
 	const agentViewsBySession = new Map<string, string[]>();
+	const agentClearBySession = new Map<string, Record<string, number>>();
+	let agentClearThrough = $state<Record<string, number>>({});
 	function rememberAgentViews(): void {
 		const sessionId = lastState?.sessionId;
-		if (sessionId) agentViewsBySession.set(sessionId, [...visibleAgentIds]);
+		if (sessionId) {
+			agentViewsBySession.set(sessionId, [...visibleAgentIds]);
+			agentClearBySession.set(sessionId, { ...agentClearThrough });
+		}
 	}
 	function restoreAgentViews(sessionId: string | undefined): void {
 		visibleAgentIds = sessionId ? [...(agentViewsBySession.get(sessionId) ?? [])] : [];
+		agentClearThrough = sessionId ? { ...(agentClearBySession.get(sessionId) ?? {}) } : {};
 	}
 	let agentViewsHeight = $state(260);
 	let agentContextContainer: HTMLElement | undefined = $state();
@@ -179,7 +199,13 @@
 	const toolCards = new Map<string, number>();
 
 	const interactionActive = $derived(
-		taskActive || terminalBusy || configBusy !== undefined || sessionTransitionActive || thinkingBusy !== undefined || mcpBusy,
+		taskActive ||
+			teamRoleApplying ||
+			terminalBusy ||
+			configBusy !== undefined ||
+			sessionTransitionActive ||
+			thinkingBusy !== undefined ||
+			mcpBusy,
 	);
 	const sendDisabled = $derived(!backendReady || interactionActive || Boolean(codingHarnessSetup?.blockingReason));
 	const externalHarnessesEnabled = $derived(codingHarnessSetup?.slots.externalHarnessesEnabled === true);
@@ -199,7 +225,7 @@
 	const configuredHarnessAgents = $derived(codingHarnessSetup?.slots.agents ?? []);
 	const firstHarnessAgent = $derived(configuredHarnessAgents[0]);
 	const secondHarnessAgent = $derived(configuredHarnessAgents[1]);
-	const workTogetherVisible = $derived((codingHarnessSetup?.runnableAgents.length ?? 0) >= 3);
+	const workTogetherVisible = $derived((codingHarnessSetup?.runnableAgents.length ?? 0) >= 2);
 	const klermModelCatalog = $derived(
 		[...localOptions, ...frontierOptions]
 			.map((option) => option.value)
@@ -209,6 +235,10 @@
 	const workTogetherEnabled = $derived(
 		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
 	);
+	const teamRole = $derived.by<WorkerRole | undefined>(() => {
+		const roles = new Set(configuredHarnessAgents.filter((agent) => agent.enabled).map((agent) => agent.role));
+		return roles.size === 1 ? [...roles][0] : undefined;
+	});
 	const agentContextVisible = $derived(
 		codingHarnessSetup ? shouldShowAgentContext(codingHarnessSetup.slots, visibleAgentIds) : false,
 	);
@@ -242,6 +272,75 @@
 		document.documentElement.dataset.theme =
 			effective === "system" ? (systemPrefersDark ? "dark" : "light") : effective;
 	});
+
+	$effect(() => {
+		localStorage.setItem("klerm-projects", JSON.stringify(projects));
+	});
+
+	$effect(() => {
+		localStorage.setItem("klerm-session-projects", JSON.stringify(sessionProjects));
+	});
+
+	function loadStoredProjects(): DesktopProject[] {
+		try {
+			const raw = localStorage.getItem("klerm-projects");
+			if (!raw) return [];
+			const parsed: unknown = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter(
+				(item): item is DesktopProject =>
+					typeof item === "object" && item !== null && typeof (item as DesktopProject).id === "string" && typeof (item as DesktopProject).name === "string",
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	function loadStoredSessionProjects(): Record<string, string> {
+		try {
+			const raw = localStorage.getItem("klerm-session-projects");
+			if (!raw) return {};
+			const parsed: unknown = JSON.parse(raw);
+			if (typeof parsed !== "object" || parsed === null) return {};
+			const entries = Object.entries(parsed as Record<string, unknown>);
+			const valid: Record<string, string> = {};
+			for (const [key, value] of entries) {
+				if (typeof value === "string") valid[key] = value;
+			}
+			return valid;
+		} catch {
+			return {};
+		}
+	}
+
+	function createProject(name: string): void {
+		const trimmed = name.trim();
+		if (!trimmed) return;
+		const id = `proj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		projects = [...projects, { id, name: trimmed }];
+	}
+
+	function renameProject(project: DesktopProject, name: string): void {
+		const trimmed = name.trim();
+		if (!trimmed) return;
+		projects = projects.map((item) => (item.id === project.id ? { ...item, name: trimmed } : item));
+	}
+
+	function deleteProject(project: DesktopProject): void {
+		projects = projects.filter((item) => item.id !== project.id);
+		const next: Record<string, string> = {};
+		for (const [token, projectId] of Object.entries(sessionProjects)) {
+			if (projectId !== project.id) next[token] = projectId;
+		}
+		sessionProjects = next;
+	}
+
+	function moveSessionToProject(session: DesktopSession, projectId: string | undefined): void {
+		const next = { ...sessionProjects };
+		if (projectId) next[session.sessionToken] = projectId;
+		else delete next[session.sessionToken];
+		sessionProjects = next;
+	}
 
 	$effect(() => {
 		const enabledIds = configuredHarnessAgents.filter((agent) => agent.enabled).map((agent) => agent.id);
@@ -526,11 +625,38 @@
 		return entry?.type === "activity" ? entry.activity : undefined;
 	}
 
+	function renderCodingHarnessBridgeEvent(event: CodingHarnessBridgeEvent): void {
+		const card = bridgeEventCard(event);
+		const existingEntry = feed.find(
+			(item) => item.type === "activity" && item.activity.dedupeId === card.dedupeId,
+		);
+		const existing = existingEntry?.type === "activity" ? existingEntry.activity : undefined;
+		if (existing) {
+			existing.title = card.title;
+			existing.detail = card.detail;
+			existing.tone = card.tone;
+			existing.status = card.status;
+			existing.agentId = card.agentId;
+			existing.bridgeStatus = card.bridgeStatus;
+			if (card.agentId && existingEntry && existingEntry.id <= (agentClearThrough[card.agentId] ?? 0)) {
+				existingEntry.id = ++feedSeq;
+				existing.id = ++timelineSeq;
+			}
+			return;
+		}
+		const item = pushTimeline("bridge", card.tone, card.title, card.detail, card.status, card.dedupeId);
+		item.agentId = card.agentId;
+		item.bridgeStatus = card.bridgeStatus;
+	}
+
 	function clearFeed(): void {
 		buildModeOffer = undefined;
 		lastFallbackReason = "";
 		toolCards.clear();
 		feed.length = 0;
+		feedSeq = 0;
+		timelineSeq = 0;
+		messageSeq = 0;
 		streamingMessageId = undefined;
 	}
 
@@ -767,6 +893,12 @@
 				}
 				continue;
 			}
+			if (entry.type === "custom" && entry.customType === "klerm-bridge-event") {
+				const bridgeEvent = entry.data as CodingHarnessBridgeEvent;
+				renderCodingHarnessBridgeEvent(bridgeEvent);
+				replayAgentId = bridgeEvent.agentId ?? replayAgentId;
+				continue;
+			}
 			if (entry.type !== "message" || !entry.message) continue;
 			const message = entry.message;
 			if (message.role === "user" || message.role === "assistant") {
@@ -902,7 +1034,14 @@
 										? "Task failed"
 										: undefined;
 				taskActive = false;
-				if (!failed && !taskStopping && !taskHadErrors && taskSawAssistant && settledRole === "planner") {
+				if (
+					!externalHarnessesEnabled &&
+					!failed &&
+					!taskStopping &&
+					!taskHadErrors &&
+					taskSawAssistant &&
+					settledRole === "planner"
+				) {
 					buildModeOffer = { id: ++buildModeOfferSeq, agent: settledAgent };
 				}
 				if (outcomeFailed || taskHadExecution || taskStopping) {
@@ -939,6 +1078,14 @@
 					void reloadMcpServers();
 				} else {
 					void refreshMcpStatus();
+				}
+				if (pendingTeamRole) {
+					const queuedRole = pendingTeamRole;
+					teamRoleApplying = true;
+					void applyAllCodingHarnessAgentRoles(queuedRole).finally(() => {
+						pendingTeamRole = undefined;
+						teamRoleApplying = false;
+					});
 				}
 				return;
 			}
@@ -1033,6 +1180,10 @@
 				if (state?.lastTransition) addRoutingTransitionCard(state.lastTransition);
 				renderFallbackReason(state);
 				void refreshThinkingLevels();
+				return;
+			}
+			case "bridge_event": {
+				renderCodingHarnessBridgeEvent(event.event as CodingHarnessBridgeEvent);
 				return;
 			}
 			case "thinking_level_changed": {
@@ -1364,12 +1515,25 @@
 		}
 	}
 
-	async function setCodingHarnessAgentRole(id: string, role: WorkerRole): Promise<void> {
-		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
-		if (!agent || !(await updateCodingHarnessAgent(id, { role }))) return;
+	async function applyAllCodingHarnessAgentRoles(role: WorkerRole): Promise<boolean> {
+		if (!codingHarnessSetup) return false;
+		const agents = codingHarnessSetup.slots.agents;
+		if (!(await saveCodingHarnessSlots(setAllCodingHarnessAgentRoles(codingHarnessSetup.slots, role)))) return false;
+		const update: { localRole?: WorkerRole; frontierRole?: WorkerRole } = {};
+		if (agents.some((agent) => agent.enabled && agent.kind === "klerm" && agent.id === "agent1")) {
+			update.localRole = role;
+		}
+		if (agents.some((agent) => agent.enabled && agent.kind === "klerm" && agent.id === "agent2")) {
+			update.frontierRole = role;
+		}
+		return Object.keys(update).length === 0 || applyConfigUpdate(update);
+	}
+
+	function setAllCodingHarnessRoles(role: WorkerRole): void {
 		buildModeOffer = undefined;
-		if (agent.kind === "klerm" && id === "agent1") await applyConfigUpdate({ localRole: role });
-		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierRole: role });
+		const change = teamRoleChange(role, taskActive);
+		if (change.pendingRole) pendingTeamRole = change.pendingRole;
+		if (change.applyRole) void applyAllCodingHarnessAgentRoles(change.applyRole);
 	}
 
 	async function setAllCodingHarnessAgents(enabled: boolean): Promise<void> {
@@ -1397,6 +1561,11 @@
 		visibleAgentIds = visibleAgentIds.includes(id)
 			? visibleAgentIds.filter((candidate) => candidate !== id)
 			: [...visibleAgentIds, id].slice(-4);
+		rememberAgentViews();
+	}
+
+	function clearAgentOutput(id: string): void {
+		agentClearThrough = { ...agentClearThrough, [id]: feedSeq };
 		rememberAgentViews();
 	}
 
@@ -2020,7 +2189,16 @@
 	}
 
 	async function sendMessage(text: string, images: ImageAttachment[] = []): Promise<void> {
-		if ((!text && images.length === 0) || taskActive || configBusy || sessionTransitionActive || !backendReady) return;
+		if (
+			(!text && images.length === 0) ||
+			taskActive ||
+			teamRoleApplying ||
+			codingHarnessSetupLoading ||
+			configBusy ||
+			sessionTransitionActive ||
+			!backendReady
+		)
+			return;
 		buildModeOffer = undefined;
 		bottomPanelOpen = false;
 		bottomPanelRevealed = true;
@@ -2126,6 +2304,8 @@
 
 <Splash visible={splashVisible} />
 
+<svelte:window oncontextmenu={preventDesktopContextMenu} />
+
 <div
 	class={`relative grid h-full w-full overflow-hidden bg-bg opacity-100 transition-opacity duration-300 ${shellColumns}`}
 	class:opacity-0={splashVisible}
@@ -2134,6 +2314,8 @@
 	{#if !(settingsOpen && settingsFullscreen)}
 	<Sidebar
 		{sessions}
+		{projects}
+		{sessionProjects}
 		activeSessionToken={lastState?.sessionFile ?? ""}
 		{mcpStatus}
 		{mcpBusy}
@@ -2144,6 +2326,10 @@
 		onswitch={(session) => void switchSession(session)}
 		onrename={renameSession}
 		ondelete={(session) => (pendingDelete = session)}
+		oncreateproject={createProject}
+		onrenameproject={renameProject}
+		ondeleteproject={deleteProject}
+		onmovesession={moveSessionToProject}
 		onexpand={() => (sessionsExpanded = true)}
 		onrefreshmcp={() => void refreshMcpStatus()}
 		onreloadmcp={() => void reloadMcpServers()}
@@ -2257,14 +2443,14 @@
 							agents={configuredHarnessAgents}
 							visibleIds={visibleAgentIds}
 							items={feed}
+							clearThrough={agentClearThrough}
 							activeAgentId={activeHarnessAgentId}
 							{taskActive}
 							mcpServers={mcpServers}
 							connectedHarnessKinds={codingHarnessSetup?.harnesses.filter((harness) => harness.adapterConnected).map((harness) => harness.kind) ?? []}
-							controlsDisabled={codingHarnessSetupLoading}
 							onclose={closeAgentView}
 							oneffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
-							onrolechange={(id, role) => void setCodingHarnessAgentRole(id, role)}
+							onclear={clearAgentOutput}
 							onrerun={rerunPrompt}
 							ontoggle={toggleTimeline}
 						/>
@@ -2353,6 +2539,8 @@
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			{buildModeOffer}
+			{teamRole}
+			{pendingTeamRole}
 			onsend={(text, images) => void sendMessage(text, images)}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
@@ -2391,6 +2579,7 @@
 			onturnoffexternalagents={() => void turnOffExternalCodingHarnesses()}
 			onviewexternalagent={toggleAgentView}
 			onworktogetherchange={(enabled) => void setWorkTogetherMode(enabled)}
+			onallrolechange={setAllCodingHarnessRoles}
 		/>
 
 		{#if bottomPanelVisible}
@@ -2425,6 +2614,7 @@
 	</main>
 	{#if workspacePanelOpen && !settingsOpen}
 		<WorkspacePanel
+			bind:editDrafts={workspaceEditDrafts}
 			{workspace}
 			{editors}
 			selectedPath={selectedFilePath}

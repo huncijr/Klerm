@@ -3,8 +3,9 @@ import {
 	addCodingHarnessSlot,
 	assignWorkTogetherModels,
 	canEnableWorkTogether,
-	hasThreeEnabledCodingHarnessAgents,
+	hasTwoEnabledCodingHarnessAgents,
 	removeCodingHarnessSlot,
+	setAllCodingHarnessAgentRoles,
 	setAllCodingHarnessAgentsEnabled,
 	setExternalCodingHarnessesEnabled,
 	shouldShowAgentContext,
@@ -20,17 +21,17 @@ const slots: CodingHarnessSetup["slots"] = {
 };
 
 describe("desktop coding harness slots", () => {
-	test("shows team controls when at least three agents are enabled", () => {
-		expect(hasThreeEnabledCodingHarnessAgents(slots)).toBe(false);
-		const configured = addCodingHarnessSlot(addCodingHarnessSlot(slots));
-		expect(hasThreeEnabledCodingHarnessAgents(configured)).toBe(true);
-		expect(
-			hasThreeEnabledCodingHarnessAgents(updateCodingHarnessSlot(configured, "agent3", { enabled: false })),
-		).toBe(false);
+	test("shows team controls when at least two agents are enabled", () => {
+		expect(hasTwoEnabledCodingHarnessAgents(slots)).toBe(false);
+		const configured = addCodingHarnessSlot(slots);
+		expect(hasTwoEnabledCodingHarnessAgents(configured)).toBe(true);
+		expect(hasTwoEnabledCodingHarnessAgents(updateCodingHarnessSlot(configured, "agent2", { enabled: false }))).toBe(
+			false,
+		);
 	});
 
-	test("can enable Work together when three agents are enabled", () => {
-		const configured = addCodingHarnessSlot(addCodingHarnessSlot(slots));
+	test("can enable Work together when two agents are enabled", () => {
+		const configured = addCodingHarnessSlot(slots);
 		expect(canEnableWorkTogether(configured)).toBe(true);
 		expect(
 			assignWorkTogetherModels(configured, "provider/one", "provider/two", [
@@ -38,8 +39,8 @@ describe("desktop coding harness slots", () => {
 				"provider/two",
 				"provider/three",
 			]).agents.map((agent) => agent.model),
-		).toEqual(["provider/one", "provider/two", "provider/three"]);
-		expect(canEnableWorkTogether(updateCodingHarnessSlot(configured, "agent3", { enabled: false }))).toBe(false);
+		).toEqual(["provider/one", "provider/two"]);
+		expect(canEnableWorkTogether(updateCodingHarnessSlot(configured, "agent2", { enabled: false }))).toBe(false);
 	});
 
 	test("shows selected enabled agent context without requiring Work together", () => {
@@ -81,12 +82,21 @@ describe("desktop coding harness slots", () => {
 		});
 	});
 
+	test("applies a team role only to enabled agents", () => {
+		const configured = addCodingHarnessSlot(slots);
+		const withDisabledPeer = updateCodingHarnessSlot(configured, "agent2", { enabled: false, role: "builder" });
+		expect(setAllCodingHarnessAgentRoles(withDisabledPeer, "planner").agents).toMatchObject([
+			{ id: "agent1", role: "planner" },
+			{ id: "agent2", role: "builder" },
+		]);
+	});
+
 	test("removes Agent 1 only when at least three agents are configured", () => {
 		const withAgent2 = addCodingHarnessSlot(slots);
 		expect(removeCodingHarnessSlot(withAgent2, "agent1")).toBe(withAgent2);
 		expect(removeCodingHarnessSlot(withAgent2, "agent2").agents.map((agent) => agent.id)).toEqual(["agent1"]);
 		const together = { ...addCodingHarnessSlot(addCodingHarnessSlot(slots)), workTogetherEnabled: true };
 		expect(removeCodingHarnessSlot(together, "agent1").agents.map((agent) => agent.id)).toEqual(["agent2", "agent3"]);
-		expect(removeCodingHarnessSlot(together, "agent3")).not.toHaveProperty("workTogetherEnabled");
+		expect(removeCodingHarnessSlot(together, "agent3")).toHaveProperty("workTogetherEnabled", true);
 	});
 });

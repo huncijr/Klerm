@@ -1,6 +1,12 @@
 <script lang="ts">
-	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, RefreshCw, Save, X } from "@lucide/svelte";
+	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, RefreshCw, RotateCcw, Save, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
+	import {
+		resolveWorkspaceEditDraft,
+		setWorkspaceEditDraft,
+		type WorkspaceEditDraft,
+		workspaceEditDraftKey,
+	} from "../lib/agent-workspace.ts";
 	import type { EditorInfo, WorkspaceFileStatus, WorkspaceStatus } from "../lib/model.ts";
 
 	let {
@@ -14,6 +20,7 @@
 		projectFiles,
 		projectFilesTruncated,
 		projectFilesLoading,
+		editDrafts = $bindable<Record<string, WorkspaceEditDraft>>({}),
 		onclose,
 		onrefresh,
 		onselect,
@@ -31,6 +38,7 @@
 		projectFiles: string[] | undefined;
 		projectFilesTruncated: boolean;
 		projectFilesLoading: boolean;
+		editDrafts?: Record<string, WorkspaceEditDraft>;
 		onclose: () => void;
 		onrefresh: () => void;
 		onselect: (path: string) => void;
@@ -50,11 +58,14 @@
 	let listHeight = $state(180);
 
 	$effect(() => {
-		selectedPath;
-		const next = content ?? "";
-		editContent = next;
-		originalContent = next;
-		if (content === undefined && tab === "edit") tab = "diff";
+		const path = selectedPath;
+		const loaded = content;
+		if (!path || loaded === undefined) return;
+		const key = workspaceEditDraftKey(workspace?.projectRoot ?? "", path);
+		const next = resolveWorkspaceEditDraft(editDrafts, key, loaded);
+		if (editDrafts[key] !== next) editDrafts = setWorkspaceEditDraft(editDrafts, key, next.content, next.original);
+		editContent = next.content;
+		originalContent = next.original;
 	});
 
 	onMount(() => {
@@ -145,7 +156,24 @@
 
 	async function save(): Promise<void> {
 		if (!selectedPath || editContent === originalContent) return;
-		if (await onsave(selectedPath, editContent)) originalContent = editContent;
+		if (await onsave(selectedPath, editContent)) {
+			originalContent = editContent;
+			const key = workspaceEditDraftKey(workspace?.projectRoot ?? "", selectedPath);
+			editDrafts = setWorkspaceEditDraft(editDrafts, key, editContent, editContent);
+		}
+	}
+
+	function updateDraft(): void {
+		if (!selectedPath) return;
+		const key = workspaceEditDraftKey(workspace?.projectRoot ?? "", selectedPath);
+		editDrafts = setWorkspaceEditDraft(editDrafts, key, editContent, originalContent);
+	}
+
+	function discardDraft(): void {
+		if (!selectedPath) return;
+		editContent = originalContent;
+		const key = workspaceEditDraftKey(workspace?.projectRoot ?? "", selectedPath);
+		editDrafts = setWorkspaceEditDraft(editDrafts, key, originalContent, originalContent);
 	}
 
 	function startListResize(event: PointerEvent): void {
@@ -257,17 +285,46 @@
 	<div class="flex min-h-0 flex-1 flex-col bg-[#0e151b]">
 		{#if selectedPath}
 			<div class="flex h-10 shrink-0 items-center border-b border-line-soft px-2">
-				<button type="button" class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] ${tab === "diff" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "text-[#788994] hover:text-[#cbd3d7]"}`} onclick={() => (tab = "diff")}><Braces size={11} /> Diff</button>
-				<button type="button" disabled={content === undefined} class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] ${tab === "edit" ? "border border-[rgba(65,159,96,.35)] bg-[rgba(34,101,55,.28)] text-[#a8d9b5]" : "text-[#788994] hover:text-[#cbd3d7]"} disabled:cursor-not-allowed disabled:opacity-35`} onclick={() => (tab = "edit")}><FileCode2 size={11} /> Edit</button>
-				<span class="ml-2 min-w-0 flex-1 truncate font-mono text-[8px] text-[#77838b]" title={selectedPath}>{selectedPath}</span>
-				{#if tab === "edit"}<button type="button" disabled={saving || editContent === originalContent} class="flex h-7 items-center gap-1 rounded border border-[#5fae74] bg-[#2f7d48] px-2 text-[8px] font-semibold text-white hover:bg-[#3d9158] disabled:cursor-not-allowed disabled:border-[#2d3a32] disabled:bg-[#202b24] disabled:text-[#596b60]" onclick={() => void save()}><Save size={10} /> Save</button>{/if}
+				<button
+					type="button"
+					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] ${tab === "diff" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
+					onclick={() => (tab = "diff")}
+				><Braces size={11} /> Diff</button>
+				<button
+					type="button"
+					disabled={content === undefined}
+					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] disabled:cursor-not-allowed disabled:opacity-35 ${tab === "edit" ? "border border-[rgba(65,159,96,.35)] bg-[rgba(34,101,55,.28)] text-[#a8d9b5]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
+					onclick={() => (tab = "edit")}
+				><FileCode2 size={11} /> Edit</button>
+				<span class="ml-2 min-w-0 flex-1 truncate font-mono text-[8px] text-[#77838b]" title={selectedPath}
+					>{selectedPath}</span
+				>
+				{#if tab === "edit"}
+					<button
+						type="button"
+						disabled={saving || editContent === originalContent}
+						class="mr-1 flex h-7 items-center gap-1 rounded px-2 text-[8px] text-[#89959c] hover:bg-[#1a252d] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+						onclick={discardDraft}
+					><RotateCcw size={10} /> Discard</button>
+					<button
+						type="button"
+						disabled={saving || editContent === originalContent}
+						class="flex h-7 items-center gap-1 rounded border border-[#5fae74] bg-[#2f7d48] px-2 text-[8px] font-semibold text-white hover:bg-[#3d9158] disabled:cursor-not-allowed disabled:border-[#2d3a32] disabled:bg-[#202b24] disabled:text-[#596b60]"
+						onclick={() => void save()}
+					><Save size={10} /> Save</button>
+				{/if}
 			</div>
 			{#if loading}
 				<div class="grid flex-1 place-items-center font-mono text-[9px] text-[#65717a]">Loading file...</div>
 			{:else if tab === "edit" && content !== undefined}
-				<textarea bind:value={editContent} aria-label={`Edit ${selectedPath}`} class="min-h-0 flex-1 resize-none border-0 bg-[#101a20] p-4 font-mono text-[11px]/[1.6] text-[#d2dce1] outline-none [tab-size:2] [scrollbar-width:thin] focus:bg-[#132028]"></textarea>
+				<textarea
+					bind:value={editContent}
+					aria-label={`Edit ${selectedPath}`}
+					class="min-h-0 flex-1 resize-none border-0 bg-[#101a20] p-4 font-mono text-[11px]/[1.6] text-[#d2dce1] outline-none [tab-size:2] [scrollbar-width:thin] focus:bg-[#132028]"
+					oninput={updateDraft}
+				></textarea>
 			{:else}
-				<pre class="m-0 min-h-0 flex-1 overflow-auto bg-[#101820] py-2 font-mono text-[9px]/[1.55] whitespace-pre [scrollbar-width:thin]">{#each (diff || "No textual diff available.").split("\n") as line, index (`${index}-${line}`)}<span class={`block min-w-fit px-3 ${diffLineClass(line)}`}>{line || " "}</span>{/each}</pre>
+				<pre class="m-0 min-h-0 flex-1 overflow-auto bg-[#101820] py-2 font-mono text-[9px]/[1.55] whitespace-pre [scrollbar-width:thin]">{#each (diff || "No textual diff available.").split("\n") as line}<span class={`block min-w-fit px-3 ${diffLineClass(line)}`}>{line || " "}</span>{/each}</pre>
 			{/if}
 		{:else}
 			<div class="grid flex-1 place-items-center px-8 text-center"><div><FileCode2 size={24} class="mx-auto mb-3 text-[#38434b]" /><p class="text-[10px]/[1.55] text-[#68747c]">Select a changed file to inspect its diff or edit the current text.</p></div></div>

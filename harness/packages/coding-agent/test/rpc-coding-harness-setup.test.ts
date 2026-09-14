@@ -98,11 +98,13 @@ describe("coding harness setup RPC", () => {
 		);
 
 		let adapterListener: CodingHarnessAdapterListener | undefined;
+		const bridgeEvents: Array<Record<string, unknown>> = [];
 		const adapterSession: CodingHarnessSessionRef = {
 			id: "adapter-session",
 			agentId: "agent5",
 			harness: "opencode",
 			model: "openai/gpt-5.6-terra",
+			role: "builder",
 		};
 		const opencodeAdapter: CodingHarnessAdapter = {
 			kind: "opencode",
@@ -126,6 +128,9 @@ describe("coding harness setup RPC", () => {
 				discoverCodingHarnesses,
 				discoverCodingHarnessModels,
 				codingHarnessAdapters: new Map([["opencode", opencodeAdapter]]),
+				appendCodingHarnessBridgeEvent: vi.fn(async (_cwd, event) => {
+					bridgeEvents.push(event as unknown as Record<string, unknown>);
+				}),
 			});
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 
@@ -238,7 +243,12 @@ describe("coding harness setup RPC", () => {
 			});
 			const nativePrompt = await send({ id: "native-prompt", type: "prompt", message: "use OpenCode" });
 			expect(nativePrompt).toMatchObject({ success: true });
-			await vi.waitFor(() => expect(opencodeAdapter.prompt).toHaveBeenCalledWith(adapterSession, "use OpenCode"));
+			await vi.waitFor(() =>
+				expect(opencodeAdapter.prompt).toHaveBeenCalledWith(
+					adapterSession,
+					expect.stringContaining("use OpenCode"),
+				),
+			);
 			expect(responses()).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -253,6 +263,14 @@ describe("coding harness setup RPC", () => {
 					expect.objectContaining({ type: "agent_settled", agentId: "agent5" }),
 				]),
 			);
+			await vi.waitFor(() => expect(bridgeEvents).toHaveLength(5));
+			expect(bridgeEvents.map((event) => event.event)).toEqual([
+				"TASK_CREATED",
+				"TASK_ASSIGNED",
+				"TASK_STARTED",
+				"NO_DELEGATION",
+				"TASK_COMPLETED",
+			]);
 			const decisions = (await readKlermRouteDecisionLog(harness.session.sessionManager.getCwd()))
 				.trim()
 				.split("\n")
@@ -266,6 +284,156 @@ describe("coding harness setup RPC", () => {
 				selectedTarget: "openai/gpt-5.6-terra",
 			});
 			expect(discoverCodingHarnesses).toHaveBeenCalledTimes(1);
+		} finally {
+			harness.cleanup();
+			for (const listener of process.stdin.listeners("end") as NodeListener[]) {
+				if (!stdinListeners.includes(listener)) process.stdin.off("end", listener);
+			}
+			for (const [signal, previousListeners] of signalListeners) {
+				for (const listener of process.listeners(signal) as NodeListener[]) {
+					if (!previousListeners.includes(listener)) process.off(signal, listener);
+				}
+			}
+		}
+	});
+
+	test("runs a deterministic coordinator, peer, coordinator bridge flow", async () => {
+		const stdinListeners = process.stdin.listeners("end") as NodeListener[];
+		const signals: NodeJS.Signals[] = process.platform === "win32" ? ["SIGTERM"] : ["SIGTERM", "SIGHUP"];
+		const signalListeners = new Map(signals.map((signal) => [signal, process.listeners(signal) as NodeListener[]]));
+		const harness = await createHarness();
+		const listeners = new Map<CodingHarnessKind, CodingHarnessAdapterListener>();
+		const promptCalls: Array<{ session: CodingHarnessSessionRef; text: string }> = [];
+		const bridgeRecords: Array<Record<string, unknown>> = [];
+		const adapter = (kind: "opencode" | "codex"): CodingHarnessAdapter => ({
+			kind,
+			startSession: vi.fn(async (configured) => ({
+				id: `${kind}-${configured.id}`,
+				agentId: configured.id,
+				harness: kind,
+				model: configured.model ?? "default",
+				role: configured.role,
+				nativeSessionId: `${kind}-native-${configured.id}`,
+			})),
+			prompt: vi.fn(async (session, text) => {
+				promptCalls.push({ session, text });
+			}),
+			abort: vi.fn(async (session) => {
+				listeners.get(kind)?.({ type: "settled", agentId: session.agentId, status: "aborted" });
+			}),
+			closeSession: vi.fn(async () => {}),
+			subscribe: (listener) => {
+				listeners.set(kind, listener);
+				return () => listeners.delete(kind);
+			},
+		});
+
+		try {
+			void runRpcMode(createRuntimeHost(harness), {
+				discoverCodingHarnesses: vi.fn(async () => [
+					{ kind: "klerm" as const, available: true, builtin: true, models: [] },
+					{ kind: "opencode" as const, available: true, builtin: false, models: [] },
+					{ kind: "codex" as const, available: true, builtin: false, models: [] },
+				]),
+				codingHarnessAdapters: new Map([
+					["opencode", adapter("opencode")],
+					["codex", adapter("codex")],
+				]),
+				appendCodingHarnessBridgeEvent: vi.fn(async (_cwd, event) => {
+					bridgeRecords.push(event as unknown as Record<string, unknown>);
+				}),
+			});
+			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+			await send({
+				id: "set-team",
+				type: "set_coding_harness_slots",
+				slots: {
+					externalHarnessesEnabled: true,
+					workTogetherEnabled: true,
+					agents: [
+						{ ...agent("agent6", "opencode"), model: "openai/gpt-5.6-terra" },
+						{ ...agent("agent7", "codex"), model: "gpt-5-codex" },
+						{ ...agent("agent8", "codex", false), model: "disabled-model" },
+					],
+				},
+			});
+			await send({
+				id: "team-prompt",
+				type: "prompt",
+				message: "Review the frontend, backend, security, and tests for this architecture.",
+			});
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(1));
+			await expect(send({ id: "busy-team-prompt", type: "prompt", message: "overlap" })).resolves.toMatchObject({
+				success: false,
+				code: "AGENT_BUSY",
+			});
+			expect(promptCalls).toHaveLength(1);
+			expect(promptCalls[0]).toMatchObject({ session: { agentId: "agent6" } });
+			expect(promptCalls[0]?.text).toContain("agent6: harness opencode");
+			expect(promptCalls[0]?.text).toContain("agent7: harness codex");
+			expect(promptCalls[0]?.text).not.toContain("agent8");
+
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Coordinator pass" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(2));
+			expect(promptCalls[1]).toMatchObject({ session: { agentId: "agent7" } });
+			expect(promptCalls[1]?.text).toContain("Coordinator result:\nCoordinator pass");
+
+			listeners.get("codex")?.({ type: "message", agentId: "agent7", text: "Peer pass" });
+			listeners.get("codex")?.({ type: "settled", agentId: "agent7", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(3));
+			expect(promptCalls[2]?.session).toBe(promptCalls[0]?.session);
+			expect(promptCalls[2]?.text).toContain("Peer result:\nPeer pass");
+
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Final answer" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() =>
+				expect(responses()).toEqual(
+					expect.arrayContaining([expect.objectContaining({ type: "agent_settled", agentId: "agent6" })]),
+				),
+			);
+
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(11));
+			expect(bridgeRecords.map((record) => record.event)).toEqual([
+				"TASK_CREATED",
+				"TASK_ASSIGNED",
+				"TASK_STARTED",
+				"TASK_WAITING",
+				"TASK_CREATED",
+				"TASK_ASSIGNED",
+				"TASK_STARTED",
+				"TASK_RETURNED",
+				"TASK_COMPLETED",
+				"TASK_RETURNED",
+				"TASK_COMPLETED",
+			]);
+			expect(bridgeRecords.map((record) => record.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+			expect([...new Set(bridgeRecords.map((record) => record.correlationId))]).toHaveLength(1);
+
+			await send({
+				id: "cancelled-team-prompt",
+				type: "prompt",
+				message: "Review the frontend, backend, security, and tests for this architecture again.",
+			});
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(4));
+			await send({ id: "abort-team-prompt", type: "abort" });
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(15));
+			expect(bridgeRecords.slice(-4).map((record) => record.event)).toEqual([
+				"TASK_CREATED",
+				"TASK_ASSIGNED",
+				"TASK_STARTED",
+				"TASK_CANCELLED",
+			]);
+
+			await send({ id: "empty-team-prompt", type: "prompt", message: "quick answer" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(5));
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(19));
+			expect(bridgeRecords.at(-1)).toMatchObject({
+				event: "TASK_FAILED",
+				status: "failed",
+				reason: "agent6 returned no result",
+			});
 		} finally {
 			harness.cleanup();
 			for (const listener of process.stdin.listeners("end") as NodeListener[]) {

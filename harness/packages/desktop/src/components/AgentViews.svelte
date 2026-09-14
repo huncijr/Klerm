@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { X } from "@lucide/svelte";
+	import { Eraser, X } from "@lucide/svelte";
+	import { agentFeedItems } from "../lib/agent-workspace.ts";
 	import type {
 		CodingHarnessSlotSettings,
 		FeedItem,
 		McpServerStatus,
 		ThinkingLevel,
-		WorkerRole,
 	} from "../lib/model.ts";
 	import Feed from "./Feed.svelte";
 
@@ -17,10 +17,10 @@
 		taskActive,
 		mcpServers,
 		connectedHarnessKinds,
-		controlsDisabled,
+		clearThrough,
 		onclose,
 		oneffortchange,
-		onrolechange,
+		onclear,
 		onrerun,
 		ontoggle,
 	}: {
@@ -31,10 +31,10 @@
 		taskActive: boolean;
 		mcpServers: McpServerStatus[];
 		connectedHarnessKinds: CodingHarnessSlotSettings["kind"][];
-		controlsDisabled: boolean;
+		clearThrough: Record<string, number>;
 		onclose: (id: string) => void;
 		oneffortchange: (id: string, effort: ThinkingLevel) => void;
-		onrolechange: (id: string, role: WorkerRole) => void;
+		onclear: (id: string) => void;
 		onrerun: (text: string) => void;
 		ontoggle: (id: number) => void;
 	} = $props();
@@ -43,14 +43,21 @@
 	const efforts: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 	function agentItems(id: string): FeedItem[] {
-		return items.filter((item) =>
-			item.type === "message" ? item.message.agentId === id : item.activity.agentId === id,
-		);
+		return agentFeedItems(items, id, clearThrough[id] ?? 0);
 	}
 
 	function status(agent: CodingHarnessSlotSettings, agentFeed: FeedItem[]): string {
 		if (agent.kind !== "klerm" && !connectedHarnessKinds.includes(agent.kind)) return "Adapter unavailable";
-		if (taskActive) return activeAgentId === agent.id ? "Working" : "Waiting";
+		const bridgeStatus = [...agentFeed].reverse().find(
+			(item) => item.type === "activity" && item.activity.kind === "bridge" && item.activity.bridgeStatus,
+		);
+		const lifecycle = bridgeStatus?.type === "activity" ? bridgeStatus.activity.bridgeStatus : undefined;
+		if (lifecycle === "failed") return "Failed";
+		if (lifecycle === "cancelled") return "Cancelled";
+		if (lifecycle === "completed") return "Complete";
+		if (lifecycle === "returned") return "Returned";
+		if (lifecycle === "waiting") return "Waiting";
+		if (taskActive) return activeAgentId === agent.id ? "Working" : lifecycle === "assigned" ? "Assigned" : "Ready";
 		if (agentFeed.some((item) => item.type === "activity" && item.activity.status === "error")) return "Failed";
 		return agentFeed.length > 0 ? "Complete" : "Ready";
 	}
@@ -77,22 +84,18 @@
 						</div>
 						<p class="mt-1 truncate font-mono text-[8px] text-[#8e9aa2]" title={agent.model ?? "Default model"}>{agent.model ?? "Default model"}</p>
 					</div>
-					<div class="relative grid h-7 w-24 shrink-0 grid-cols-2 overflow-hidden rounded-md border border-[#303a42] bg-[#070b0e] p-0.5" role="group" aria-label={`Agent ${agent.id.slice(5)} mode`}>
-						<span class={`pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-[#39452d] shadow-sm transition-transform ${agent.role === "builder" ? "translate-x-full" : "translate-x-0"}`}></span>
-						<button type="button" disabled={controlsDisabled} aria-pressed={agent.role === "planner"} class={`relative z-[1] font-mono text-[7px] disabled:cursor-wait disabled:opacity-50 ${agent.role === "planner" ? "text-[#e4edcf]" : "text-[#6f7b82]"}`} onclick={() => onrolechange(agent.id, "planner")}>Plan</button>
-						<button type="button" disabled={controlsDisabled} aria-pressed={agent.role === "builder"} class={`relative z-[1] font-mono text-[7px] disabled:cursor-wait disabled:opacity-50 ${agent.role === "builder" ? "text-[#e4edcf]" : "text-[#6f7b82]"}`} onclick={() => onrolechange(agent.id, "builder")}>Build</button>
-					</div>
+					<span class="rounded border border-[#303a42] bg-[#070b0e] px-2 py-1.5 font-mono text-[7px] text-[#aeb8be]">{agent.role === "planner" ? "Plan" : "Build"}</span>
 					<label class="font-mono text-[7px] tracking-[.08em] text-[#69767e] uppercase">
 						Thinking
 						<select
 							value={agent.effort}
-							disabled={controlsDisabled}
 							class="mt-1 block h-7 rounded border border-[#303a42] bg-[#070b0e] px-2 font-mono text-[8px] text-[#dbe1e4] [color-scheme:dark]"
 							onchange={(event) => oneffortchange(agent.id, event.currentTarget.value as ThinkingLevel)}
 						>
 							{#each efforts as effort}<option value={effort}>{effort}</option>{/each}
 						</select>
 					</label>
+					<button type="button" aria-label={`Clear Agent ${agent.id.slice(5)} terminal`} title="Clear terminal" class="flex h-7 items-center gap-1 rounded px-1.5 font-mono text-[7px] text-[#77838b] hover:bg-[#202930] hover:text-white" onclick={() => onclear(agent.id)}><Eraser size={11} /> Clear</button>
 					<button type="button" aria-label={`Close Agent ${agent.id.slice(5)} view`} class="grid h-7 w-7 place-items-center rounded text-[#77838b] hover:bg-[#202930] hover:text-white" onclick={() => onclose(agent.id)}><X size={13} /></button>
 				</header>
 				<div class="min-h-0 flex-1 overflow-y-auto p-3">

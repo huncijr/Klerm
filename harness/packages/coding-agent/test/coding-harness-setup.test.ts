@@ -78,6 +78,12 @@ describe("coding harness setup", () => {
 			}),
 		).toMatchObject({ agents: [{ id: "agent3" }, { id: "agent1" }] });
 		expect(
+			normalizeCodingHarnessSlots({
+				externalHarnessesEnabled: true,
+				agents: [{ ...agent("agent1", "klerm"), specialties: [" review ", "review"] }],
+			}),
+		).toMatchObject({ agents: [{ specialties: ["review"] }] });
+		expect(
 			parseCodingHarnessSlots({
 				externalHarnessesEnabled: true,
 				agents: [1, 2, 3, 4, 5].map((number) => agent(`agent${number}`, "klerm")),
@@ -90,7 +96,7 @@ describe("coding harness setup", () => {
 		expect(createCodingHarnessAgent("agent2")).toEqual(agent("agent2", "klerm"));
 	});
 
-	it("enables Work together only for three enabled modeled agents and preserves memory assignments", () => {
+	it("enables Work together for two enabled modeled agents and preserves memory assignments", () => {
 		const agents = [
 			{ ...agent("agent1", "klerm"), model: "provider/one", memoryProfileId: "planner" },
 			{ ...agent("agent2", "klerm"), model: "provider/two" },
@@ -109,7 +115,7 @@ describe("coding harness setup", () => {
 				workTogetherEnabled: true,
 				agents: agents.slice(0, 2),
 			}),
-		).toEqual({ externalHarnessesEnabled: true, agents: agents.slice(0, 2) });
+		).toEqual({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents: agents.slice(0, 2) });
 		expect(
 			normalizeCodingHarnessSlots({
 				externalHarnessesEnabled: true,
@@ -275,11 +281,22 @@ describe("coding harness setup", () => {
 			externalPromptingAvailable: true,
 			workTogetherAvailable: true,
 		});
-		expect(setup.runnableAgents).toEqual([
-			{ order: 1, agentId: "agent5", harness: "opencode", model: "openai/gpt-5.6-terra" },
-			{ order: 2, agentId: "agent1", harness: "klerm", model: "ollama/qwen" },
+		expect(setup.runnableAgents).toMatchObject([
+			{ order: 1, agentId: "agent1", harness: "klerm", model: "ollama/qwen" },
+			{ order: 2, agentId: "agent5", harness: "opencode", model: "openai/gpt-5.6-terra" },
 			{ order: 3, agentId: "agent7", harness: "codex", model: "gpt-5" },
 		]);
+		expect(setup.runnableAgents[0]).toMatchObject({
+			role: "builder",
+			effort: "off",
+			tools: [],
+			specialties: [],
+			strengthBand: expect.any(Number),
+			strengths: expect.any(Array),
+			limits: expect.any(Array),
+			capabilitySource: "model-profile-inference",
+			adapterCapabilities: expect.objectContaining({ prompt: true, abort: true, childTaskEvents: false }),
+		});
 		expect(
 			createCodingHarnessSetup(
 				{
@@ -291,6 +308,9 @@ describe("coding harness setup", () => {
 				},
 				harnesses,
 			),
-		).toMatchObject({ effectiveRouting: "none", blockingReason: "Agent 5 (Claude Code) is not available." });
+		).toMatchObject({
+			effectiveRouting: "none",
+			excludedAgents: [{ agentId: "agent5", reason: "Agent 5 (Claude Code) is not available." }],
+		});
 	});
 });

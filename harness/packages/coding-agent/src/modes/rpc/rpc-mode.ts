@@ -46,11 +46,25 @@ import {
 	createCodingHarnessAdapters,
 } from "../../klerm/coding-harness-adapter.ts";
 import {
+	appendCodingHarnessBridgeEvent,
+	bridgeResponseHash,
+	type CodingHarnessBridgeEvent,
+	type CodingHarnessBridgeTask,
+	coordinatorBridgePrompt,
+	finalizationBridgePrompt,
+	KLERM_BRIDGE_EVENT_CUSTOM_TYPE,
+	peerBridgePrompt,
+	selectCodingHarnessPeer,
+	shouldDelegateCodingHarnessTask,
+} from "../../klerm/coding-harness-bridge.ts";
+import {
+	type CodingHarnessAgentSettings,
 	createCodingHarnessSetup,
 	discoverCodingHarnesses,
 	discoverCodingHarnessModels,
 	normalizeCodingHarnessKind,
 	parseCodingHarnessSlots,
+	type RunnableCodingHarnessAgent,
 } from "../../klerm/coding-harness-setup.ts";
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
@@ -117,9 +131,26 @@ export interface RunRpcModeOptions {
 	discoverCodingHarnesses?: typeof discoverCodingHarnesses;
 	discoverCodingHarnessModels?: typeof discoverCodingHarnessModels;
 	codingHarnessAdapters?: Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>;
+	appendCodingHarnessBridgeEvent?: typeof appendCodingHarnessBridgeEvent;
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
+}
+
+interface ActiveCodingHarnessBridge {
+	rootTask: CodingHarnessBridgeTask;
+	childTask?: CodingHarnessBridgeTask;
+	coordinator: RunnableCodingHarnessAgent;
+	peer?: RunnableCodingHarnessAgent;
+	roster: RunnableCodingHarnessAgent[];
+	agents: Map<string, CodingHarnessAgentSettings>;
+	originalPrompt: string;
+	phase: "coordinator" | "peer" | "finalizing";
+	activeAgentId: string;
+	responses: Map<string, string>;
+	sequence: number;
+	aborted: boolean;
+	delegationReason: string;
 }
 
 const DESKTOP_COMMANDS = [
@@ -180,6 +211,7 @@ const DESKTOP_EVENTS = [
 	"tool_execution_update",
 	"tool_execution_end",
 	"routing_changed",
+	"bridge_event",
 	"agent_start",
 	"agent_end",
 	"agent_settled",
@@ -261,15 +293,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	const codingHarnessAdapters = options.codingHarnessAdapters ?? createCodingHarnessAdapters();
 	const codingHarnessSessions = new Map<string, CodingHarnessSessionRef>();
 	let activeCodingHarnessSession: CodingHarnessSessionRef | undefined;
+	let activeCodingHarnessBridge: ActiveCodingHarnessBridge | undefined;
 	let codingHarnessRouteSequence = 0;
+	let bridgeWriteQueue: Promise<void> = Promise.resolve();
+	let bridgeTransitionQueue: Promise<void> = Promise.resolve();
 	const closeCodingHarnessSessions = async () => {
 		await Promise.all(
 			[...codingHarnessSessions.values()].map((adapterSession) =>
 				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
 			),
 		);
+		await bridgeTransitionQueue;
 		codingHarnessSessions.clear();
 		activeCodingHarnessSession = undefined;
+		activeCodingHarnessBridge = undefined;
+		await bridgeWriteQueue;
 	};
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -284,10 +322,40 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		totalTokens: 0,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	});
+	const emitBridgeEvent = (
+		run: ActiveCodingHarnessBridge,
+		event: Omit<CodingHarnessBridgeEvent, "version" | "timestamp" | "sequence" | "correlationId">,
+	): CodingHarnessBridgeEvent => {
+		const record: CodingHarnessBridgeEvent = {
+			version: 1,
+			timestamp: new Date().toISOString(),
+			sequence: ++run.sequence,
+			correlationId: run.rootTask.correlationId,
+			...event,
+		};
+		session.sessionManager.appendCustomEntry(KLERM_BRIDGE_EVENT_CUSTOM_TYPE, record);
+		output({ type: "bridge_event", event: record });
+		const cwd = session.sessionManager.getCwd();
+		bridgeWriteQueue = bridgeWriteQueue
+			.catch(() => undefined)
+			.then(() => (options.appendCodingHarnessBridgeEvent ?? appendCodingHarnessBridgeEvent)(cwd, record))
+			.catch((logError) => {
+				output({
+					type: "backend_error",
+					message: `Could not write the Klerm bridge log: ${logError instanceof Error ? logError.message : String(logError)}`,
+				});
+			});
+		return record;
+	};
 	const handleCodingHarnessEvent = (event: CodingHarnessAdapterEvent) => {
 		if (event.type === "message") {
 			const active = activeCodingHarnessSession;
 			if (!active || active.agentId !== event.agentId) return;
+			const bridgeRun = activeCodingHarnessBridge;
+			if (bridgeRun?.activeAgentId === event.agentId) {
+				const previous = bridgeRun.responses.get(event.agentId) ?? "";
+				bridgeRun.responses.set(event.agentId, `${previous}${previous ? "\n" : ""}${event.text}`);
+			}
 			const message: AssistantMessage = {
 				role: "assistant",
 				content: [{ type: "text", text: event.text }],
@@ -335,6 +403,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			output({ type: "backend_error", message: event.message, agentId: event.agentId });
 			return;
 		}
+		if (activeCodingHarnessBridge?.activeAgentId === event.agentId) {
+			const run = activeCodingHarnessBridge;
+			bridgeTransitionQueue = bridgeTransitionQueue.then(() => advanceCodingHarnessBridge(run, event.status));
+			return;
+		}
 		output({
 			type: "agent_settled",
 			agentId: event.agentId,
@@ -344,6 +417,306 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		activeCodingHarnessSession = undefined;
 	};
 	for (const adapter of codingHarnessAdapters.values()) adapter.subscribe(handleCodingHarnessEvent);
+
+	async function ensureCodingHarnessSession(
+		run: ActiveCodingHarnessBridge,
+		target: RunnableCodingHarnessAgent,
+	): Promise<{ adapter: CodingHarnessAdapter; adapterSession: CodingHarnessSessionRef }> {
+		const adapter = codingHarnessAdapters.get(target.harness as ConnectedCodingHarnessKind);
+		const configuredAgent = run.agents.get(target.agentId);
+		if (!adapter || !configuredAgent || configuredAgent.kind !== adapter.kind) {
+			throw new Error(`Agent ${target.agentId.slice(5)} has no connected prompt adapter.`);
+		}
+		let adapterSession = codingHarnessSessions.get(target.agentId);
+		if (
+			adapterSession &&
+			(adapterSession.harness !== target.harness ||
+				adapterSession.model !== target.model ||
+				adapterSession.role !== target.role)
+		) {
+			await codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession);
+			codingHarnessSessions.delete(target.agentId);
+			adapterSession = undefined;
+		}
+		adapterSession ??= await adapter.startSession(configuredAgent, session.sessionManager.getCwd());
+		codingHarnessSessions.set(target.agentId, adapterSession);
+		return { adapter, adapterSession };
+	}
+
+	async function promptCodingHarnessBridgeAgent(
+		run: ActiveCodingHarnessBridge,
+		target: RunnableCodingHarnessAgent,
+		message: string,
+	): Promise<void> {
+		run.activeAgentId = target.agentId;
+		run.responses.set(target.agentId, "");
+		let adapter: CodingHarnessAdapter;
+		let adapterSession: CodingHarnessSessionRef;
+		try {
+			({ adapter, adapterSession } = await ensureCodingHarnessSession(run, target));
+		} catch (sessionError) {
+			handleCodingHarnessEvent({
+				type: "error",
+				agentId: target.agentId,
+				message: sessionError instanceof Error ? sessionError.message : String(sessionError),
+			});
+			await advanceCodingHarnessBridge(run, "failed");
+			return;
+		}
+		activeCodingHarnessSession = adapterSession;
+		output({
+			type: "routing_changed",
+			state: {
+				mode: run.peer ? "auto" : "off",
+				activeStartLane: "auto",
+				lane: "direct",
+				selectedTarget: target.model,
+				selectedAgentId: target.agentId,
+				selectedHarness: target.harness,
+				routingSequence: ++codingHarnessRouteSequence,
+				reason:
+					run.phase === "coordinator"
+						? `${target.agentId} is the first runnable external coordinator`
+						: run.phase === "peer"
+							? `${target.agentId} is the capability-ranked peer for a focused second pass`
+							: `${target.agentId} resumed its native coordinator session for finalization`,
+			},
+		});
+		output({ type: "agent_start", agentId: target.agentId });
+		void adapter.prompt(adapterSession, message).catch((promptError) => {
+			handleCodingHarnessEvent({
+				type: "error",
+				agentId: target.agentId,
+				message: promptError instanceof Error ? promptError.message : String(promptError),
+			});
+			handleCodingHarnessEvent({ type: "settled", agentId: target.agentId, status: "failed" });
+		});
+	}
+
+	async function finishCodingHarnessBridge(
+		run: ActiveCodingHarnessBridge,
+		status: "completed" | "failed" | "aborted",
+	): Promise<void> {
+		if (activeCodingHarnessBridge !== run) return;
+		await bridgeWriteQueue;
+		activeCodingHarnessBridge = undefined;
+		activeCodingHarnessSession = undefined;
+		output({
+			type: "agent_settled",
+			agentId: run.coordinator.agentId,
+			outcome: status === "failed" ? { status: "failed", changedFileCount: 0, verificationCount: 0 } : undefined,
+		});
+	}
+
+	async function advanceCodingHarnessBridge(
+		run: ActiveCodingHarnessBridge,
+		status: "completed" | "failed" | "aborted",
+	): Promise<void> {
+		if (activeCodingHarnessBridge !== run) return;
+		const activeAgent = run.roster.find((agent) => agent.agentId === run.activeAgentId);
+		const activeSession = activeAgent ? codingHarnessSessions.get(activeAgent.agentId) : undefined;
+		const response = run.responses.get(run.activeAgentId)?.trim() ?? "";
+		if (run.aborted || status === "aborted") {
+			const cancelledTaskId = run.phase === "peer" && run.childTask ? run.childTask.taskId : run.rootTask.taskId;
+			emitBridgeEvent(run, {
+				event: "TASK_CANCELLED",
+				taskId: cancelledTaskId,
+				...(run.phase === "peer" && run.childTask ? { parentTaskId: run.rootTask.taskId } : {}),
+				sender: run.activeAgentId,
+				recipient: "user",
+				status: "cancelled",
+				reason: "User stopped the active collaboration",
+				agentId: run.activeAgentId,
+				...(activeAgent ? { harness: activeAgent.harness, model: activeAgent.model } : {}),
+				...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+			});
+			if (cancelledTaskId !== run.rootTask.taskId) {
+				emitBridgeEvent(run, {
+					event: "TASK_CANCELLED",
+					taskId: run.rootTask.taskId,
+					sender: run.activeAgentId,
+					recipient: "user",
+					status: "cancelled",
+					reason: "Root collaboration cancelled with its active peer task",
+					agentId: run.coordinator.agentId,
+					harness: run.coordinator.harness,
+					model: run.coordinator.model,
+				});
+			}
+			await finishCodingHarnessBridge(run, "aborted");
+			return;
+		}
+		if (status === "failed" || !response) {
+			const failedTaskId = run.phase === "peer" && run.childTask ? run.childTask.taskId : run.rootTask.taskId;
+			emitBridgeEvent(run, {
+				event: "TASK_FAILED",
+				taskId: failedTaskId,
+				...(run.phase === "peer" && run.childTask ? { parentTaskId: run.rootTask.taskId } : {}),
+				sender: run.activeAgentId,
+				recipient: "user",
+				status: "failed",
+				reason: response ? `${run.activeAgentId} failed during ${run.phase}` : `${run.activeAgentId} returned no result`,
+				agentId: run.activeAgentId,
+				...(activeAgent ? { harness: activeAgent.harness, model: activeAgent.model } : {}),
+				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+			});
+			if (failedTaskId !== run.rootTask.taskId) {
+				emitBridgeEvent(run, {
+					event: "TASK_FAILED",
+					taskId: run.rootTask.taskId,
+					sender: run.activeAgentId,
+					recipient: "user",
+					status: "failed",
+					reason: "Root collaboration failed because its peer task failed",
+					agentId: run.coordinator.agentId,
+					harness: run.coordinator.harness,
+					model: run.coordinator.model,
+				});
+			}
+			await finishCodingHarnessBridge(run, "failed");
+			return;
+		}
+
+		if (run.phase === "coordinator") {
+			if (!run.peer) {
+				emitBridgeEvent(run, {
+					event: "NO_DELEGATION",
+					taskId: run.rootTask.taskId,
+					sender: run.coordinator.agentId,
+					recipient: "klerm",
+					status: "completed",
+					reason: run.delegationReason,
+					agentId: run.coordinator.agentId,
+					harness: run.coordinator.harness,
+					model: run.coordinator.model,
+					...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+					...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+				});
+				emitBridgeEvent(run, {
+					event: "TASK_COMPLETED",
+					taskId: run.rootTask.taskId,
+					sender: run.coordinator.agentId,
+					recipient: "user",
+					status: "completed",
+					reason: "Coordinator completed the task directly",
+					agentId: run.coordinator.agentId,
+					harness: run.coordinator.harness,
+					model: run.coordinator.model,
+					...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+					...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+				});
+				await finishCodingHarnessBridge(run, "completed");
+				return;
+			}
+			run.phase = "peer";
+			run.childTask = {
+				version: 1,
+				taskId: `${run.rootTask.taskId}-peer-1`,
+				parentTaskId: run.rootTask.taskId,
+				correlationId: run.rootTask.correlationId,
+				kind: "peer-review",
+				sender: run.coordinator.agentId,
+				recipient: run.peer.agentId,
+				sequence: 2,
+				reason: "Capability-ranked focused second pass",
+				status: "assigned",
+			};
+			emitBridgeEvent(run, {
+				event: "TASK_WAITING",
+				taskId: run.rootTask.taskId,
+				sender: run.coordinator.agentId,
+				recipient: run.peer.agentId,
+				status: "waiting",
+				reason: `${run.coordinator.agentId} is waiting for the focused peer return`,
+				agentId: run.coordinator.agentId,
+				harness: run.coordinator.harness,
+				model: run.coordinator.model,
+				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+			});
+			for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
+				emitBridgeEvent(run, {
+					event,
+					taskId: run.childTask.taskId,
+					parentTaskId: run.rootTask.taskId,
+					sender: run.coordinator.agentId,
+					recipient: run.peer.agentId,
+					status: event === "TASK_STARTED" ? "running" : "assigned",
+					reason: run.childTask.reason,
+					agentId: run.peer.agentId,
+					harness: run.peer.harness,
+					model: run.peer.model,
+				});
+			}
+			await promptCodingHarnessBridgeAgent(
+				run,
+				run.peer,
+				peerBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response),
+			);
+			return;
+		}
+
+		if (run.phase === "peer" && run.peer && run.childTask) {
+			emitBridgeEvent(run, {
+				event: "TASK_RETURNED",
+				taskId: run.childTask.taskId,
+				parentTaskId: run.rootTask.taskId,
+				sender: run.peer.agentId,
+				recipient: run.coordinator.agentId,
+				status: "returned",
+				reason: `${run.peer.agentId} returned the focused second pass`,
+				agentId: run.peer.agentId,
+				harness: run.peer.harness,
+				model: run.peer.model,
+				...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+			});
+			emitBridgeEvent(run, {
+				event: "TASK_COMPLETED",
+				taskId: run.childTask.taskId,
+				parentTaskId: run.rootTask.taskId,
+				sender: run.peer.agentId,
+				recipient: run.coordinator.agentId,
+				status: "completed",
+				reason: "Focused peer task completed",
+				agentId: run.peer.agentId,
+				harness: run.peer.harness,
+				model: run.peer.model,
+			});
+			run.phase = "finalizing";
+			emitBridgeEvent(run, {
+				event: "TASK_RETURNED",
+				taskId: run.rootTask.taskId,
+				sender: run.peer.agentId,
+				recipient: run.coordinator.agentId,
+				status: "running",
+				reason: `${run.coordinator.agentId} resumed for final review`,
+				agentId: run.coordinator.agentId,
+				harness: run.coordinator.harness,
+				model: run.coordinator.model,
+			});
+			await promptCodingHarnessBridgeAgent(
+				run,
+				run.coordinator,
+				finalizationBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response),
+			);
+			return;
+		}
+
+		emitBridgeEvent(run, {
+			event: "TASK_COMPLETED",
+			taskId: run.rootTask.taskId,
+			sender: run.coordinator.agentId,
+			recipient: "user",
+			status: "completed",
+			reason: "Coordinator reviewed the peer return and finalized the task",
+			agentId: run.coordinator.agentId,
+			harness: run.coordinator.harness,
+			model: run.coordinator.model,
+			...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+			...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+		});
+		await finishCodingHarnessBridge(run, "completed");
+	}
 
 	const success = <T extends RpcCommand["type"]>(
 		id: string | undefined,
@@ -469,6 +842,105 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			harnesses.map((harness) => (harness.kind === "klerm" ? { ...harness, models: klermModels } : harness)),
 			new Set(codingHarnessAdapters.keys()),
 		);
+	};
+	const startExternalCodingHarnessPrompt = async (
+		setup: RpcCodingHarnessSetup,
+		message: string,
+	): Promise<ActiveCodingHarnessBridge | undefined> => {
+		const roster = setup.runnableAgents.filter(
+			(agent) => agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),
+		);
+		const coordinator = roster[0];
+		if (!coordinator) return undefined;
+		const peer =
+			setup.slots.workTogetherEnabled === true && shouldDelegateCodingHarnessTask(message, roster.length)
+				? selectCodingHarnessPeer(roster, coordinator.agentId)
+				: undefined;
+		const delegationReason =
+			roster.length < 2
+				? "Only one runnable external agent was available"
+				: setup.slots.workTogetherEnabled !== true
+					? "Work together was disabled for this prompt snapshot"
+					: peer
+						? `Selected ${peer.agentId} for a deterministic capability-ranked second pass`
+						: "The deterministic breadth check did not require a peer pass";
+		const timestamp = new Date().toISOString();
+		const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${message}`).digest("hex").slice(0, 16)}`;
+		const run: ActiveCodingHarnessBridge = {
+			rootTask: {
+				version: 1,
+				taskId,
+				correlationId: taskId,
+				kind: "root",
+				sender: "user",
+				recipient: coordinator.agentId,
+				sequence: 1,
+				reason: `${coordinator.agentId} is the first runnable external coordinator`,
+				status: "assigned",
+			},
+			coordinator,
+			...(peer ? { peer } : {}),
+			roster,
+			agents: new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }])),
+			originalPrompt: message,
+			phase: "coordinator",
+			activeAgentId: coordinator.agentId,
+			responses: new Map(),
+			sequence: 0,
+			aborted: false,
+			delegationReason,
+		};
+		activeCodingHarnessBridge = run;
+		for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
+			emitBridgeEvent(run, {
+				event,
+				taskId,
+				sender: event === "TASK_CREATED" ? "user" : "klerm",
+				recipient: coordinator.agentId,
+				status: event === "TASK_STARTED" ? "running" : "assigned",
+				reason: run.rootTask.reason,
+				agentId: coordinator.agentId,
+				harness: coordinator.harness,
+				model: coordinator.model,
+			});
+		}
+		try {
+			await appendCodingHarnessRouteDecision(session.sessionManager.getCwd(), {
+				timestamp,
+				taskId,
+				sessionId: session.sessionId,
+				event: "CODING_HARNESS_ROUTE",
+				sender: "user",
+				recipient: coordinator.agentId,
+				sequence: ++codingHarnessRouteSequence,
+				selectedAgentId: coordinator.agentId,
+				selectedHarness: coordinator.harness,
+				selectedTarget: coordinator.model,
+				reason: run.rootTask.reason,
+				roster,
+				cwd: session.sessionManager.getCwd(),
+			});
+		} catch (routeLogError) {
+			emitBridgeEvent(run, {
+				event: "TASK_FAILED",
+				taskId,
+				sender: "klerm",
+				recipient: "user",
+				status: "failed",
+				reason: "Could not persist the external route decision",
+				agentId: coordinator.agentId,
+				harness: coordinator.harness,
+				model: coordinator.model,
+			});
+			await finishCodingHarnessBridge(run, "failed");
+			throw routeLogError;
+		}
+		await promptCodingHarnessBridgeAgent(
+			run,
+			coordinator,
+			coordinatorBridgePrompt(message, coordinator, roster, peer),
+		);
+		return run;
 	};
 
 	// Pending extension UI requests waiting for response
@@ -1740,6 +2212,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 
 			case "prompt": {
+				if (activeCodingHarnessBridge || activeCodingHarnessSession) {
+					return error(id, "prompt", "An external coding-harness task is already active.", "AGENT_BUSY");
+				}
 				const normalizedImages = await normalizeRpcImages(command.images);
 				if (!normalizedImages.ok) {
 					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
@@ -1749,8 +2224,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					if (codingHarnessSetup.blockingReason) {
 						return error(id, "prompt", codingHarnessSetup.blockingReason, "CODING_HARNESS_UNAVAILABLE");
 					}
-					const target = codingHarnessSetup.runnableAgents.find((agent) => agent.harness !== "klerm");
-					if (target) {
+					if (codingHarnessSetup.runnableAgents.some((agent) => agent.harness !== "klerm")) {
 						if ((normalizedImages.images?.length ?? 0) > 0) {
 							return error(
 								id,
@@ -1758,47 +2232,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 								"CODING_HARNESS_IMAGES_UNAVAILABLE",
 							);
 						}
-						const adapter = codingHarnessAdapters.get(target.harness as ConnectedCodingHarnessKind);
-						const configuredAgent = codingHarnessSetup.slots.agents.find((agent) => agent.id === target.agentId);
-						if (!adapter || !configuredAgent) {
-							return error(
-								id,
-								`Agent ${target.agentId.slice(5)} has no connected prompt adapter.`,
-								"CODING_HARNESS_ADAPTER_UNAVAILABLE",
-							);
-						}
-						let adapterSession = codingHarnessSessions.get(target.agentId);
-						if (
-							adapterSession &&
-							(adapterSession.harness !== target.harness || adapterSession.model !== target.model)
-						) {
-							const previousAdapter = codingHarnessAdapters.get(adapterSession.harness);
-							await previousAdapter?.closeSession(adapterSession);
-							codingHarnessSessions.delete(target.agentId);
-							adapterSession = undefined;
-						}
-						adapterSession ??= await adapter.startSession(configuredAgent, session.sessionManager.getCwd());
-						codingHarnessSessions.set(target.agentId, adapterSession);
-						activeCodingHarnessSession = adapterSession;
-						const timestamp = new Date().toISOString();
-						const sequence = ++codingHarnessRouteSequence;
-						const reason = `${target.agentId} is the lowest-ID runnable external agent`;
-						const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${command.message}`).digest("hex").slice(0, 16)}`;
-						await appendCodingHarnessRouteDecision(session.sessionManager.getCwd(), {
-							timestamp,
-							taskId,
-							sessionId: session.sessionId,
-							event: "CODING_HARNESS_ROUTE",
-							sender: "user",
-							recipient: target.agentId,
-							sequence,
-							selectedAgentId: target.agentId,
-							selectedHarness: target.harness,
-							selectedTarget: target.model,
-							reason,
-							roster: codingHarnessSetup.runnableAgents,
-							cwd: session.sessionManager.getCwd(),
-						});
 						const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
 						session.sessionManager.appendMessage(userMessage);
 						if (command.displayMessage && command.displayMessage !== command.message) {
@@ -1806,29 +2239,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 								text: command.displayMessage,
 							});
 						}
-						output({
-							type: "routing_changed",
-							state: {
-								mode: codingHarnessSetup.effectiveRouting === "auto" ? "auto" : "off",
-								activeStartLane: "auto",
-								lane: "direct",
-								selectedTarget: target.model,
-								selectedAgentId: target.agentId,
-								selectedHarness: target.harness,
-								routingSequence: sequence,
-								reason,
-							},
-						});
-						output({ type: "agent_start", agentId: target.agentId });
+						await startExternalCodingHarnessPrompt(codingHarnessSetup, command.message);
 						output(success(id, "prompt"));
-						void adapter.prompt(adapterSession, command.message).catch((promptError) => {
-							handleCodingHarnessEvent({
-								type: "error",
-								agentId: target.agentId,
-								message: promptError instanceof Error ? promptError.message : String(promptError),
-							});
-							handleCodingHarnessEvent({ type: "settled", agentId: target.agentId, status: "failed" });
-						});
 						return undefined;
 					}
 				}
@@ -1897,6 +2309,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 			case "abort": {
 				if (activeCodingHarnessSession) {
+					if (activeCodingHarnessBridge) activeCodingHarnessBridge.aborted = true;
 					const adapter = codingHarnessAdapters.get(activeCodingHarnessSession.harness);
 					await adapter?.abort(activeCodingHarnessSession);
 					return success(id, "abort");
@@ -2204,6 +2617,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
+		await closeCodingHarnessSessions();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();
@@ -2275,9 +2689,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	};
 	process.stdin.on("end", onInputEnd);
 
+	let inputQueue = Promise.resolve();
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {
-			void handleInputLine(line);
+			inputQueue = inputQueue.then(() => handleInputLine(line));
 		});
 		return () => {
 			detachJsonl();

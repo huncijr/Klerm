@@ -11,6 +11,7 @@ export interface CodingHarnessSessionRef {
 	agentId: string;
 	harness: ConnectedCodingHarnessKind;
 	model: string;
+	role: CodingHarnessRole;
 	nativeSessionId?: string;
 }
 
@@ -56,6 +57,7 @@ interface AdapterSessionState {
 	cwd: string;
 	role: CodingHarnessRole;
 	child?: ChildProcessWithoutNullStreams;
+	childSettled?: Promise<void>;
 	aborted: boolean;
 }
 
@@ -93,6 +95,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 			agentId: agent.id,
 			harness: this.kind,
 			model: agent.model,
+			role: agent.role,
 		};
 		this.sessions.set(ref.id, { ref, cwd, role: agent.role, aborted: false });
 		return ref;
@@ -134,7 +137,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 			if (stderr.length < 8192) stderr += chunk.toString("utf8");
 		});
 
-		await new Promise<void>((resolve, reject) => {
+		const childSettled = new Promise<void>((resolve, reject) => {
 			child.once("error", reject);
 			child.once("close", (code, signal) => {
 				state.child = undefined;
@@ -154,6 +157,12 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 				resolve();
 			});
 		});
+		state.childSettled = childSettled;
+		try {
+			await childSettled;
+		} finally {
+			state.childSettled = undefined;
+		}
 	}
 
 	async abort(session: CodingHarnessSessionRef): Promise<void> {
@@ -161,6 +170,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 		if (!state?.child) return;
 		state.aborted = true;
 		state.child.kill("SIGTERM");
+		await state.childSettled;
 	}
 
 	async closeSession(session: CodingHarnessSessionRef): Promise<void> {

@@ -17,6 +17,7 @@ export interface CodingHarnessSlotSettings {
 	role: WorkerRole;
 	effort: ThinkingLevel;
 	tools: string[];
+	specialties?: string[];
 }
 
 export interface CodingHarnessSetup {
@@ -50,7 +51,23 @@ export interface CodingHarnessSetup {
 		agentId: string;
 		harness: CodingHarnessKind;
 		model: string;
+		role: WorkerRole;
+		effort: ThinkingLevel;
+		tools: string[];
+		specialties: string[];
+		strengthBand: 1 | 2 | 3 | 4 | 5;
+		strengths: string[];
+		limits: string[];
+		capabilitySource: "model-profile-inference";
+		adapterCapabilities: {
+			prompt: true;
+			abort: true;
+			resumeSession: boolean;
+			roleEnforcement: boolean;
+			childTaskEvents: false;
+		};
 	}>;
+	excludedAgents: Array<{ agentId: string; reason: string }>;
 	blockingReason?: string;
 }
 
@@ -174,6 +191,50 @@ export interface RoutingState {
 	taskIntent?: "answer" | "review" | "workspace-change";
 }
 
+export type CodingHarnessBridgeTaskStatus =
+	| "assigned"
+	| "running"
+	| "waiting"
+	| "returned"
+	| "completed"
+	| "failed"
+	| "cancelled";
+
+export interface CodingHarnessBridgeArtifact {
+	kind: "file" | "diff" | "report";
+	reference: string;
+	digest?: string;
+}
+
+export interface CodingHarnessBridgeEvent {
+	version: 1;
+	timestamp: string;
+	event:
+		| "TASK_CREATED"
+		| "TASK_ASSIGNED"
+		| "TASK_STARTED"
+		| "TASK_WAITING"
+		| "TASK_RETURNED"
+		| "TASK_COMPLETED"
+		| "TASK_FAILED"
+		| "TASK_CANCELLED"
+		| "NO_DELEGATION";
+	taskId: string;
+	parentTaskId?: string;
+	correlationId: string;
+	sequence: number;
+	sender: string;
+	recipient: string;
+	status: CodingHarnessBridgeTaskStatus;
+	reason: string;
+	agentId?: string;
+	harness?: string;
+	model?: string;
+	nativeSessionId?: string;
+	responseHash?: string;
+	artifact?: CodingHarnessBridgeArtifact;
+}
+
 export interface TaskOutcome {
 	status:
 		| "completed"
@@ -249,6 +310,11 @@ export interface DesktopSession {
 	modified: string;
 	messageCount: number;
 	firstMessage: string;
+}
+
+export interface DesktopProject {
+	id: string;
+	name: string;
 }
 
 export interface WorkspaceAttribution {
@@ -412,6 +478,7 @@ export interface TimelineItem {
 	status: TimelineStatus;
 	open: boolean;
 	agentId?: string;
+	bridgeStatus?: CodingHarnessBridgeTaskStatus;
 	detailType?: "text" | "diff" | "code";
 	images?: ImageAttachment[];
 	dedupeId?: string;

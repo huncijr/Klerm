@@ -1,9 +1,9 @@
-import type { CodingHarnessSetup, CodingHarnessSlotSettings } from "./model.ts";
+import type { CodingHarnessSetup, CodingHarnessSlotSettings, WorkerRole } from "./model.ts";
 
 type CodingHarnessSlots = CodingHarnessSetup["slots"];
 
-export function hasThreeEnabledCodingHarnessAgents(slots: CodingHarnessSlots): boolean {
-	return slots.externalHarnessesEnabled && slots.agents.filter((agent) => agent.enabled).length >= 3;
+export function hasTwoEnabledCodingHarnessAgents(slots: CodingHarnessSlots): boolean {
+	return slots.externalHarnessesEnabled && slots.agents.filter((agent) => agent.enabled).length >= 2;
 }
 
 export function resolvedCodingHarnessModel(
@@ -19,7 +19,14 @@ export function resolvedCodingHarnessModel(
 }
 
 export function canEnableWorkTogether(slots: CodingHarnessSlots): boolean {
-	return hasThreeEnabledCodingHarnessAgents(slots);
+	return hasTwoEnabledCodingHarnessAgents(slots);
+}
+
+export function setAllCodingHarnessAgentRoles(slots: CodingHarnessSlots, role: WorkerRole): CodingHarnessSlots {
+	return {
+		...slots,
+		agents: slots.agents.map((agent) => (agent.enabled ? { ...agent, role } : agent)),
+	};
 }
 
 export function shouldShowAgentContext(slots: CodingHarnessSlots, visibleIds: readonly string[]): boolean {
@@ -104,7 +111,7 @@ export function removeCodingHarnessSlot(slots: CodingHarnessSlots, id: string): 
 	return {
 		externalHarnessesEnabled: slots.externalHarnessesEnabled,
 		agents,
-		...(slots.workTogetherEnabled === true && agents.filter((agent) => agent.enabled).length >= 3
+		...(slots.workTogetherEnabled === true && agents.filter((agent) => agent.enabled).length >= 2
 			? { workTogetherEnabled: true }
 			: {}),
 	};
