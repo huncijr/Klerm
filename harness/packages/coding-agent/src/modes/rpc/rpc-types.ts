@@ -249,6 +249,9 @@ export type RpcCommand =
 	| { id?: string; type: "upsert_klerm_profile"; profile: KlermProfile }
 	| { id?: string; type: "delete_klerm_profile"; profileId: string }
 	| { id?: string; type: "assign_klerm_profile"; lane: KlermWorkerLane; profileId?: string | null }
+	| { id?: string; type: "set_klerm_shared_memory"; memory: string; presetId?: string }
+	| { id?: string; type: "save_klerm_shared_memory_preset"; name: string; memory: string }
+	| { id?: string; type: "delete_klerm_shared_memory_preset"; presetId: string }
 	| { id?: string; type: "add_custom_model"; model: RpcCustomModelUpdate }
 	| { id?: string; type: "remove_custom_model"; provider: string; modelId: string }
 	| { id?: string; type: "get_provider_status" }
@@ -466,6 +469,21 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "upsert_klerm_profile"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "delete_klerm_profile"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "assign_klerm_profile"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "set_klerm_shared_memory"; success: true; data: RpcDesktopSettings }
+	| {
+			id?: string;
+			type: "response";
+			command: "save_klerm_shared_memory_preset";
+			success: true;
+			data: RpcDesktopSettings;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "delete_klerm_shared_memory_preset";
+			success: true;
+			data: RpcDesktopSettings;
+	  }
 	| { id?: string; type: "response"; command: "add_custom_model"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "remove_custom_model"; success: true; data: RpcDesktopSettings }
 	| {

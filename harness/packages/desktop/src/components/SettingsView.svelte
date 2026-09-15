@@ -62,6 +62,9 @@
 		onoauthsubmit,
 		onupsertprofile,
 		ondeleteprofile,
+		onsharedmemorychange,
+		onsavesharedmemory,
+		ondeletesharedmemory,
 		onrefreshmcp,
 		onreloadmcp,
 		onaddmcpserver,
@@ -92,6 +95,9 @@
 		ondisconnectprovider: (provider: string) => Promise<boolean>;
 		onupsertprofile: (profile: KlermProfile) => Promise<boolean>;
 		ondeleteprofile: (id: string) => Promise<boolean>;
+		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
+		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
+		ondeletesharedmemory: (id: string) => Promise<boolean>;
 		onrefreshmcp: () => void;
 		onreloadmcp: () => void;
 		onaddmcpserver: (server: McpServerUpdate) => Promise<boolean>;
@@ -137,6 +143,9 @@
 	let profileMemoryFormat = $state<"md" | "html">("md");
 	let editingProfileId = $state("");
 	let openProfileId = $state("");
+	let sharedMemoryPresetName = $state("");
+	let sharedMemoryPresetText = $state("");
+	let sharedMemorySaving = $state(false);
 	let mcpName = $state("");
 	let mcpColor = $state<(typeof MCP_COLORS)[number]>("base");
 	let mcpTransport = $state<"stdio" | "http" | "sse">("stdio");
@@ -911,6 +920,39 @@
 			</div>
 		{:else}
 			<div class="mx-auto w-[min(720px,100%)] space-y-4">
+				<section class="rounded-xl border border-[#2b3640] bg-[#0a0f13] p-4">
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<strong class="font-mono text-[11px] text-white">Shared collaboration memory</strong>
+							<p class="m-0 mt-1 font-mono text-[8px] leading-[1.5] text-[#6e7a83]">The active preset is appended to a dynamic agent roster when an external team task starts.</p>
+						</div>
+						<button type="button" class="h-7 shrink-0 rounded-md border border-[#34414a] px-2 font-mono text-[8px] text-[#9aa6ae]" onclick={() => void onsharedmemorychange("")}>Use default</button>
+					</div>
+					{#if settings.profiles.sharedMemory && !settings.profiles.selectedSharedMemoryPresetId}
+						<p class="mt-3 mb-0 rounded-md border border-[#303a42] bg-[#05080b] p-2 whitespace-pre-wrap font-mono text-[9px] text-[#aab4bb]">Custom active memory: {settings.profiles.sharedMemory}</p>
+					{/if}
+					<div class="mt-3 space-y-2">
+						{#each settings.profiles.sharedMemoryPresets as preset (preset.id)}
+							<div class={`rounded-lg border p-3 ${settings.profiles.selectedSharedMemoryPresetId === preset.id ? "border-[#607f20] bg-[#10170c]" : "border-[#232c34] bg-[#05080b]"}`}>
+								<div class="flex items-center gap-2">
+									<strong class="mr-auto font-mono text-[10px] text-white">{preset.name}</strong>
+									{#if settings.profiles.selectedSharedMemoryPresetId === preset.id}<span class="font-mono text-[7px] tracking-[.1em] text-[#9bbb55] uppercase">Active</span>{/if}
+									<button type="button" class="font-mono text-[8px] text-[#9cc0f2]" onclick={() => void onsharedmemorychange(preset.memory, preset.id)}>Use</button>
+									<button type="button" class="font-mono text-[8px] text-[#f3a49c]" onclick={() => void ondeletesharedmemory(preset.id)}>Delete</button>
+								</div>
+								<p class="mt-2 mb-0 line-clamp-3 whitespace-pre-wrap font-mono text-[8px] leading-[1.5] text-[#7b868e]">{preset.memory || "Empty preset"}</p>
+							</div>
+						{/each}
+						{#if settings.profiles.sharedMemoryPresets.length === 0}
+							<p class="m-0 font-mono text-[9px] text-[#66747d]">No saved shared-memory presets. Create one from the composer when at least two agents are active.</p>
+						{/if}
+					</div>
+					<form class="mt-3 space-y-2 border-t border-[#232c34] pt-3" onsubmit={async (event) => { event.preventDefault(); sharedMemorySaving = true; if (await onsavesharedmemory(sharedMemoryPresetName, sharedMemoryPresetText)) { sharedMemoryPresetName = ""; sharedMemoryPresetText = ""; } sharedMemorySaving = false; }}>
+						<input bind:value={sharedMemoryPresetName} maxlength="40" placeholder="new preset name" class="h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white outline-0" />
+						<textarea bind:value={sharedMemoryPresetText} maxlength="8000" rows="4" placeholder="Shared project conventions, constraints, and decisions" class="w-full resize-y rounded-md border border-[#303a42] bg-[#05080b] p-2 font-mono text-[9px] text-white outline-0"></textarea>
+						<button type="submit" disabled={!sharedMemoryPresetName.trim() || sharedMemorySaving} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019] disabled:opacity-40">{sharedMemorySaving ? "Saving..." : "Save preset"}</button>
+					</form>
+				</section>
 				{#if openedProfile}
 					{@const profile = openedProfile}
 					<button type="button" class="flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-[9px] text-[#8b969e] hover:text-white" onclick={closeProfile}>← Back</button>

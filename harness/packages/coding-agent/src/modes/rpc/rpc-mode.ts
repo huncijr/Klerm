@@ -60,6 +60,7 @@ import {
 	KLERM_BRIDGE_EVENT_CUSTOM_TYPE,
 	peerBridgePrompt,
 	selectCodingHarnessPeer,
+	sharedCodingHarnessContext,
 	shouldDelegateCodingHarnessTask,
 } from "../../klerm/coding-harness-bridge.ts";
 import {
@@ -151,6 +152,9 @@ interface ActiveCodingHarnessBridge {
 	roster: RunnableCodingHarnessAgent[];
 	agents: Map<string, CodingHarnessAgentSettings>;
 	originalPrompt: string;
+	sharedContext: string;
+	sharedContextDigest: string;
+	sharedMemoryPresetId?: string;
 	phase: "coordinator" | "peer" | "finalizing";
 	activeAgentId: string;
 	responses: Map<string, string>;
@@ -187,6 +191,9 @@ const DESKTOP_COMMANDS = [
 	"upsert_klerm_profile",
 	"delete_klerm_profile",
 	"assign_klerm_profile",
+	"set_klerm_shared_memory",
+	"save_klerm_shared_memory_preset",
+	"delete_klerm_shared_memory_preset",
 	"add_custom_model",
 	"remove_custom_model",
 	"get_provider_status",
@@ -722,7 +729,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			await promptCodingHarnessBridgeAgent(
 				run,
 				run.peer,
-				peerBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response),
+				peerBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response, run.sharedContext),
 			);
 			return;
 		}
@@ -769,7 +776,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			await promptCodingHarnessBridgeAgent(
 				run,
 				run.coordinator,
-				finalizationBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response),
+				finalizationBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response, run.sharedContext),
 			);
 			return;
 		}
@@ -924,6 +931,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		);
 		const coordinator = roster[0];
 		if (!coordinator) return undefined;
+		const profileState = session.settingsManager.getKlermProfiles();
+		const sharedContext = sharedCodingHarnessContext(roster, profileState.sharedMemory);
+		const sharedContextDigest = crypto.createHash("sha256").update(sharedContext).digest("hex");
 		const peer =
 			setup.slots.workTogetherEnabled === true && shouldDelegateCodingHarnessTask(message, roster.length)
 				? selectCodingHarnessPeer(roster, coordinator.agentId)
@@ -955,6 +965,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			roster,
 			agents: new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }])),
 			originalPrompt: message,
+			sharedContext,
+			sharedContextDigest,
+			...(profileState.selectedSharedMemoryPresetId
+				? { sharedMemoryPresetId: profileState.selectedSharedMemoryPresetId }
+				: {}),
 			phase: "coordinator",
 			activeAgentId: coordinator.agentId,
 			responses: new Map(),
@@ -972,6 +987,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				peer,
 				workTogetherEnabled: setup.slots.workTogetherEnabled === true,
 				delegationReason,
+				selectedSharedMemoryPresetId: profileState.selectedSharedMemoryPresetId,
+				sharedContextDigest,
 			},
 			{ taskId, agentId: coordinator.agentId, phase: "coordinator" },
 		);
@@ -1003,6 +1020,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				selectedTarget: coordinator.model,
 				reason: run.rootTask.reason,
 				roster,
+				sharedContextDigest: run.sharedContextDigest,
+				...(run.sharedMemoryPresetId ? { sharedMemoryPresetId: run.sharedMemoryPresetId } : {}),
 				cwd: session.sessionManager.getCwd(),
 			});
 		} catch (routeLogError) {
@@ -1023,7 +1042,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		await promptCodingHarnessBridgeAgent(
 			run,
 			coordinator,
-			coordinatorBridgePrompt(message, coordinator, roster, peer),
+			coordinatorBridgePrompt(message, coordinator, peer, sharedContext),
 		);
 		return run;
 	};
@@ -2062,6 +2081,52 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				}
 				await session.settingsManager.flush();
 				return success(id, "assign_klerm_profile", await getDesktopSettingsPayload());
+			}
+
+			case "set_klerm_shared_memory": {
+				if (typeof command.memory !== "string") {
+					return error(id, "set_klerm_shared_memory", "Shared memory must be text.", "INVALID_SHARED_MEMORY");
+				}
+				session.settingsManager.setKlermSharedMemory(command.memory, command.presetId);
+				await session.settingsManager.flush();
+				return success(id, "set_klerm_shared_memory", await getDesktopSettingsPayload());
+			}
+
+			case "save_klerm_shared_memory_preset": {
+				if (typeof command.name !== "string" || typeof command.memory !== "string") {
+					return error(
+						id,
+						"save_klerm_shared_memory_preset",
+						"Preset name and memory are required.",
+						"INVALID_SHARED_MEMORY",
+					);
+				}
+				try {
+					session.settingsManager.saveKlermSharedMemoryPreset(command.name, command.memory);
+				} catch (presetError) {
+					return error(
+						id,
+						"save_klerm_shared_memory_preset",
+						presetError instanceof Error ? presetError.message : String(presetError),
+						"INVALID_SHARED_MEMORY",
+					);
+				}
+				await session.settingsManager.flush();
+				return success(id, "save_klerm_shared_memory_preset", await getDesktopSettingsPayload());
+			}
+
+			case "delete_klerm_shared_memory_preset": {
+				if (typeof command.presetId !== "string" || !command.presetId.trim()) {
+					return error(
+						id,
+						"delete_klerm_shared_memory_preset",
+						"A preset id is required.",
+						"INVALID_SHARED_MEMORY",
+					);
+				}
+				session.settingsManager.deleteKlermSharedMemoryPreset(command.presetId);
+				await session.settingsManager.flush();
+				return success(id, "delete_klerm_shared_memory_preset", await getDesktopSettingsPayload());
 			}
 
 			case "add_custom_model": {

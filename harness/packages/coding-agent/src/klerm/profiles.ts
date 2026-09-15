@@ -24,7 +24,15 @@ export interface KlermProfileState {
 	localProfileId?: string;
 	frontierProfileId?: string;
 	sharedMemory: string;
+	selectedSharedMemoryPresetId?: string;
+	sharedMemoryPresets: KlermSharedMemoryPreset[];
 	profiles: KlermProfile[];
+}
+
+export interface KlermSharedMemoryPreset {
+	id: string;
+	name: string;
+	memory: string;
 }
 
 const SCOUT_BEHAVIOUR = [
@@ -173,7 +181,11 @@ export function normalizeProfile(value: unknown): KlermProfile | undefined {
 
 export function normalizeProfileState(value: unknown): KlermProfileState {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		return { sharedMemory: "", profiles: DEFAULT_KLERM_PROFILES.map((profile) => ({ ...profile })) };
+		return {
+			sharedMemory: "",
+			sharedMemoryPresets: [],
+			profiles: DEFAULT_KLERM_PROFILES.map((profile) => ({ ...profile })),
+		};
 	}
 	const record = value as Record<string, unknown>;
 	const profiles = Array.isArray(record.profiles)
@@ -187,7 +199,32 @@ export function normalizeProfileState(value: unknown): KlermProfileState {
 		typeof record.frontierProfileId === "string" && ids.has(record.frontierProfileId)
 			? record.frontierProfileId
 			: undefined;
-	return { localProfileId, frontierProfileId, sharedMemory: textField(record.sharedMemory), profiles: resolved };
+	const sharedMemoryPresets = Array.isArray(record.sharedMemoryPresets)
+		? record.sharedMemoryPresets
+				.flatMap((value): KlermSharedMemoryPreset[] => {
+					if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+					const preset = value as Record<string, unknown>;
+					const id = typeof preset.id === "string" ? preset.id.trim() : "";
+					const name = typeof preset.name === "string" ? preset.name.trim() : "";
+					if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) || !name) return [];
+					return [{ id, name: name.slice(0, 40), memory: textField(preset.memory) }];
+				})
+				.filter((preset, index, presets) => presets.findIndex((candidate) => candidate.id === preset.id) === index)
+				.slice(0, 20)
+		: [];
+	const selectedSharedMemoryPresetId =
+		typeof record.selectedSharedMemoryPresetId === "string" &&
+		sharedMemoryPresets.some((preset) => preset.id === record.selectedSharedMemoryPresetId)
+			? record.selectedSharedMemoryPresetId
+			: undefined;
+	return {
+		localProfileId,
+		frontierProfileId,
+		sharedMemory: textField(record.sharedMemory),
+		...(selectedSharedMemoryPresetId ? { selectedSharedMemoryPresetId } : {}),
+		sharedMemoryPresets,
+		profiles: resolved,
+	};
 }
 
 export function assignedProfile(state: KlermProfileState, lane: "local" | "frontier"): KlermProfile | undefined {

@@ -12,6 +12,7 @@ import {
 	type KlermProfileState,
 	normalizeProfile,
 	normalizeProfileState,
+	profileIdFromName,
 } from "../klerm/profiles.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
@@ -835,9 +836,43 @@ export class SettingsManager {
 		this.save();
 	}
 
-	setKlermSharedMemory(sharedMemory: string): KlermProfileState {
+	setKlermSharedMemory(sharedMemory: string, selectedPresetId?: string): KlermProfileState {
 		const next = this.getKlermProfiles();
 		next.sharedMemory = sharedMemory.slice(0, 8000);
+		next.selectedSharedMemoryPresetId =
+			selectedPresetId && next.sharedMemoryPresets.some((preset) => preset.id === selectedPresetId)
+				? selectedPresetId
+				: undefined;
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
+	saveKlermSharedMemoryPreset(name: string, sharedMemory: string): KlermProfileState {
+		const next = this.getKlermProfiles();
+		const presetName = name.trim().slice(0, 40);
+		const baseId = profileIdFromName(presetName);
+		if (!baseId) throw new Error("Shared memory preset requires a valid name.");
+		const existing = next.sharedMemoryPresets.find((preset) => preset.id === baseId);
+		if (!existing && next.sharedMemoryPresets.length >= 20) throw new Error("Shared memory preset limit reached.");
+		const preset = { id: baseId, name: presetName, memory: sharedMemory.slice(0, 8000) };
+		if (existing)
+			next.sharedMemoryPresets = next.sharedMemoryPresets.map((candidate) =>
+				candidate.id === baseId ? preset : candidate,
+			);
+		else next.sharedMemoryPresets.push(preset);
+		next.sharedMemory = preset.memory;
+		next.selectedSharedMemoryPresetId = preset.id;
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
+	deleteKlermSharedMemoryPreset(id: string): KlermProfileState {
+		const next = this.getKlermProfiles();
+		next.sharedMemoryPresets = next.sharedMemoryPresets.filter((preset) => preset.id !== id);
+		if (next.selectedSharedMemoryPresetId === id) {
+			next.selectedSharedMemoryPresetId = undefined;
+			next.sharedMemory = "";
+		}
 		this.setKlermProfiles(next);
 		return this.getKlermProfiles();
 	}

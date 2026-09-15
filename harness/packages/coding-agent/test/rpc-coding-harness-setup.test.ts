@@ -284,6 +284,8 @@ describe("coding harness setup RPC", () => {
 				selectedHarness: "opencode",
 				selectedTarget: "openai/gpt-5.6-terra",
 			});
+			expect(decisions.at(-1)?.sharedContextDigest).toMatch(/^[a-f0-9]{64}$/);
+			expect(decisions.at(-1)).not.toHaveProperty("sharedMemory");
 			expect(discoverCodingHarnesses).toHaveBeenCalledTimes(1);
 		} finally {
 			harness.cleanup();
@@ -364,6 +366,12 @@ describe("coding harness setup RPC", () => {
 				},
 			});
 			await send({
+				id: "save-shared-memory",
+				type: "save_klerm_shared_memory_preset",
+				name: "Repository rules",
+				memory: "Use the shared repository conventions.",
+			});
+			await send({
 				id: "team-prompt",
 				type: "prompt",
 				message: "Review the frontend, backend, security, and tests for this architecture.",
@@ -375,21 +383,31 @@ describe("coding harness setup RPC", () => {
 			});
 			expect(promptCalls).toHaveLength(1);
 			expect(promptCalls[0]).toMatchObject({ session: { agentId: "agent6" } });
-			expect(promptCalls[0]?.text).toContain("agent6: harness opencode");
-			expect(promptCalls[0]?.text).toContain("agent7: harness codex");
+			expect(promptCalls[0]?.text).toContain("agent6: available; harness opencode");
+			expect(promptCalls[0]?.text).toContain("agent7: available; harness codex");
+			expect(promptCalls[0]?.text).toContain("Use the shared repository conventions.");
 			expect(promptCalls[0]?.text).not.toContain("agent8");
+			await send({
+				id: "change-shared-memory",
+				type: "set_klerm_shared_memory",
+				memory: "This applies only to the next task.",
+			});
 
 			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Coordinator pass" });
 			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
 			await vi.waitFor(() => expect(promptCalls).toHaveLength(2));
 			expect(promptCalls[1]).toMatchObject({ session: { agentId: "agent7" } });
 			expect(promptCalls[1]?.text).toContain("Coordinator result:\nCoordinator pass");
+			expect(promptCalls[1]?.text).toContain("Use the shared repository conventions.");
+			expect(promptCalls[1]?.text).not.toContain("This applies only to the next task.");
 
 			listeners.get("codex")?.({ type: "message", agentId: "agent7", text: "Peer pass" });
 			listeners.get("codex")?.({ type: "settled", agentId: "agent7", status: "completed" });
 			await vi.waitFor(() => expect(promptCalls).toHaveLength(3));
 			expect(promptCalls[2]?.session).toBe(promptCalls[0]?.session);
 			expect(promptCalls[2]?.text).toContain("Peer result:\nPeer pass");
+			expect(promptCalls[2]?.text).toContain("Use the shared repository conventions.");
+			expect(promptCalls[2]?.text).not.toContain("This applies only to the next task.");
 
 			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Final answer" });
 			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });

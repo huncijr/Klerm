@@ -94,4 +94,22 @@ describe("Klerm profiles", () => {
 			"Profile behaviour:",
 		);
 	});
+
+	it("persists, selects, and deletes shared-memory presets", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "klerm-shared-memory-"));
+		dirs.push(dir);
+		const manager = SettingsManager.create(dir, dir);
+		manager.saveKlermSharedMemoryPreset("Project Rules", "Run focused verification.");
+		await manager.flush();
+
+		const reloaded = SettingsManager.create(dir, dir);
+		expect(reloaded.getKlermProfiles()).toMatchObject({
+			sharedMemory: "Run focused verification.",
+			selectedSharedMemoryPresetId: "project-rules",
+			sharedMemoryPresets: [{ id: "project-rules", name: "Project Rules", memory: "Run focused verification." }],
+		});
+		reloaded.deleteKlermSharedMemoryPreset("project-rules");
+		expect(reloaded.getKlermProfiles()).toMatchObject({ sharedMemory: "", sharedMemoryPresets: [] });
+		expect(reloaded.getKlermProfiles().selectedSharedMemoryPresetId).toBeUndefined();
+	});
 });

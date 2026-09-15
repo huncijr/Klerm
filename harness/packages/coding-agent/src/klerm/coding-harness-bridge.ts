@@ -135,22 +135,31 @@ function rosterPrompt(roster: readonly RunnableCodingHarnessAgent[]): string {
 	return roster
 		.map(
 			(agent) =>
-				`- ${agent.agentId}: harness ${agent.harness}; model ${agent.model}; role ${agent.role}; strength ${agent.strengthBand}/5; strengths ${agent.strengths.join(", ")}; limits ${agent.limits.join(", ")}; tools ${agent.tools.join(", ") || "native defaults"}; specialties ${agent.specialties.join(", ") || "none"}; capability source ${agent.capabilitySource}`,
+				`- ${agent.agentId}: available; harness ${agent.harness}; model ${agent.model}; role ${agent.role}; effort ${agent.effort}; strength ${agent.strengthBand}/5; strengths ${agent.strengths.join(", ")}; limits ${agent.limits.join(", ")}; tools ${agent.tools.join(", ") || "native defaults"}; specialties ${agent.specialties.join(", ") || "none"}; native session resume ${agent.adapterCapabilities.resumeSession ? "supported" : "unsupported"}; role enforcement ${agent.adapterCapabilities.roleEnforcement ? "supported" : "prompt-only"}; capability source ${agent.capabilitySource}`,
 		)
 		.join("\n");
+}
+
+export function sharedCodingHarnessContext(roster: readonly RunnableCodingHarnessAgent[], userMemory: string): string {
+	return [
+		"Shared collaboration context (task-start snapshot):",
+		"Active agent roster:",
+		rosterPrompt(roster),
+		userMemory.trim() ? `User-authored shared memory:\n${userMemory.trim()}` : "User-authored shared memory: none",
+	].join("\n");
 }
 
 export function coordinatorBridgePrompt(
 	prompt: string,
 	coordinator: RunnableCodingHarnessAgent,
-	roster: readonly RunnableCodingHarnessAgent[],
 	peer: RunnableCodingHarnessAgent | undefined,
+	sharedContext: string,
 ): string {
 	return [
 		"<klerm_bridge>",
 		`You are ${coordinator.agentId}, the coordinator for this task.`,
 		"Only the runnable agents below are active. Never refer work to any other configured agent.",
-		rosterPrompt(roster),
+		sharedContext,
 		peer
 			? `Klerm selected ${peer.agentId} for a focused second pass. Complete your own focused work first, then provide a precise result that Klerm can send to ${peer.agentId}. Do not claim that peer work already happened.`
 			: "No peer handoff is scheduled. Complete the task directly.",
@@ -165,10 +174,12 @@ export function peerBridgePrompt(
 	coordinator: RunnableCodingHarnessAgent,
 	peer: RunnableCodingHarnessAgent,
 	coordinatorResult: string,
+	sharedContext: string,
 ): string {
 	return [
 		"<klerm_bridge>",
 		`You are ${peer.agentId}. ${coordinator.agentId} remains the coordinator and final answer owner.`,
+		sharedContext,
 		"Perform a focused independent second pass: inspect the current workspace, find missing requirements, correctness risks, and verification gaps, then fix or clearly report them within your configured role.",
 		"Return concrete findings, changed files, verification, and open issues. Do not restart completed work without a reason.",
 		`Coordinator result:\n${coordinatorResult}`,
@@ -183,10 +194,12 @@ export function finalizationBridgePrompt(
 	coordinator: RunnableCodingHarnessAgent,
 	peer: RunnableCodingHarnessAgent,
 	peerResult: string,
+	sharedContext: string,
 ): string {
 	return [
 		"<klerm_bridge>",
 		`Resume as ${coordinator.agentId}, the coordinator and final answer owner.`,
+		sharedContext,
 		`${peer.agentId} completed the focused second pass below. Review it against the current workspace, resolve any remaining issue allowed by your role, and give the final user answer.`,
 		`Peer result:\n${peerResult}`,
 		"</klerm_bridge>",

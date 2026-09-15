@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
+	import { BookOpen, ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -17,6 +17,7 @@
 		CodingHarnessSlotSettings,
 		ImageAttachment,
 		KlermProfile,
+		KlermSharedMemoryPreset,
 		McpColor,
 		McpServerStatus,
 		SelectOption,
@@ -71,6 +72,9 @@
 		activeAgent,
 		roleDisabled,
 		buildModeOffer,
+		sharedMemory,
+		sharedMemoryPresets,
+		selectedSharedMemoryPresetId,
 		onsend,
 		onattachmenterror,
 		onstop,
@@ -97,9 +101,8 @@
 		onturnoffexternalagents,
 		onviewexternalagent,
 		onworktogetherchange,
-		teamRole,
-		pendingTeamRole,
-		onallrolechange,
+		onsharedmemorychange,
+		onsavesharedmemory,
 	}: {
 		draft: string;
 		attachments: ImageAttachment[];
@@ -144,6 +147,9 @@
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
+		sharedMemory: string;
+		sharedMemoryPresets: KlermSharedMemoryPreset[];
+		selectedSharedMemoryPresetId: string;
 		onsend: (text: string, images: ImageAttachment[]) => void;
 		onattachmenterror: (message: string) => void;
 		onstop: () => void;
@@ -170,9 +176,8 @@
 		onturnoffexternalagents: () => void;
 		onviewexternalagent: (id: string) => void;
 		onworktogetherchange: (enabled: boolean) => void;
-		teamRole?: WorkerRole;
-		pendingTeamRole?: WorkerRole;
-		onallrolechange: (role: WorkerRole) => void;
+		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
+		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -188,6 +193,10 @@
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
 	let roleMenuOpen = $state(false);
+	let sharedMemoryOpen = $state(false);
+	let sharedMemoryDraft = $state("");
+	let sharedMemoryName = $state("");
+	let sharedMemoryBusy = $state(false);
 	let roleMenuRoot: HTMLElement | undefined = $state();
 	let agentStripRoot: HTMLElement | undefined = $state();
 	let pinnedAgentId = $state("");
@@ -198,7 +207,6 @@
 	let mcpSelectedIndex = $state(0);
 	const activeAgentLabel = $derived(activeAgent === "agent1" ? "Agent 1" : "Agent 2");
 	const activeRole = $derived(activeAgent === "agent1" ? localRole : frontierRole);
-	const displayedTeamRole = $derived(pendingTeamRole ?? teamRole);
 	const approvalModes: ApprovalMode[] = ["never", "risky", "always"];
 	const approvalLabel = $derived(
 		approvalMode === "always" ? "Always allow" : approvalMode === "never" ? "Block risky" : "Ask risky",
@@ -214,6 +222,7 @@
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
 	const roleControlDisabled = $derived(externalMode ? externalHarnessBusy : roleDisabled);
+	const sharedMemoryVisible = $derived(externalMode && externalAgentSlots.filter(({ slot }) => slot.enabled).length >= 2);
 	const allExternalAgentsDisabled = $derived(
 		externalAgentSlots.length > 0 && externalAgentSlots.every(({ slot }) => !slot.enabled),
 	);
@@ -298,14 +307,16 @@
 
 	onMount(() => {
 		const closeRoleMenu = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || (!roleMenuOpen && !pinnedAgentId)) return;
+			if (event.key !== "Escape" || (!roleMenuOpen && !sharedMemoryOpen && !pinnedAgentId)) return;
 			event.preventDefault();
 			roleMenuOpen = false;
+			sharedMemoryOpen = false;
 			pinnedAgentId = "";
 		};
 		const closeRoleMenuOutside = (event: PointerEvent) => {
-			if (!roleMenuOpen || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
+			if ((!roleMenuOpen && !sharedMemoryOpen) || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
 			roleMenuOpen = false;
+			sharedMemoryOpen = false;
 		};
 		const closeAgentMenuOutside = (event: PointerEvent) => {
 			if (!pinnedAgentId || !(event.target instanceof Node) || agentStripRoot?.contains(event.target)) return;
@@ -326,7 +337,7 @@
 	function submit(): void {
 		const text = draft.trim();
 		if ((!text && attachments.length === 0) || sendDisabled) return;
-		if (text === "/mode") {
+		if (text === "/mode" && !externalMode) {
 			draft = "";
 			roleMenuOpen = true;
 			return;
@@ -487,7 +498,7 @@
 				return;
 			}
 		}
-		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && draft.trim() === "/mode") {
+		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && draft.trim() === "/mode" && !externalMode) {
 			event.preventDefault();
 			draft = "";
 			roleMenuOpen = true;
@@ -555,6 +566,7 @@
 			</div>
 		{/key}
 	{/if}
+	{#if !externalMode}
 	<div class="mx-auto mb-1 flex w-[min(820px,100%)] justify-end px-1">
 		<button
 			type="button"
@@ -562,13 +574,10 @@
 			class="border-0 bg-transparent p-0 font-mono text-[8px] uppercase tracking-[.1em] text-[#737f87] cursor-pointer hover:text-[#cbd2d6] disabled:cursor-not-allowed disabled:opacity-45"
 			onclick={() => (roleMenuOpen = !roleMenuOpen)}
 		>
-			{#if externalMode}
-				All agents: {displayedTeamRole === "planner" ? "Plan" : displayedTeamRole === "builder" ? "Build" : "Mixed"}{pendingTeamRole ? " · next prompt" : ""}
-			{:else}
-				{activeAgentLabel} Mode: {activeRole === "planner" ? "Plan" : "Build"}
-			{/if}
+			{activeAgentLabel} Mode: {activeRole === "planner" ? "Plan" : "Build"}
 		</button>
 	</div>
+	{/if}
 
 	<form
 		class="mx-auto w-[min(820px,100%)] overflow-visible rounded-xl border border-[#2a3239] bg-[#0d1116] shadow-[0_14px_40px_rgba(0,0,0,.24)] focus-within:border-[#46515a]"
@@ -777,6 +786,51 @@
 			>
 				<Plus size={17} stroke-width={1.7} />
 			</button>
+			{#if sharedMemoryVisible}
+			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
+				<button
+					type="button"
+					aria-label="Edit shared memory"
+					aria-expanded={sharedMemoryOpen}
+					disabled={externalHarnessBusy || sharedMemoryBusy}
+					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
+					onclick={() => {
+						sharedMemoryDraft = sharedMemory;
+						sharedMemoryOpen = !sharedMemoryOpen;
+					}}
+				>
+					<BookOpen size={13} />
+					<ChevronDown size={11} />
+				</button>
+				{#if sharedMemoryOpen}
+					<div class="absolute right-0 bottom-[44px] z-20 w-[min(360px,calc(100vw-30px))] rounded-lg border border-[#303a42] bg-[#10161b] p-3 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
+						<strong class="block font-mono text-[10px] text-white">Shared Memory</strong>
+						<p class="mt-1 mb-2 font-mono text-[8px] leading-[1.45] text-[#66727b]">All active external agents receive this text plus a current agent roster when the next task starts.</p>
+						<select
+							value={selectedSharedMemoryPresetId}
+							class="mb-2 h-8 w-full rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white [color-scheme:dark]"
+							onchange={(event) => {
+								const preset = sharedMemoryPresets.find((candidate) => candidate.id === event.currentTarget.value);
+								sharedMemoryDraft = preset?.memory ?? "";
+								void onsharedmemorychange(sharedMemoryDraft, preset?.id);
+							}}
+						>
+							<option value="">Default dynamic roster</option>
+							{#each sharedMemoryPresets as preset (preset.id)}<option value={preset.id}>{preset.name}</option>{/each}
+						</select>
+						<textarea bind:value={sharedMemoryDraft} maxlength="8000" rows="6" placeholder="Project conventions, constraints, shared decisions..." class="w-full resize-y rounded-md border border-[#303a42] bg-[#080c10] p-2 font-mono text-[9px] leading-[1.5] text-white outline-0"></textarea>
+						<div class="mt-2 flex gap-1.5">
+							<input bind:value={sharedMemoryName} maxlength="40" placeholder="preset name" class="h-8 min-w-0 flex-1 rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white outline-0" />
+							<button type="button" disabled={!sharedMemoryName.trim() || sharedMemoryBusy} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#d7e7ff] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsavesharedmemory(sharedMemoryName, sharedMemoryDraft)) sharedMemoryName = ""; sharedMemoryBusy = false; }}>Save preset</button>
+						</div>
+						<div class="mt-2 flex justify-end gap-1.5">
+							<button type="button" class="h-8 rounded-md px-2 font-mono text-[8px] text-[#8b969e]" onclick={() => { sharedMemoryDraft = ""; void onsharedmemorychange(""); }}>Reset</button>
+							<button type="button" disabled={sharedMemoryBusy} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Apply</button>
+						</div>
+					</div>
+				{/if}
+			</div>
+			{:else if !externalMode}
 			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
 				<button
 					type="button"
@@ -786,28 +840,11 @@
 					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
 					onclick={() => (roleMenuOpen = !roleMenuOpen)}
 				>
-					{#if displayedTeamRole === "planner" || (!externalMode && activeRole === "planner")}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
+					{#if activeRole === "planner"}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
 					<ChevronDown size={11} />
 				</button>
 				{#if roleMenuOpen}
 					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
-						{#if externalMode}
-							<div class="grid grid-cols-2 gap-1 py-1">
-								{#each ["planner", "builder"] as option}
-									<button
-										type="button"
-										class={`rounded-md border px-2 py-2 font-mono text-[8px] cursor-pointer ${displayedTeamRole === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`}
-										onclick={() => {
-											onallrolechange(option as WorkerRole);
-											roleMenuOpen = false;
-										}}
-									>
-										{option === "planner" ? "All Plan" : "All Build"}
-									</button>
-								{/each}
-							</div>
-							<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Applies to every enabled agent on the next prompt. External Plan is read-only only when its adapter enforces it.</p>
-						{:else}
 							{#each [["agent1", localRole], ["agent2", frontierRole]] as [agent, role]}
 								<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
 									<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
@@ -817,10 +854,10 @@
 								</div>
 							{/each}
 							<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build has full tools and asks before risky actions.</p>
-						{/if}
 					</div>
 				{/if}
 			</div>
+			{/if}
 			<div class="absolute right-[9px] bottom-2.5 h-[38px] w-[38px] narrow-520:right-[7px] narrow-520:bottom-[7px] narrow-520:h-9 narrow-520:w-9">
 				{#if taskActive}
 					<button

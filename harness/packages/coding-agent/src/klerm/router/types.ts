@@ -191,5 +191,7 @@ export interface CodingHarnessRouteDecision {
 	selectedTarget: string;
 	reason: string;
 	roster: RunnableCodingHarnessAgent[];
+	sharedContextDigest: string;
+	sharedMemoryPresetId?: string;
 	cwd: string;
 }

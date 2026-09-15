@@ -5,7 +5,6 @@
 	import {
 		bridgeEventCard,
 		preventDesktopContextMenu,
-		teamRoleChange,
 		type WorkspaceEditDraft,
 	} from "./lib/agent-workspace.ts";
 	import {
@@ -23,7 +22,6 @@
 		addCodingHarnessSlot,
 		assignWorkTogetherModels,
 		removeCodingHarnessSlot,
-		setAllCodingHarnessAgentRoles,
 		setAllCodingHarnessAgentsEnabled,
 		setExternalCodingHarnessesEnabled,
 		shouldShowAgentContext,
@@ -68,7 +66,6 @@
 		TimelineTone,
 		ThinkingLevel,
 		ThinkingSetting,
-		WorkerRole,
 		WorkspaceStatus,
 	} from "./lib/model.ts";
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
@@ -163,8 +160,6 @@
 	let codingHarnessSetupLoading = $state(false);
 	let codingHarnessSetupError = $state("");
 	let visibleAgentIds = $state<string[]>([]);
-	let pendingTeamRole = $state<WorkerRole | undefined>(undefined);
-	let teamRoleApplying = $state(false);
 	let workspaceEditDrafts = $state<Record<string, WorkspaceEditDraft>>({});
 	// Agent view visibility is per session: each session restores exactly the
 	// views that were opened in it, and a first visit opens none.
@@ -200,7 +195,6 @@
 
 	const interactionActive = $derived(
 		taskActive ||
-			teamRoleApplying ||
 			terminalBusy ||
 			configBusy !== undefined ||
 			sessionTransitionActive ||
@@ -235,10 +229,6 @@
 	const workTogetherEnabled = $derived(
 		workTogetherAvailable && codingHarnessSetup?.slots.workTogetherEnabled === true,
 	);
-	const teamRole = $derived.by<WorkerRole | undefined>(() => {
-		const roles = new Set(configuredHarnessAgents.filter((agent) => agent.enabled).map((agent) => agent.role));
-		return roles.size === 1 ? [...roles][0] : undefined;
-	});
 	const agentContextVisible = $derived(
 		codingHarnessSetup ? shouldShowAgentContext(codingHarnessSetup.slots, visibleAgentIds) : false,
 	);
@@ -1079,14 +1069,6 @@
 				} else {
 					void refreshMcpStatus();
 				}
-				if (pendingTeamRole) {
-					const queuedRole = pendingTeamRole;
-					teamRoleApplying = true;
-					void applyAllCodingHarnessAgentRoles(queuedRole).finally(() => {
-						pendingTeamRole = undefined;
-						teamRoleApplying = false;
-					});
-				}
 				return;
 			}
 			case "message_start": {
@@ -1515,27 +1497,6 @@
 		}
 	}
 
-	async function applyAllCodingHarnessAgentRoles(role: WorkerRole): Promise<boolean> {
-		if (!codingHarnessSetup) return false;
-		const agents = codingHarnessSetup.slots.agents;
-		if (!(await saveCodingHarnessSlots(setAllCodingHarnessAgentRoles(codingHarnessSetup.slots, role)))) return false;
-		const update: { localRole?: WorkerRole; frontierRole?: WorkerRole } = {};
-		if (agents.some((agent) => agent.enabled && agent.kind === "klerm" && agent.id === "agent1")) {
-			update.localRole = role;
-		}
-		if (agents.some((agent) => agent.enabled && agent.kind === "klerm" && agent.id === "agent2")) {
-			update.frontierRole = role;
-		}
-		return Object.keys(update).length === 0 || applyConfigUpdate(update);
-	}
-
-	function setAllCodingHarnessRoles(role: WorkerRole): void {
-		buildModeOffer = undefined;
-		const change = teamRoleChange(role, taskActive);
-		if (change.pendingRole) pendingTeamRole = change.pendingRole;
-		if (change.applyRole) void applyAllCodingHarnessAgentRoles(change.applyRole);
-	}
-
 	async function setAllCodingHarnessAgents(enabled: boolean): Promise<void> {
 		if (!codingHarnessSetup) return;
 		if (await saveCodingHarnessSlots(setAllCodingHarnessAgentsEnabled(codingHarnessSetup.slots, enabled))) {
@@ -1636,6 +1597,39 @@
 				lane,
 				profileId: profileId || null,
 			});
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function setSharedMemory(memory: string, presetId?: string): Promise<boolean> {
+		if (!supportsCommand("set_klerm_shared_memory")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("set_klerm_shared_memory", { memory, presetId });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function saveSharedMemoryPreset(name: string, memory: string): Promise<boolean> {
+		if (!supportsCommand("save_klerm_shared_memory_preset")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("save_klerm_shared_memory_preset", { name, memory });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function deleteSharedMemoryPreset(presetId: string): Promise<boolean> {
+		if (!supportsCommand("delete_klerm_shared_memory_preset")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("delete_klerm_shared_memory_preset", { presetId });
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -2192,7 +2186,6 @@
 		if (
 			(!text && images.length === 0) ||
 			taskActive ||
-			teamRoleApplying ||
 			codingHarnessSetupLoading ||
 			configBusy ||
 			sessionTransitionActive ||
@@ -2410,6 +2403,9 @@
 				onoauthsubmit={submitOauthPrompt}
 				onupsertprofile={upsertProfile}
 				ondeleteprofile={deleteProfile}
+				onsharedmemorychange={setSharedMemory}
+				onsavesharedmemory={saveSharedMemoryPreset}
+				ondeletesharedmemory={deleteSharedMemoryPreset}
 				onrefreshmcp={() => void refreshMcpStatus()}
 				onreloadmcp={() => void reloadMcpServers()}
 				onaddmcpserver={addMcpServer}
@@ -2533,14 +2529,17 @@
 			localProfileId={desktopSettings?.profiles.localProfileId ?? ""}
 			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
 			profileDisabled={!backendReady || interactionActive}
+			sharedMemory={desktopSettings?.profiles.sharedMemory ?? ""}
+			sharedMemoryPresets={desktopSettings?.profiles.sharedMemoryPresets ?? []}
+			selectedSharedMemoryPresetId={desktopSettings?.profiles.selectedSharedMemoryPresetId ?? ""}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
 			approvalMode={currentConfig?.localApprovalMode ?? "risky"}
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			{buildModeOffer}
-			{teamRole}
-			{pendingTeamRole}
+			onsharedmemorychange={setSharedMemory}
+			onsavesharedmemory={saveSharedMemoryPreset}
 			onsend={(text, images) => void sendMessage(text, images)}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
@@ -2579,7 +2578,6 @@
 			onturnoffexternalagents={() => void turnOffExternalCodingHarnesses()}
 			onviewexternalagent={toggleAgentView}
 			onworktogetherchange={(enabled) => void setWorkTogetherMode(enabled)}
-			onallrolechange={setAllCodingHarnessRoles}
 		/>
 
 		{#if bottomPanelVisible}

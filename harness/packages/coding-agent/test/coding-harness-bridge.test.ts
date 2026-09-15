@@ -9,6 +9,7 @@ import {
 	getCodingHarnessBridgeLogPath,
 	readCodingHarnessBridgeLog,
 	selectCodingHarnessPeer,
+	sharedCodingHarnessContext,
 	shouldDelegateCodingHarnessTask,
 } from "../src/klerm/coding-harness-bridge.ts";
 import type { RunnableCodingHarnessAgent } from "../src/klerm/coding-harness-setup.ts";
@@ -66,10 +67,29 @@ describe("coding harness bridge", () => {
 	test("shows only the supplied runnable roster in coordinator prompts", () => {
 		const coordinator = runnableAgent("agent6");
 		const peer = runnableAgent("agent7", { harness: "codex" });
-		const prompt = coordinatorBridgePrompt("Implement the task", coordinator, [coordinator, peer], peer);
-		expect(prompt).toContain("agent6: harness opencode");
-		expect(prompt).toContain("agent7: harness codex");
+		const roster = [coordinator, peer];
+		const prompt = coordinatorBridgePrompt(
+			"Implement the task",
+			coordinator,
+			peer,
+			sharedCodingHarnessContext(roster, ""),
+		);
+		expect(prompt).toContain("agent6: available; harness opencode");
+		expect(prompt).toContain("agent7: available; harness codex");
 		expect(prompt).not.toContain("agent8");
+	});
+
+	test("builds one shared roster and user-memory snapshot", () => {
+		const coordinator = runnableAgent("agent6", { effort: "high", specialties: ["backend"] });
+		const peer = runnableAgent("agent7", { harness: "codex", role: "planner" });
+		const context = sharedCodingHarnessContext([coordinator, peer], "Use the repository conventions.");
+		expect(context).toContain("task-start snapshot");
+		expect(context).toContain(
+			"agent6: available; harness opencode; model provider/agent6; role builder; effort high",
+		);
+		expect(context).toContain("agent7: available; harness codex");
+		expect(context).toContain("User-authored shared memory:\nUse the repository conventions.");
+		expect(coordinatorBridgePrompt("Implement", coordinator, peer, context)).toContain(context);
 	});
 
 	test("appends deterministic JSONL events and hashes responses", async () => {
