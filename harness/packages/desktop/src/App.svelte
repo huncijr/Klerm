@@ -2530,6 +2530,7 @@
 			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
 			profileDisabled={!backendReady || interactionActive}
 			sharedMemory={desktopSettings?.profiles.sharedMemory ?? ""}
+			defaultSharedMemory={desktopSettings?.profiles.defaultSharedMemory ?? ""}
 			sharedMemoryPresets={desktopSettings?.profiles.sharedMemoryPresets ?? []}
 			selectedSharedMemoryPresetId={desktopSettings?.profiles.selectedSharedMemoryPresetId ?? ""}
 			localRole={currentConfig?.localRole ?? "builder"}

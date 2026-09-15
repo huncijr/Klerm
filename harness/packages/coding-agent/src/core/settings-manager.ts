@@ -838,11 +838,17 @@ export class SettingsManager {
 
 	setKlermSharedMemory(sharedMemory: string, selectedPresetId?: string): KlermProfileState {
 		const next = this.getKlermProfiles();
-		next.sharedMemory = sharedMemory.slice(0, 8000);
-		next.selectedSharedMemoryPresetId =
-			selectedPresetId && next.sharedMemoryPresets.some((preset) => preset.id === selectedPresetId)
-				? selectedPresetId
-				: undefined;
+		const preset = selectedPresetId
+			? next.sharedMemoryPresets.find((candidate) => candidate.id === selectedPresetId)
+			: undefined;
+		if (preset) {
+			next.sharedMemory = preset.memory;
+			next.selectedSharedMemoryPresetId = preset.id;
+		} else {
+			next.defaultSharedMemory = sharedMemory.slice(0, 8000);
+			next.sharedMemory = next.defaultSharedMemory;
+			next.selectedSharedMemoryPresetId = undefined;
+		}
 		this.setKlermProfiles(next);
 		return this.getKlermProfiles();
 	}
@@ -871,7 +877,7 @@ export class SettingsManager {
 		next.sharedMemoryPresets = next.sharedMemoryPresets.filter((preset) => preset.id !== id);
 		if (next.selectedSharedMemoryPresetId === id) {
 			next.selectedSharedMemoryPresetId = undefined;
-			next.sharedMemory = "";
+			next.sharedMemory = next.defaultSharedMemory;
 		}
 		this.setKlermProfiles(next);
 		return this.getKlermProfiles();

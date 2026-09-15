@@ -96,6 +96,7 @@ export interface KlermProfileState {
 	localProfileId?: string;
 	frontierProfileId?: string;
 	sharedMemory: string;
+	defaultSharedMemory: string;
 	selectedSharedMemoryPresetId?: string;
 	sharedMemoryPresets: KlermSharedMemoryPreset[];
 	profiles: KlermProfile[];

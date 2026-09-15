@@ -25,6 +25,13 @@ describe("Klerm profiles", () => {
 	it("fills default profiles when empty", () => {
 		const state = normalizeProfileState({});
 		expect(state.profiles.map((profile) => profile.id)).toEqual(["scout", "sage"]);
+		expect(state.defaultSharedMemory).toBe("");
+	});
+
+	it("migrates legacy custom shared memory to the persistent default", () => {
+		const state = normalizeProfileState({ sharedMemory: "Keep changes focused." });
+		expect(state.sharedMemory).toBe("Keep changes focused.");
+		expect(state.defaultSharedMemory).toBe("Keep changes focused.");
 	});
 
 	it("ships default Scout and Sage prompts with levels", () => {
@@ -99,17 +106,23 @@ describe("Klerm profiles", () => {
 		const dir = await mkdtemp(join(tmpdir(), "klerm-shared-memory-"));
 		dirs.push(dir);
 		const manager = SettingsManager.create(dir, dir);
+		manager.setKlermSharedMemory("Default project rules.");
 		manager.saveKlermSharedMemoryPreset("Project Rules", "Run focused verification.");
 		await manager.flush();
 
 		const reloaded = SettingsManager.create(dir, dir);
 		expect(reloaded.getKlermProfiles()).toMatchObject({
 			sharedMemory: "Run focused verification.",
+			defaultSharedMemory: "Default project rules.",
 			selectedSharedMemoryPresetId: "project-rules",
 			sharedMemoryPresets: [{ id: "project-rules", name: "Project Rules", memory: "Run focused verification." }],
 		});
 		reloaded.deleteKlermSharedMemoryPreset("project-rules");
-		expect(reloaded.getKlermProfiles()).toMatchObject({ sharedMemory: "", sharedMemoryPresets: [] });
+		expect(reloaded.getKlermProfiles()).toMatchObject({
+			sharedMemory: "Default project rules.",
+			defaultSharedMemory: "Default project rules.",
+			sharedMemoryPresets: [],
+		});
 		expect(reloaded.getKlermProfiles().selectedSharedMemoryPresetId).toBeUndefined();
 	});
 });

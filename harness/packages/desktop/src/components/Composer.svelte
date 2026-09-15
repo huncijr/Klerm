@@ -73,6 +73,7 @@
 		roleDisabled,
 		buildModeOffer,
 		sharedMemory,
+		defaultSharedMemory,
 		sharedMemoryPresets,
 		selectedSharedMemoryPresetId,
 		onsend,
@@ -148,6 +149,7 @@
 		roleDisabled: boolean;
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
 		sharedMemory: string;
+		defaultSharedMemory: string;
 		sharedMemoryPresets: KlermSharedMemoryPreset[];
 		selectedSharedMemoryPresetId: string;
 		onsend: (text: string, images: ImageAttachment[]) => void;
@@ -796,6 +798,7 @@
 					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
 					onclick={() => {
 						sharedMemoryDraft = sharedMemory;
+						sharedMemoryName = sharedMemoryPresets.find((preset) => preset.id === selectedSharedMemoryPresetId)?.name ?? "";
 						sharedMemoryOpen = !sharedMemoryOpen;
 					}}
 				>
@@ -811,11 +814,12 @@
 							class="mb-2 h-8 w-full rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white [color-scheme:dark]"
 							onchange={(event) => {
 								const preset = sharedMemoryPresets.find((candidate) => candidate.id === event.currentTarget.value);
-								sharedMemoryDraft = preset?.memory ?? "";
+								sharedMemoryDraft = preset?.memory ?? defaultSharedMemory;
+								sharedMemoryName = preset?.name ?? "";
 								void onsharedmemorychange(sharedMemoryDraft, preset?.id);
 							}}
 						>
-							<option value="">Default dynamic roster</option>
+							<option value="">Default shared memory</option>
 							{#each sharedMemoryPresets as preset (preset.id)}<option value={preset.id}>{preset.name}</option>{/each}
 						</select>
 						<textarea bind:value={sharedMemoryDraft} maxlength="8000" rows="6" placeholder="Project conventions, constraints, shared decisions..." class="w-full resize-y rounded-md border border-[#303a42] bg-[#080c10] p-2 font-mono text-[9px] leading-[1.5] text-white outline-0"></textarea>
@@ -824,8 +828,8 @@
 							<button type="button" disabled={!sharedMemoryName.trim() || sharedMemoryBusy} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#d7e7ff] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsavesharedmemory(sharedMemoryName, sharedMemoryDraft)) sharedMemoryName = ""; sharedMemoryBusy = false; }}>Save preset</button>
 						</div>
 						<div class="mt-2 flex justify-end gap-1.5">
-							<button type="button" class="h-8 rounded-md px-2 font-mono text-[8px] text-[#8b969e]" onclick={() => { sharedMemoryDraft = ""; void onsharedmemorychange(""); }}>Reset</button>
-							<button type="button" disabled={sharedMemoryBusy} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Apply</button>
+							<button type="button" class="h-8 rounded-md px-2 font-mono text-[8px] text-[#8b969e]" onclick={() => { sharedMemoryDraft = defaultSharedMemory; sharedMemoryName = ""; void onsharedmemorychange(defaultSharedMemory); }}>Use default</button>
+							<button type="button" disabled={sharedMemoryBusy} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Save as default</button>
 						</div>
 					</div>
 				{/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Maximize2, Shrink } from "@lucide/svelte";
+	import { BookOpen, Check, Maximize2, Plus, Shrink, Trash2 } from "@lucide/svelte";
 	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import { addCodingHarnessSlot, codingHarnessSlotsEqual, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
@@ -146,6 +146,10 @@
 	let sharedMemoryPresetName = $state("");
 	let sharedMemoryPresetText = $state("");
 	let sharedMemorySaving = $state(false);
+	let defaultSharedMemoryDraft = $state("");
+	let appliedDefaultSharedMemory = $state("");
+	let defaultSharedMemorySaving = $state(false);
+	let addMemoryOpen = $state(false);
 	let mcpName = $state("");
 	let mcpColor = $state<(typeof MCP_COLORS)[number]>("base");
 	let mcpTransport = $state<"stdio" | "http" | "sse">("stdio");
@@ -452,6 +456,13 @@
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
+	});
+
+	$effect(() => {
+		const next = settings.profiles.defaultSharedMemory;
+		if (next === appliedDefaultSharedMemory) return;
+		appliedDefaultSharedMemory = next;
+		defaultSharedMemoryDraft = next;
 	});
 
 	const harnessDirty = $derived(
@@ -920,39 +931,59 @@
 			</div>
 		{:else}
 			<div class="mx-auto w-[min(720px,100%)] space-y-4">
-				<section class="rounded-xl border border-[#2b3640] bg-[#0a0f13] p-4">
-					<div class="flex items-start justify-between gap-3">
-						<div>
-							<strong class="font-mono text-[11px] text-white">Shared collaboration memory</strong>
-							<p class="m-0 mt-1 font-mono text-[8px] leading-[1.5] text-[#6e7a83]">The active preset is appended to a dynamic agent roster when an external team task starts.</p>
-						</div>
-						<button type="button" class="h-7 shrink-0 rounded-md border border-[#34414a] px-2 font-mono text-[8px] text-[#9aa6ae]" onclick={() => void onsharedmemorychange("")}>Use default</button>
-					</div>
-					{#if settings.profiles.sharedMemory && !settings.profiles.selectedSharedMemoryPresetId}
-						<p class="mt-3 mb-0 rounded-md border border-[#303a42] bg-[#05080b] p-2 whitespace-pre-wrap font-mono text-[9px] text-[#aab4bb]">Custom active memory: {settings.profiles.sharedMemory}</p>
-					{/if}
-					<div class="mt-3 space-y-2">
-						{#each settings.profiles.sharedMemoryPresets as preset (preset.id)}
-							<div class={`rounded-lg border p-3 ${settings.profiles.selectedSharedMemoryPresetId === preset.id ? "border-[#607f20] bg-[#10170c]" : "border-[#232c34] bg-[#05080b]"}`}>
-								<div class="flex items-center gap-2">
-									<strong class="mr-auto font-mono text-[10px] text-white">{preset.name}</strong>
-									{#if settings.profiles.selectedSharedMemoryPresetId === preset.id}<span class="font-mono text-[7px] tracking-[.1em] text-[#9bbb55] uppercase">Active</span>{/if}
-									<button type="button" class="font-mono text-[8px] text-[#9cc0f2]" onclick={() => void onsharedmemorychange(preset.memory, preset.id)}>Use</button>
-									<button type="button" class="font-mono text-[8px] text-[#f3a49c]" onclick={() => void ondeletesharedmemory(preset.id)}>Delete</button>
-								</div>
-								<p class="mt-2 mb-0 line-clamp-3 whitespace-pre-wrap font-mono text-[8px] leading-[1.5] text-[#7b868e]">{preset.memory || "Empty preset"}</p>
+				<header>
+					<p class="m-0 font-mono text-[8px] tracking-[.18em] text-[#8295a3] uppercase">Team context</p>
+					<h2 class="mt-1 mb-0 text-[18px] font-medium text-white">Shared memory</h2>
+					<p class="mt-1 mb-0 max-w-[560px] text-[10px] leading-[1.55] text-[#74818a]">Give every external agent the same project conventions and decisions. Klerm adds the current agent roster automatically when a task starts.</p>
+				</header>
+				<section class={`overflow-hidden rounded-2xl border ${settings.profiles.selectedSharedMemoryPresetId ? "border-[#2b3640]" : "border-[#6f8e2c]"} bg-[linear-gradient(145deg,#11191d,#090d11)] shadow-[0_18px_50px_rgba(0,0,0,.24)]`}>
+					<div class="flex items-start gap-3 border-b border-white/[.06] p-4">
+						<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#3d4b35] bg-[#172012] text-[#a9c94d]"><BookOpen size={17} stroke-width={1.6} /></span>
+						<div class="min-w-0 flex-1">
+							<div class="flex flex-wrap items-center gap-2">
+								<strong class="text-[12px] text-white">Default shared memory</strong>
+								{#if !settings.profiles.selectedSharedMemoryPresetId}<span class="flex items-center gap-1 rounded-full border border-[#607f20]/60 bg-[#18220f] px-2 py-0.5 font-mono text-[7px] tracking-[.1em] text-[#b9d96a] uppercase"><Check size={9} /> Active</span>{/if}
 							</div>
-						{/each}
-						{#if settings.profiles.sharedMemoryPresets.length === 0}
-							<p class="m-0 font-mono text-[9px] text-[#66747d]">No saved shared-memory presets. Create one from the composer when at least two agents are active.</p>
-						{/if}
+							<p class="m-0 mt-1 font-mono text-[8px] text-[#738089]">Always kept separately, even while a saved memory is active.</p>
+						</div>
 					</div>
-					<form class="mt-3 space-y-2 border-t border-[#232c34] pt-3" onsubmit={async (event) => { event.preventDefault(); sharedMemorySaving = true; if (await onsavesharedmemory(sharedMemoryPresetName, sharedMemoryPresetText)) { sharedMemoryPresetName = ""; sharedMemoryPresetText = ""; } sharedMemorySaving = false; }}>
-						<input bind:value={sharedMemoryPresetName} maxlength="40" placeholder="new preset name" class="h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white outline-0" />
-						<textarea bind:value={sharedMemoryPresetText} maxlength="8000" rows="4" placeholder="Shared project conventions, constraints, and decisions" class="w-full resize-y rounded-md border border-[#303a42] bg-[#05080b] p-2 font-mono text-[9px] text-white outline-0"></textarea>
-						<button type="submit" disabled={!sharedMemoryPresetName.trim() || sharedMemorySaving} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019] disabled:opacity-40">{sharedMemorySaving ? "Saving..." : "Save preset"}</button>
-					</form>
+					<div class="p-4">
+						<textarea bind:value={defaultSharedMemoryDraft} maxlength="8000" rows="6" aria-label="Default shared memory" placeholder="Project conventions, constraints, shared decisions..." class="w-full resize-y rounded-xl border border-[#303a42] bg-[#05080b]/80 p-3 font-mono text-[9px] leading-[1.6] text-[#d7dfe2] outline-0 transition-colors placeholder:text-[#4e5a62] focus:border-[#607f20]"></textarea>
+						<div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+							<span class="font-mono text-[8px] text-[#58656d]">{defaultSharedMemoryDraft.length.toLocaleString()} / 8,000</span>
+							<div class="flex gap-2">
+								{#if settings.profiles.selectedSharedMemoryPresetId}<button type="button" class="h-8 rounded-lg border border-[#3a464e] px-3 font-mono text-[8px] text-[#aab4bb] hover:border-[#607f20] hover:text-white" onclick={() => void onsharedmemorychange(settings.profiles.defaultSharedMemory)}>Use default</button>{/if}
+								<button type="button" disabled={defaultSharedMemorySaving || defaultSharedMemoryDraft === settings.profiles.defaultSharedMemory} class="h-8 rounded-lg bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:cursor-not-allowed disabled:opacity-35" onclick={async () => { defaultSharedMemorySaving = true; await onsharedmemorychange(defaultSharedMemoryDraft); defaultSharedMemorySaving = false; }}>{defaultSharedMemorySaving ? "Saving..." : "Save default"}</button>
+							</div>
+						</div>
+					</div>
 				</section>
+
+				<button type="button" class="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#40505a] bg-[#0a0f13] font-mono text-[9px] text-[#b8c3c9] transition-colors hover:border-[#738895] hover:bg-[#0d1419] hover:text-white" onclick={() => (addMemoryOpen = !addMemoryOpen)}><Plus size={14} /> {addMemoryOpen ? "Close new memory" : "Add New Memory"}</button>
+				{#if addMemoryOpen}
+					<form class="space-y-3 rounded-2xl border border-[#34414a] bg-[#0a0f13] p-4" onsubmit={async (event) => { event.preventDefault(); sharedMemorySaving = true; if (await onsavesharedmemory(sharedMemoryPresetName, sharedMemoryPresetText)) { sharedMemoryPresetName = ""; sharedMemoryPresetText = ""; addMemoryOpen = false; } sharedMemorySaving = false; }}>
+						<div><strong class="text-[12px] text-white">Create a saved memory</strong><p class="m-0 mt-1 font-mono text-[8px] text-[#6e7a83]">Saved memories are reusable contexts you can switch between without changing the default.</p></div>
+						<input bind:value={sharedMemoryPresetName} maxlength="40" placeholder="Memory name" aria-label="Memory name" class="h-9 w-full rounded-lg border border-[#303a42] bg-[#05080b] px-3 font-mono text-[9px] text-white outline-0 focus:border-[#607f20]" />
+						<textarea bind:value={sharedMemoryPresetText} maxlength="8000" rows="5" placeholder="Shared project conventions, constraints, and decisions" aria-label="New shared memory" class="w-full resize-y rounded-lg border border-[#303a42] bg-[#05080b] p-3 font-mono text-[9px] leading-[1.55] text-white outline-0 focus:border-[#607f20]"></textarea>
+						<div class="flex justify-end gap-2"><button type="button" class="h-8 rounded-lg px-3 font-mono text-[8px] text-[#8b969e]" onclick={() => (addMemoryOpen = false)}>Cancel</button><button type="submit" disabled={!sharedMemoryPresetName.trim() || sharedMemorySaving} class="h-8 rounded-lg bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40">{sharedMemorySaving ? "Saving..." : "Save memory"}</button></div>
+					</form>
+				{/if}
+
+				<section>
+					<div class="mb-2 flex items-end justify-between gap-2"><div><strong class="text-[11px] text-white">Saved memories</strong><p class="m-0 mt-0.5 font-mono text-[8px] text-[#66747d]">{settings.profiles.sharedMemoryPresets.length} of 20</p></div></div>
+					<div class="grid grid-cols-2 gap-3 narrow-720:grid-cols-1">
+						{#each settings.profiles.sharedMemoryPresets as preset (preset.id)}
+							<article class={`flex min-h-[132px] flex-col rounded-xl border p-3.5 transition-colors ${settings.profiles.selectedSharedMemoryPresetId === preset.id ? "border-[#607f20] bg-[#11190d]" : "border-[#263139] bg-[#090e12] hover:border-[#3d4a53]"}`}>
+								<div class="flex items-center gap-2"><strong class="min-w-0 flex-1 truncate text-[11px] text-white">{preset.name}</strong>{#if settings.profiles.selectedSharedMemoryPresetId === preset.id}<span class="rounded-full bg-[#1b280f] px-2 py-0.5 font-mono text-[7px] text-[#b9d96a] uppercase">Active</span>{/if}</div>
+								<p class="mt-2 mb-3 line-clamp-3 whitespace-pre-wrap font-mono text-[8px] leading-[1.55] text-[#78858d]">{preset.memory || "Empty memory"}</p>
+								<div class="mt-auto flex items-center justify-end gap-1"><button type="button" class="h-7 rounded-md px-2 font-mono text-[8px] text-[#9cc0f2] hover:bg-[#14202a]" onclick={() => void onsharedmemorychange(preset.memory, preset.id)}>{settings.profiles.selectedSharedMemoryPresetId === preset.id ? "Selected" : "Use memory"}</button><button type="button" aria-label={`Delete ${preset.name}`} class="grid h-7 w-7 place-items-center rounded-md text-[#8b6767] hover:bg-[#211214] hover:text-[#f3a49c]" onclick={() => void ondeletesharedmemory(preset.id)}><Trash2 size={12} /></button></div>
+							</article>
+						{/each}
+					</div>
+					{#if settings.profiles.sharedMemoryPresets.length === 0}<div class="rounded-xl border border-dashed border-[#2c3740] px-4 py-8 text-center font-mono text-[9px] text-[#66747d]">No saved memories yet.</div>{/if}
+				</section>
+
+				<div class="border-t border-[#222c33] pt-4"><p class="m-0 font-mono text-[8px] tracking-[.16em] text-[#66747d] uppercase">Agent personality profiles</p></div>
 				{#if openedProfile}
 					{@const profile = openedProfile}
 					<button type="button" class="flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-[9px] text-[#8b969e] hover:text-white" onclick={closeProfile}>← Back</button>

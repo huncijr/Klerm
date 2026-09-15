@@ -51,6 +51,7 @@
 
 ### Fixed
 
+- Fixed shared-memory preset selection overwriting the reusable default memory, and redesigned desktop Memory settings around a persistent default and separate saved-memory flow.
 - Fixed text-only desktop prompts sending an invalid empty image list, and replaced the stale external-adapter model placeholder with the actual discovery state.
 - Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.
 - Fixed Work together persistence and visibility for two to four runnable agents and mapped the OpenCode harness logo.
