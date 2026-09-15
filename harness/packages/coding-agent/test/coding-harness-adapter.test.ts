@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import {
 	CodexAdapter,
+	type CodingHarnessAdapterDebugEvent,
 	type CodingHarnessAdapterEvent,
 	type CodingHarnessProcessSpawner,
 	OpenCodeAdapter,
@@ -95,7 +96,9 @@ describe("coding harness adapters", () => {
 		]);
 		const adapter = new OpenCodeAdapter(fake.spawnProcess);
 		const events: CodingHarnessAdapterEvent[] = [];
+		const debugEvents: CodingHarnessAdapterDebugEvent[] = [];
 		adapter.subscribe((event) => events.push(event));
+		adapter.subscribeDebug((event) => debugEvents.push(event));
 		const session = await adapter.startSession(agent("opencode"), "/repo");
 		await adapter.prompt(session, "first");
 		await adapter.prompt(session, "second");
@@ -119,6 +122,13 @@ describe("coding harness adapters", () => {
 			{ type: "message", agentId: "agent5", text: "continued" },
 			{ type: "settled", agentId: "agent5", status: "completed" },
 		]);
+		expect(debugEvents.filter((event) => event.type === "stdout")).toHaveLength(4);
+		expect(debugEvents).toContainEqual({
+			type: "stdout",
+			agentId: "agent5",
+			line: JSON.stringify({ type: "text", sessionID: "ses_native", part: { text: "done" } }),
+		});
+		expect(debugEvents.filter((event) => event.type === "process-close")).toHaveLength(2);
 	});
 
 	test("Codex maps its structured lifecycle and gives planners a read-only sandbox", async () => {

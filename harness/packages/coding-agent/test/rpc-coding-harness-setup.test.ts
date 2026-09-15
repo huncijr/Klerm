@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
+import type { AiDebugTraceEvent } from "../src/klerm/ai-debug-trace.ts";
 import type {
 	CodingHarnessAdapter,
 	CodingHarnessAdapterListener,
@@ -305,6 +306,7 @@ describe("coding harness setup RPC", () => {
 		const listeners = new Map<CodingHarnessKind, CodingHarnessAdapterListener>();
 		const promptCalls: Array<{ session: CodingHarnessSessionRef; text: string }> = [];
 		const bridgeRecords: Array<Record<string, unknown>> = [];
+		const debugRecords: AiDebugTraceEvent[] = [];
 		const adapter = (kind: "opencode" | "codex"): CodingHarnessAdapter => ({
 			kind,
 			startSession: vi.fn(async (configured) => ({
@@ -342,6 +344,10 @@ describe("coding harness setup RPC", () => {
 				appendCodingHarnessBridgeEvent: vi.fn(async (_cwd, event) => {
 					bridgeRecords.push(event as unknown as Record<string, unknown>);
 				}),
+				aiDebugTrace: {
+					append: (event) => debugRecords.push(event),
+					flush: vi.fn(async () => {}),
+				},
 			});
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 			await send({
@@ -409,6 +415,29 @@ describe("coding harness setup RPC", () => {
 			]);
 			expect(bridgeRecords.map((record) => record.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 			expect([...new Set(bridgeRecords.map((record) => record.correlationId))]).toHaveLength(1);
+			const debugTypes = debugRecords.map((record) => record.type);
+			expect(debugTypes).toEqual(
+				expect.arrayContaining([
+					"TRACE_STARTED",
+					"USER_PROMPT",
+					"ROSTER_SNAPSHOT",
+					"NATIVE_SESSION_READY",
+					"PROMPT_SENT",
+					"ADAPTER_EVENT",
+					"MODEL_RESPONSE",
+					"BRIDGE_EVENT",
+				]),
+			);
+			const rosterRecord = debugRecords.find((record) => record.type === "ROSTER_SNAPSHOT");
+			expect(rosterRecord?.data).toMatchObject({
+				externalRoster: [{ agentId: "agent6" }, { agentId: "agent7" }],
+				coordinator: { agentId: "agent6" },
+				peer: { agentId: "agent7" },
+			});
+			const sentPrompts = debugRecords.filter((record) => record.type === "PROMPT_SENT");
+			expect(sentPrompts).toHaveLength(3);
+			expect(sentPrompts[1]?.data).toMatchObject({ prompt: expect.stringContaining("Coordinator pass") });
+			expect(sentPrompts[2]?.data).toMatchObject({ prompt: expect.stringContaining("Peer pass") });
 
 			await send({
 				id: "cancelled-team-prompt",

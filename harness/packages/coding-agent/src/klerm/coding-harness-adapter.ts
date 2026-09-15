@@ -31,6 +31,13 @@ export type CodingHarnessAdapterEvent =
 
 export type CodingHarnessAdapterListener = (event: CodingHarnessAdapterEvent) => void;
 
+export type CodingHarnessAdapterDebugEvent =
+	| { type: "stdout"; agentId: string; line: string }
+	| { type: "stderr"; agentId: string; text: string }
+	| { type: "process-close"; agentId: string; code: number | null; signal: NodeJS.Signals | null };
+
+export type CodingHarnessAdapterDebugListener = (event: CodingHarnessAdapterDebugEvent) => void;
+
 export interface CodingHarnessAdapter {
 	readonly kind: ConnectedCodingHarnessKind;
 	startSession(agent: CodingHarnessAgentSettings, cwd: string): Promise<CodingHarnessSessionRef>;
@@ -38,6 +45,7 @@ export interface CodingHarnessAdapter {
 	abort(session: CodingHarnessSessionRef): Promise<void>;
 	closeSession(session: CodingHarnessSessionRef): Promise<void>;
 	subscribe(listener: CodingHarnessAdapterListener): () => void;
+	subscribeDebug?(listener: CodingHarnessAdapterDebugListener): () => void;
 }
 
 export interface CodingHarnessProcessOptions {
@@ -79,6 +87,7 @@ function errorMessage(value: unknown): string | undefined {
 abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 	abstract readonly kind: ConnectedCodingHarnessKind;
 	private readonly listeners = new Set<CodingHarnessAdapterListener>();
+	private readonly debugListeners = new Set<CodingHarnessAdapterDebugListener>();
 	private readonly sessions = new Map<string, AdapterSessionState>();
 	private readonly spawnProcess: CodingHarnessProcessSpawner;
 
@@ -120,6 +129,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 		const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
 		lines.on("line", (line) => {
 			if (!line.trim()) return;
+			this.emitDebug({ type: "stdout", agentId: session.agentId, line });
 			let event: Record<string, unknown>;
 			try {
 				event = JSON.parse(line) as Record<string, unknown>;
@@ -134,12 +144,15 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 			for (const adapterEvent of parsed.events) this.emit(adapterEvent);
 		});
 		child.stderr.on("data", (chunk: Buffer) => {
-			if (stderr.length < 8192) stderr += chunk.toString("utf8");
+			const text = chunk.toString("utf8");
+			this.emitDebug({ type: "stderr", agentId: session.agentId, text });
+			if (stderr.length < 8192) stderr += text;
 		});
 
 		const childSettled = new Promise<void>((resolve, reject) => {
 			child.once("error", reject);
 			child.once("close", (code, signal) => {
+				this.emitDebug({ type: "process-close", agentId: session.agentId, code, signal });
 				state.child = undefined;
 				if (finalText) this.emit({ type: "message", agentId: session.agentId, text: finalText });
 				if (state.aborted) {
@@ -183,8 +196,17 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 		return () => this.listeners.delete(listener);
 	}
 
+	subscribeDebug(listener: CodingHarnessAdapterDebugListener): () => void {
+		this.debugListeners.add(listener);
+		return () => this.debugListeners.delete(listener);
+	}
+
 	protected emit(event: CodingHarnessAdapterEvent): void {
 		for (const listener of this.listeners) listener(event);
+	}
+
+	private emitDebug(event: CodingHarnessAdapterDebugEvent): void {
+		for (const listener of this.debugListeners) listener(event);
 	}
 
 	protected abstract command(): string;

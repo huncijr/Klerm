@@ -32,6 +32,7 @@
 - Added typed OpenCode and Codex coding-harness prompt adapters with `startSession`, `prompt`, `abort`, `closeSession`, agent-attributed message, tool-start, tool-end, settled, and error events, native session reuse, and desktop RPC forwarding of those events.
 - Added a deterministic runnable-agent roster for external prompting with role, effort, tools, specialties, inferred model strengths and limits, adapter capabilities, and explicit exclusion reasons.
 - Added a versioned sequential external-agent bridge that routes broad tasks coordinator-to-peer-to-coordinator, reuses native sessions, supports cancellation, emits typed desktop task events, and writes credential-safe correlated lifecycle records to `.klerm/bridge-events.jsonl`.
+- Added an opt-in `KLERM_AI_DEBUG_LOG` JSONL trace for full model prompts, visible agent rosters, explicit reasoning/session events, raw external harness output, tool input/output, responses, and bridge handoffs. Debug traces may contain secrets and are disabled by default.
 
 ### Changed
 

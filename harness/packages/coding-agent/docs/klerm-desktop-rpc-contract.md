@@ -35,6 +35,15 @@ after reconnecting, but it is not a replacement for a typed routing-history
 query or a decision-event stream. Credential-safe bridge events are also
 append-ordered in `.klerm/bridge-events.jsonl`.
 
+For local debugging only, setting `KLERM_AI_DEBUG_LOG` to an absolute file path
+enables a separate detailed JSONL trace. It records the full Klerm system prompt
+and message context, runnable and excluded agent rosters, exact external prompts
+and responses, raw external harness stdout/stderr, tool input/output, native
+session references, and bridge handoffs. It can record provider-emitted explicit
+reasoning summaries, but cannot expose private chain-of-thought that a provider
+does not return. This trace may contain source code, prompts, command output, and
+secrets, so it is disabled by default and must not be committed or shared.
+
 `get_klerm_config` returns `localRole` and `frontierRole`. `set_klerm_config`
 accepts either field as `planner` or `builder` while no task is active. The
 desktop must treat these as backend policy, not reproduce tool filtering in the

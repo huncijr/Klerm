@@ -39,6 +39,11 @@ import {
 	type SettingsScope,
 } from "../../core/settings-manager.ts";
 import {
+	type AiDebugTraceEventType,
+	type AiDebugTraceWriter,
+	createAiDebugTraceFromEnvironment,
+} from "../../klerm/ai-debug-trace.ts";
+import {
 	type CodingHarnessAdapter,
 	type CodingHarnessAdapterEvent,
 	type CodingHarnessSessionRef,
@@ -132,6 +137,7 @@ export interface RunRpcModeOptions {
 	discoverCodingHarnessModels?: typeof discoverCodingHarnessModels;
 	codingHarnessAdapters?: Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>;
 	appendCodingHarnessBridgeEvent?: typeof appendCodingHarnessBridgeEvent;
+	aiDebugTrace?: AiDebugTraceWriter | false;
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
@@ -273,6 +279,25 @@ function parseMcpAppearance(
 export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunRpcModeOptions = {}): Promise<never> {
 	takeOverStdout();
 	let session = runtimeHost.session;
+	const aiDebugTrace =
+		options.aiDebugTrace === false ? undefined : (options.aiDebugTrace ?? createAiDebugTraceFromEnvironment());
+	const appendAiDebugTrace = (
+		type: AiDebugTraceEventType,
+		data: unknown,
+		context: { taskId?: string; agentId?: string; phase?: string } = {},
+	): void => {
+		aiDebugTrace?.append({
+			type,
+			sessionId: session.sessionId,
+			...context,
+			data,
+		});
+	};
+	appendAiDebugTrace("TRACE_STARTED", {
+		cwd: session.sessionManager.getCwd(),
+		warning:
+			"Debug trace contains full prompts, explicit reasoning, responses, and tool input/output. It may contain secrets.",
+	});
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
 	const pendingFileMutations = new Map<
@@ -308,6 +333,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		activeCodingHarnessSession = undefined;
 		activeCodingHarnessBridge = undefined;
 		await bridgeWriteQueue;
+		await aiDebugTrace?.flush().catch(() => undefined);
 	};
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -335,6 +361,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		};
 		session.sessionManager.appendCustomEntry(KLERM_BRIDGE_EVENT_CUSTOM_TYPE, record);
 		output({ type: "bridge_event", event: record });
+		appendAiDebugTrace("BRIDGE_EVENT", record, {
+			taskId: record.taskId,
+			agentId: record.agentId,
+			phase: run.phase,
+		});
 		const cwd = session.sessionManager.getCwd();
 		bridgeWriteQueue = bridgeWriteQueue
 			.catch(() => undefined)
@@ -348,6 +379,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		return record;
 	};
 	const handleCodingHarnessEvent = (event: CodingHarnessAdapterEvent) => {
+		appendAiDebugTrace("ADAPTER_EVENT", event, {
+			taskId: activeCodingHarnessBridge?.rootTask.taskId,
+			agentId: event.agentId,
+			phase: activeCodingHarnessBridge?.phase,
+		});
 		if (event.type === "message") {
 			const active = activeCodingHarnessSession;
 			if (!active || active.agentId !== event.agentId) return;
@@ -416,7 +452,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		});
 		activeCodingHarnessSession = undefined;
 	};
-	for (const adapter of codingHarnessAdapters.values()) adapter.subscribe(handleCodingHarnessEvent);
+	for (const adapter of codingHarnessAdapters.values()) {
+		adapter.subscribe(handleCodingHarnessEvent);
+		adapter.subscribeDebug?.((event) => {
+			appendAiDebugTrace("ADAPTER_RAW_EVENT", event, {
+				taskId: activeCodingHarnessBridge?.rootTask.taskId,
+				agentId: event.agentId,
+				phase: activeCodingHarnessBridge?.phase,
+			});
+		});
+	}
 
 	async function ensureCodingHarnessSession(
 		run: ActiveCodingHarnessBridge,
@@ -438,8 +483,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			codingHarnessSessions.delete(target.agentId);
 			adapterSession = undefined;
 		}
+		const reused = adapterSession !== undefined;
 		adapterSession ??= await adapter.startSession(configuredAgent, session.sessionManager.getCwd());
 		codingHarnessSessions.set(target.agentId, adapterSession);
+		appendAiDebugTrace(
+			"NATIVE_SESSION_READY",
+			{ reused, target, adapterSession },
+			{ taskId: run.rootTask.taskId, agentId: target.agentId, phase: run.phase },
+		);
 		return { adapter, adapterSession };
 	}
 
@@ -464,6 +515,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			return;
 		}
 		activeCodingHarnessSession = adapterSession;
+		appendAiDebugTrace(
+			"PROMPT_SENT",
+			{
+				prompt: message,
+				target,
+				adapterSession,
+				visibleRoster: run.roster,
+			},
+			{ taskId: run.rootTask.taskId, agentId: target.agentId, phase: run.phase },
+		);
 		output({
 			type: "routing_changed",
 			state: {
@@ -516,6 +577,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const activeAgent = run.roster.find((agent) => agent.agentId === run.activeAgentId);
 		const activeSession = activeAgent ? codingHarnessSessions.get(activeAgent.agentId) : undefined;
 		const response = run.responses.get(run.activeAgentId)?.trim() ?? "";
+		appendAiDebugTrace(
+			"MODEL_RESPONSE",
+			{
+				status,
+				response,
+				nativeSessionId: activeSession?.nativeSessionId,
+			},
+			{ taskId: run.rootTask.taskId, agentId: run.activeAgentId, phase: run.phase },
+		);
 		if (run.aborted || status === "aborted") {
 			const cancelledTaskId = run.phase === "peer" && run.childTask ? run.childTask.taskId : run.rootTask.taskId;
 			emitBridgeEvent(run, {
@@ -555,7 +625,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				sender: run.activeAgentId,
 				recipient: "user",
 				status: "failed",
-				reason: response ? `${run.activeAgentId} failed during ${run.phase}` : `${run.activeAgentId} returned no result`,
+				reason: response
+					? `${run.activeAgentId} failed during ${run.phase}`
+					: `${run.activeAgentId} returned no result`,
 				agentId: run.activeAgentId,
 				...(activeAgent ? { harness: activeAgent.harness, model: activeAgent.model } : {}),
 				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
@@ -890,6 +962,19 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			aborted: false,
 			delegationReason,
 		};
+		appendAiDebugTrace(
+			"ROSTER_SNAPSHOT",
+			{
+				runnableAgents: setup.runnableAgents,
+				excludedAgents: setup.excludedAgents,
+				externalRoster: roster,
+				coordinator,
+				peer,
+				workTogetherEnabled: setup.slots.workTogetherEnabled === true,
+				delegationReason,
+			},
+			{ taskId, agentId: coordinator.agentId, phase: "coordinator" },
+		);
 		activeCodingHarnessBridge = run;
 		for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
 			emitBridgeEvent(run, {
@@ -1256,6 +1341,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		unsubscribe = session.subscribe((event) => {
 			const jsonEvent = toJsonEvent(event);
 			const agentId = session.klermRouting?.activeCodingHarnessAgentId;
+			appendAiDebugTrace("SESSION_EVENT", agentId ? { ...jsonEvent, agentId } : jsonEvent, { agentId });
 			output(agentId ? { ...jsonEvent, agentId } : jsonEvent);
 			if (event.type === "tool_execution_start" && (event.toolName === "edit" || event.toolName === "write")) {
 				const args = event.args as Record<string, unknown>;
@@ -2220,6 +2306,28 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
 				}
 				const codingHarnessSetup = await getCodingHarnessSetup();
+				appendAiDebugTrace("USER_PROMPT", {
+					message: command.message,
+					displayMessage: command.displayMessage,
+					imageCount: normalizedImages.images?.length ?? 0,
+					images: normalizedImages.images?.map((image) => ({
+						type: image.type,
+						mimeType: image.mimeType,
+						encodedBytes: image.data.length,
+					})),
+					routingState: session.klermRouting?.routingState,
+					runnableAgents: codingHarnessSetup.runnableAgents,
+					excludedAgents: codingHarnessSetup.excludedAgents,
+					klermContext: {
+						systemPrompt: session.systemPrompt,
+						messages: session.messages,
+						tools: session.agent.state.tools.map((tool) => ({
+							name: tool.name,
+							description: tool.description,
+							parameters: tool.parameters,
+						})),
+					},
+				});
 				if (codingHarnessSetup.slots.externalHarnessesEnabled) {
 					if (codingHarnessSetup.blockingReason) {
 						return error(id, "prompt", codingHarnessSetup.blockingReason, "CODING_HARNESS_UNAVAILABLE");
@@ -2621,6 +2729,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
 		await runtimeHost.dispose();
+		appendAiDebugTrace("TRACE_STOPPED", { exitCode, signal });
+		await aiDebugTrace?.flush().catch(() => undefined);
 		detachInput();
 		process.stdin.pause();
 		if (signal !== "SIGTERM") {
