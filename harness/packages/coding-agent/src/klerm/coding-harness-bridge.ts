@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunnableCodingHarnessAgent } from "./coding-harness-setup.ts";
+import type { KlermTaskIntent, KlermTaskOutcomeStatus } from "./router/types.ts";
 
 export const KLERM_BRIDGE_EVENT_CUSTOM_TYPE = "klerm-bridge-event";
 export const KLERM_BRIDGE_LOG_DIRECTORY = ".klerm";
@@ -65,6 +66,10 @@ export interface CodingHarnessBridgeEvent {
 	nativeSessionId?: string;
 	responseHash?: string;
 	artifact?: CodingHarnessBridgeArtifact;
+	outcomeStatus?: KlermTaskOutcomeStatus;
+	taskIntent?: KlermTaskIntent;
+	changedFileCount?: number;
+	verificationCount?: number;
 }
 
 export function getCodingHarnessBridgeLogPath(cwd: string): string {
@@ -115,10 +120,10 @@ export function shouldDelegateCodingHarnessTask(prompt: string, agentCount: numb
 	return prompt.length >= 500 || numberedRequirements >= 3 || matchedTerms >= 3;
 }
 
-export function selectCodingHarnessPeer(
+export function selectCodingHarnessPeers(
 	roster: readonly RunnableCodingHarnessAgent[],
 	coordinatorId: string,
-): RunnableCodingHarnessAgent | undefined {
+): RunnableCodingHarnessAgent[] {
 	return roster
 		.filter((agent) => agent.agentId !== coordinatorId)
 		.sort((left, right) => {
@@ -128,10 +133,11 @@ export function selectCodingHarnessPeer(
 				agent.specialties.length * 3 +
 				(agent.tools.length > 0 ? 1 : 0);
 			return score(right) - score(left) || left.order - right.order;
-		})[0];
+		});
 }
 
 function rosterPrompt(roster: readonly RunnableCodingHarnessAgent[]): string {
+	if (roster.length === 0) return "- No runnable external agents are currently available.";
 	return roster
 		.map(
 			(agent) =>
@@ -143,6 +149,10 @@ function rosterPrompt(roster: readonly RunnableCodingHarnessAgent[]): string {
 export function sharedCodingHarnessContext(roster: readonly RunnableCodingHarnessAgent[], userMemory: string): string {
 	return [
 		"Shared collaboration context (task-start snapshot):",
+		"Default collaboration instructions:",
+		"- Use only the active agents listed in this snapshot.",
+		"- Respect each agent's assigned role, tools, strengths, and limits.",
+		"- Keep handoffs concrete and return verifiable results to the coordinator.",
 		"Active agent roster:",
 		rosterPrompt(roster),
 		userMemory.trim() ? `User-authored shared memory:\n${userMemory.trim()}` : "User-authored shared memory: none",
@@ -152,7 +162,7 @@ export function sharedCodingHarnessContext(roster: readonly RunnableCodingHarnes
 export function coordinatorBridgePrompt(
 	prompt: string,
 	coordinator: RunnableCodingHarnessAgent,
-	peer: RunnableCodingHarnessAgent | undefined,
+	peers: readonly RunnableCodingHarnessAgent[],
 	sharedContext: string,
 ): string {
 	return [
@@ -160,8 +170,8 @@ export function coordinatorBridgePrompt(
 		`You are ${coordinator.agentId}, the coordinator for this task.`,
 		"Only the runnable agents below are active. Never refer work to any other configured agent.",
 		sharedContext,
-		peer
-			? `Klerm selected ${peer.agentId} for a focused second pass. Complete your own focused work first, then provide a precise result that Klerm can send to ${peer.agentId}. Do not claim that peer work already happened.`
+		peers.length > 0
+			? `Klerm scheduled focused passes in this order: ${peers.map((peer) => peer.agentId).join(", ")}. Complete your own focused work first, then provide a precise result for those peers. Do not claim that peer work already happened.`
 			: "No peer handoff is scheduled. Complete the task directly.",
 		"</klerm_bridge>",
 		"",
@@ -174,15 +184,19 @@ export function peerBridgePrompt(
 	coordinator: RunnableCodingHarnessAgent,
 	peer: RunnableCodingHarnessAgent,
 	coordinatorResult: string,
+	priorPeerResults: ReadonlyArray<{ agentId: string; result: string }>,
 	sharedContext: string,
+	passNumber: number,
+	passCount: number,
 ): string {
 	return [
 		"<klerm_bridge>",
 		`You are ${peer.agentId}. ${coordinator.agentId} remains the coordinator and final answer owner.`,
 		sharedContext,
-		"Perform a focused independent second pass: inspect the current workspace, find missing requirements, correctness risks, and verification gaps, then fix or clearly report them within your configured role.",
+		`This is focused peer pass ${passNumber} of ${passCount}. Inspect the current workspace, find missing requirements, correctness risks, and verification gaps, then fix or clearly report them within your configured role.`,
 		"Return concrete findings, changed files, verification, and open issues. Do not restart completed work without a reason.",
 		`Coordinator result:\n${coordinatorResult}`,
+		...priorPeerResults.map(({ agentId, result }) => `Prior ${agentId} result:\n${result}`),
 		"</klerm_bridge>",
 		"",
 		`Original user task:\n${originalPrompt}`,
@@ -192,16 +206,15 @@ export function peerBridgePrompt(
 export function finalizationBridgePrompt(
 	originalPrompt: string,
 	coordinator: RunnableCodingHarnessAgent,
-	peer: RunnableCodingHarnessAgent,
-	peerResult: string,
+	peerResults: ReadonlyArray<{ agentId: string; result: string }>,
 	sharedContext: string,
 ): string {
 	return [
 		"<klerm_bridge>",
 		`Resume as ${coordinator.agentId}, the coordinator and final answer owner.`,
 		sharedContext,
-		`${peer.agentId} completed the focused second pass below. Review it against the current workspace, resolve any remaining issue allowed by your role, and give the final user answer.`,
-		`Peer result:\n${peerResult}`,
+		`${peerResults.map(({ agentId }) => agentId).join(", ")} completed the focused passes below. Review them against the current workspace, resolve any remaining issue allowed by your role, and give the final user answer.`,
+		...peerResults.map(({ agentId, result }) => `${agentId} result:\n${result}`),
 		"</klerm_bridge>",
 		"",
 		`Original user task:\n${originalPrompt}`,

@@ -37,12 +37,13 @@ describe("Klerm workspace evidence", () => {
 		expect(changedKlermWorkspacePaths(before!, after!)).toEqual(new Set());
 	});
 
-	it("excludes Klerm's own decision log from project change evidence", async () => {
+	it("excludes Klerm's own audit directory from project change evidence", async () => {
 		tempDir = mkdtempSync(join(tmpdir(), "klerm-workspace-evidence-"));
 		execFileSync("git", ["init", "--quiet"], { cwd: tempDir });
 		const before = await captureKlermWorkspaceSnapshot(tempDir);
 		mkdirSync(join(tempDir, ".klerm"));
 		writeFileSync(join(tempDir, ".klerm", "router-decisions.jsonl"), "{}\n");
+		writeFileSync(join(tempDir, ".klerm", "bridge-events.jsonl"), "{}\n");
 		const after = await captureKlermWorkspaceSnapshot(tempDir);
 
 		expect(before).toBeDefined();

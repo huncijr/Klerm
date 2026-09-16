@@ -34,9 +34,12 @@
 - Added a versioned sequential external-agent bridge that routes broad tasks coordinator-to-peer-to-coordinator, reuses native sessions, supports cancellation, emits typed desktop task events, and writes credential-safe correlated lifecycle records to `.klerm/bridge-events.jsonl`.
 - Added an opt-in `KLERM_AI_DEBUG_LOG` JSONL trace for full model prompts, visible agent rosters, explicit reasoning/session events, raw external harness output, tool input/output, responses, and bridge handoffs. Debug traces may contain secrets and are disabled by default.
 - Added shared collaboration-memory presets and a task-start context snapshot containing the runnable external-agent roster, injected unchanged into coordinator, peer, and finalization prompts.
+- Added per-agent Personal Memory and Plan/Build prompt snapshots for external tasks, plus Git workspace-change and successful-verification evidence on task outcomes and bridge completion events.
 
 ### Changed
 
+- Changed desktop Memory settings to separate shared team context from personal agent profiles and show the exact active shared prompt sent to external agents.
+- Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization, and changed composer memory selection to require explicit application.
 - Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
 - Changed the desktop external-team composer to keep per-agent roles in Settings and show Shared Memory instead of a team-wide `All Plan` / `All Build` override.
 - Changed newly added coding agents to use the enabled Klerm harness by default while keeping external harness activation as an independent global setting.

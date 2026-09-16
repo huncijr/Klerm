@@ -1497,6 +1497,13 @@
 		}
 	}
 
+	async function setCodingHarnessAgentRole(id: string, role: "planner" | "builder"): Promise<void> {
+		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
+		if (!agent || !(await updateCodingHarnessAgent(id, { role }))) return;
+		if (agent.kind === "klerm" && id === "agent1") await applyConfigUpdate({ localRole: role });
+		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierRole: role });
+	}
+
 	async function setAllCodingHarnessAgents(enabled: boolean): Promise<void> {
 		if (!codingHarnessSetup) return;
 		if (await saveCodingHarnessSlots(setAllCodingHarnessAgentsEnabled(codingHarnessSetup.slots, enabled))) {
@@ -1608,6 +1615,7 @@
 		if (!supportsCommand("set_klerm_shared_memory")) return false;
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("set_klerm_shared_memory", { memory, presetId });
+			await refreshCodingHarnessSetup();
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -1619,6 +1627,7 @@
 		if (!supportsCommand("save_klerm_shared_memory_preset")) return false;
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("save_klerm_shared_memory_preset", { name, memory });
+			await refreshCodingHarnessSetup();
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -1630,6 +1639,7 @@
 		if (!supportsCommand("delete_klerm_shared_memory_preset")) return false;
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("delete_klerm_shared_memory_preset", { presetId });
+			await refreshCodingHarnessSetup();
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -2446,6 +2456,7 @@
 							connectedHarnessKinds={codingHarnessSetup?.harnesses.filter((harness) => harness.adapterConnected).map((harness) => harness.kind) ?? []}
 							onclose={closeAgentView}
 							oneffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
+							onrolechange={(id, role) => void setCodingHarnessAgentRole(id, role)}
 							onclear={clearAgentOutput}
 							onrerun={rerunPrompt}
 							ontoggle={toggleTimeline}
@@ -2531,6 +2542,7 @@
 			profileDisabled={!backendReady || interactionActive}
 			sharedMemory={desktopSettings?.profiles.sharedMemory ?? ""}
 			defaultSharedMemory={desktopSettings?.profiles.defaultSharedMemory ?? ""}
+			sharedContextPreview={codingHarnessSetup?.sharedContextPreview ?? ""}
 			sharedMemoryPresets={desktopSettings?.profiles.sharedMemoryPresets ?? []}
 			selectedSharedMemoryPresetId={desktopSettings?.profiles.selectedSharedMemoryPresetId ?? ""}
 			localRole={currentConfig?.localRole ?? "builder"}

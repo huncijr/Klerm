@@ -68,6 +68,7 @@ export interface CodingHarnessSetup {
 		};
 	}>;
 	excludedAgents: Array<{ agentId: string; reason: string }>;
+	sharedContextPreview?: string;
 	blockingReason?: string;
 }
 

@@ -20,6 +20,7 @@
 		clearThrough,
 		onclose,
 		oneffortchange,
+		onrolechange,
 		onclear,
 		onrerun,
 		ontoggle,
@@ -34,6 +35,7 @@
 		clearThrough: Record<string, number>;
 		onclose: (id: string) => void;
 		oneffortchange: (id: string, effort: ThinkingLevel) => void;
+		onrolechange: (id: string, role: "planner" | "builder") => void;
 		onclear: (id: string) => void;
 		onrerun: (text: string) => void;
 		ontoggle: (id: number) => void;
@@ -84,7 +86,12 @@
 						</div>
 						<p class="mt-1 truncate font-mono text-[8px] text-[#8e9aa2]" title={agent.model ?? "Default model"}>{agent.model ?? "Default model"}</p>
 					</div>
-					<span class="rounded border border-[#303a42] bg-[#070b0e] px-2 py-1.5 font-mono text-[7px] text-[#aeb8be]">{agent.role === "planner" ? "Plan" : "Build"}</span>
+					<label class="font-mono text-[7px] tracking-[.08em] text-[#69767e] uppercase">
+						Role{taskActive ? " · next task" : ""}
+						<select value={agent.role} class="mt-1 block h-7 rounded border border-[#303a42] bg-[#070b0e] px-2 font-mono text-[8px] text-[#dbe1e4] [color-scheme:dark]" onchange={(event) => onrolechange(agent.id, event.currentTarget.value as "planner" | "builder")}>
+							<option value="planner">Plan</option><option value="builder">Build</option>
+						</select>
+					</label>
 					<label class="font-mono text-[7px] tracking-[.08em] text-[#69767e] uppercase">
 						Thinking
 						<select

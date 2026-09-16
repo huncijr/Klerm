@@ -78,6 +78,7 @@ export interface CodingHarnessSetup {
 	workTogetherAvailable: boolean;
 	runnableAgents: RunnableCodingHarnessAgent[];
 	excludedAgents: ExcludedCodingHarnessAgent[];
+	sharedContextPreview?: string;
 	blockingReason?: string;
 }
 
@@ -166,9 +167,7 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		? [
 				...new Set(
 					candidate.specialties.flatMap((specialty) =>
-						typeof specialty === "string" && SPECIALTY_PATTERN.test(specialty.trim())
-							? [specialty.trim()]
-							: [],
+						typeof specialty === "string" && SPECIALTY_PATTERN.test(specialty.trim()) ? [specialty.trim()] : [],
 					),
 				),
 			].slice(0, 16)

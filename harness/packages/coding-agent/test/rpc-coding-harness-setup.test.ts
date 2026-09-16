@@ -158,6 +158,7 @@ describe("coding harness setup RPC", () => {
 						agents: [agent("agent1", "klerm")],
 					},
 					effectiveRouting: "disabled",
+					sharedContextPreview: expect.stringContaining("Default collaboration instructions:"),
 					harnesses: expect.arrayContaining([
 						expect.objectContaining({ kind: "claude-code", available: true, version: "2.0" }),
 					]),
@@ -234,12 +235,18 @@ describe("coding harness setup RPC", () => {
 			});
 			expect(opencodeAdapter.prompt).not.toHaveBeenCalled();
 
-			await send({
+			const opencodeSetup = await send({
 				id: "set-opencode",
 				type: "set_coding_harness_slots",
 				slots: {
 					externalHarnessesEnabled: true,
 					agents: [{ ...agent("agent5", "opencode"), model: "openai/gpt-5.6-terra" }],
+				},
+			});
+			expect(opencodeSetup).toMatchObject({
+				success: true,
+				data: {
+					sharedContextPreview: expect.stringMatching(/agent5: available; harness opencode/),
 				},
 			});
 			const nativePrompt = await send({ id: "native-prompt", type: "prompt", message: "use OpenCode" });
@@ -360,8 +367,8 @@ describe("coding harness setup RPC", () => {
 					workTogetherEnabled: true,
 					agents: [
 						{ ...agent("agent6", "opencode"), model: "openai/gpt-5.6-terra" },
-						{ ...agent("agent7", "codex"), model: "gpt-5-codex" },
-						{ ...agent("agent8", "codex", false), model: "disabled-model" },
+						{ ...agent("agent7", "codex"), model: "gpt-5-codex", role: "planner", memoryProfileId: "scout" },
+						{ ...agent("agent8", "codex"), model: "gpt-5.6-luna" },
 					],
 				},
 			});
@@ -385,8 +392,9 @@ describe("coding harness setup RPC", () => {
 			expect(promptCalls[0]).toMatchObject({ session: { agentId: "agent6" } });
 			expect(promptCalls[0]?.text).toContain("agent6: available; harness opencode");
 			expect(promptCalls[0]?.text).toContain("agent7: available; harness codex");
+			expect(promptCalls[0]?.text).toContain("agent8: available; harness codex");
 			expect(promptCalls[0]?.text).toContain("Use the shared repository conventions.");
-			expect(promptCalls[0]?.text).not.toContain("agent8");
+			expect(promptCalls[0]?.text).toContain("Work in Build mode:");
 			await send({
 				id: "change-shared-memory",
 				type: "set_klerm_shared_memory",
@@ -400,14 +408,23 @@ describe("coding harness setup RPC", () => {
 			expect(promptCalls[1]?.text).toContain("Coordinator result:\nCoordinator pass");
 			expect(promptCalls[1]?.text).toContain("Use the shared repository conventions.");
 			expect(promptCalls[1]?.text).not.toContain("This applies only to the next task.");
+			expect(promptCalls[1]?.text).toContain("Profile planner mode:");
 
 			listeners.get("codex")?.({ type: "message", agentId: "agent7", text: "Peer pass" });
 			listeners.get("codex")?.({ type: "settled", agentId: "agent7", status: "completed" });
 			await vi.waitFor(() => expect(promptCalls).toHaveLength(3));
-			expect(promptCalls[2]?.session).toBe(promptCalls[0]?.session);
-			expect(promptCalls[2]?.text).toContain("Peer result:\nPeer pass");
+			expect(promptCalls[2]).toMatchObject({ session: { agentId: "agent8" } });
+			expect(promptCalls[2]?.text).toContain("Prior agent7 result:\nPeer pass");
 			expect(promptCalls[2]?.text).toContain("Use the shared repository conventions.");
 			expect(promptCalls[2]?.text).not.toContain("This applies only to the next task.");
+			expect(promptCalls[2]?.text).toContain("Work in Build mode:");
+
+			listeners.get("codex")?.({ type: "message", agentId: "agent8", text: "Second peer pass" });
+			listeners.get("codex")?.({ type: "settled", agentId: "agent8", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(4));
+			expect(promptCalls[3]?.session).toBe(promptCalls[0]?.session);
+			expect(promptCalls[3]?.text).toContain("agent7 result:\nPeer pass");
+			expect(promptCalls[3]?.text).toContain("agent8 result:\nSecond peer pass");
 
 			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Final answer" });
 			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
@@ -417,7 +434,7 @@ describe("coding harness setup RPC", () => {
 				),
 			);
 
-			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(11));
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(17));
 			expect(bridgeRecords.map((record) => record.event)).toEqual([
 				"TASK_CREATED",
 				"TASK_ASSIGNED",
@@ -428,10 +445,18 @@ describe("coding harness setup RPC", () => {
 				"TASK_STARTED",
 				"TASK_RETURNED",
 				"TASK_COMPLETED",
+				"TASK_WAITING",
+				"TASK_CREATED",
+				"TASK_ASSIGNED",
+				"TASK_STARTED",
+				"TASK_RETURNED",
+				"TASK_COMPLETED",
 				"TASK_RETURNED",
 				"TASK_COMPLETED",
 			]);
-			expect(bridgeRecords.map((record) => record.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+			expect(bridgeRecords.map((record) => record.sequence)).toEqual(
+				Array.from({ length: 17 }, (_, index) => index + 1),
+			);
 			expect([...new Set(bridgeRecords.map((record) => record.correlationId))]).toHaveLength(1);
 			const debugTypes = debugRecords.map((record) => record.type);
 			expect(debugTypes).toEqual(
@@ -448,23 +473,24 @@ describe("coding harness setup RPC", () => {
 			);
 			const rosterRecord = debugRecords.find((record) => record.type === "ROSTER_SNAPSHOT");
 			expect(rosterRecord?.data).toMatchObject({
-				externalRoster: [{ agentId: "agent6" }, { agentId: "agent7" }],
+				externalRoster: [{ agentId: "agent6" }, { agentId: "agent7" }, { agentId: "agent8" }],
 				coordinator: { agentId: "agent6" },
-				peer: { agentId: "agent7" },
+				peers: [{ agentId: "agent7" }, { agentId: "agent8" }],
 			});
 			const sentPrompts = debugRecords.filter((record) => record.type === "PROMPT_SENT");
-			expect(sentPrompts).toHaveLength(3);
+			expect(sentPrompts).toHaveLength(4);
 			expect(sentPrompts[1]?.data).toMatchObject({ prompt: expect.stringContaining("Coordinator pass") });
-			expect(sentPrompts[2]?.data).toMatchObject({ prompt: expect.stringContaining("Peer pass") });
+			expect(sentPrompts[2]?.data).toMatchObject({ prompt: expect.stringContaining("Prior agent7 result") });
+			expect(sentPrompts[3]?.data).toMatchObject({ prompt: expect.stringContaining("Second peer pass") });
 
 			await send({
 				id: "cancelled-team-prompt",
 				type: "prompt",
 				message: "Review the frontend, backend, security, and tests for this architecture again.",
 			});
-			await vi.waitFor(() => expect(promptCalls).toHaveLength(4));
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(5));
 			await send({ id: "abort-team-prompt", type: "abort" });
-			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(15));
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(21));
 			expect(bridgeRecords.slice(-4).map((record) => record.event)).toEqual([
 				"TASK_CREATED",
 				"TASK_ASSIGNED",
@@ -473,13 +499,46 @@ describe("coding harness setup RPC", () => {
 			]);
 
 			await send({ id: "empty-team-prompt", type: "prompt", message: "quick answer" });
-			await vi.waitFor(() => expect(promptCalls).toHaveLength(5));
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(6));
 			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
-			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(19));
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(25));
 			expect(bridgeRecords.at(-1)).toMatchObject({
 				event: "TASK_FAILED",
 				status: "failed",
 				reason: "agent6 returned no result",
+			});
+
+			await send({
+				id: "direct-builder",
+				type: "set_coding_harness_slots",
+				slots: {
+					externalHarnessesEnabled: true,
+					workTogetherEnabled: false,
+					agents: [{ ...agent("agent6", "opencode"), model: "openai/gpt-5.6-terra" }],
+				},
+			});
+			await send({ id: "missing-change", type: "prompt", message: "Implement another app change." });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(7));
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Done without editing." });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() =>
+				expect(responses()).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							type: "agent_settled",
+							agentId: "agent6",
+							outcome: expect.objectContaining({ status: "plan-returned-instead-of-implementation" }),
+						}),
+					]),
+				),
+			);
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(30));
+			expect(bridgeRecords.at(-1)).toMatchObject({
+				event: "TASK_FAILED",
+				outcomeStatus: "plan-returned-instead-of-implementation",
+				taskIntent: "workspace-change",
+				changedFileCount: 0,
+				verificationCount: 0,
 			});
 		} finally {
 			harness.cleanup();

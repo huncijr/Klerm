@@ -8,7 +8,7 @@ import {
 	coordinatorBridgePrompt,
 	getCodingHarnessBridgeLogPath,
 	readCodingHarnessBridgeLog,
-	selectCodingHarnessPeer,
+	selectCodingHarnessPeers,
 	sharedCodingHarnessContext,
 	shouldDelegateCodingHarnessTask,
 } from "../src/klerm/coding-harness-bridge.ts";
@@ -53,15 +53,19 @@ describe("coding harness bridge", () => {
 		expect(shouldDelegateCodingHarnessTask("Review the frontend, backend, security, and tests.", 2)).toBe(true);
 	});
 
-	test("selects the highest ranked peer with stable agent ordering as a tie breaker", () => {
+	test("orders every peer by capability with stable agent ordering as a tie breaker", () => {
 		const coordinator = runnableAgent("agent6", { strengthBand: 5 });
 		const agent7 = runnableAgent("agent7", { role: "planner", specialties: ["review"] });
 		const agent8 = runnableAgent("agent8", { strengthBand: 4 });
-		expect(selectCodingHarnessPeer([coordinator, agent7, agent8], coordinator.agentId)?.agentId).toBe("agent8");
 		expect(
-			selectCodingHarnessPeer([coordinator, runnableAgent("agent8"), runnableAgent("agent7")], coordinator.agentId)
-				?.agentId,
-		).toBe("agent7");
+			selectCodingHarnessPeers([coordinator, agent7, agent8], coordinator.agentId).map((agent) => agent.agentId),
+		).toEqual(["agent8", "agent7"]);
+		expect(
+			selectCodingHarnessPeers(
+				[coordinator, runnableAgent("agent8"), runnableAgent("agent7")],
+				coordinator.agentId,
+			).map((agent) => agent.agentId),
+		).toEqual(["agent7", "agent8"]);
 	});
 
 	test("shows only the supplied runnable roster in coordinator prompts", () => {
@@ -71,7 +75,7 @@ describe("coding harness bridge", () => {
 		const prompt = coordinatorBridgePrompt(
 			"Implement the task",
 			coordinator,
-			peer,
+			[peer],
 			sharedCodingHarnessContext(roster, ""),
 		);
 		expect(prompt).toContain("agent6: available; harness opencode");
@@ -84,12 +88,21 @@ describe("coding harness bridge", () => {
 		const peer = runnableAgent("agent7", { harness: "codex", role: "planner" });
 		const context = sharedCodingHarnessContext([coordinator, peer], "Use the repository conventions.");
 		expect(context).toContain("task-start snapshot");
+		expect(context).toContain("Default collaboration instructions:");
+		expect(context).toContain("Use only the active agents listed in this snapshot.");
 		expect(context).toContain(
 			"agent6: available; harness opencode; model provider/agent6; role builder; effort high",
 		);
 		expect(context).toContain("agent7: available; harness codex");
 		expect(context).toContain("User-authored shared memory:\nUse the repository conventions.");
-		expect(coordinatorBridgePrompt("Implement", coordinator, peer, context)).toContain(context);
+		expect(coordinatorBridgePrompt("Implement", coordinator, [peer], context)).toContain(context);
+	});
+
+	test("renders a useful default prompt before external agents are runnable", () => {
+		const context = sharedCodingHarnessContext([], "");
+		expect(context).toContain("Default collaboration instructions:");
+		expect(context).toContain("No runnable external agents are currently available.");
+		expect(context).toContain("User-authored shared memory: none");
 	});
 
 	test("appends deterministic JSONL events and hashes responses", async () => {

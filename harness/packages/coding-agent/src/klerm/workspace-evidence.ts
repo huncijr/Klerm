@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { KLERM_DECISION_LOG_DIRECTORY, KLERM_DECISION_LOG_FILE } from "./router/decision-log.ts";
+import { relative, resolve, sep } from "node:path";
 
 export interface KlermWorkspaceSnapshot {
 	root: string;
@@ -40,10 +39,7 @@ export async function captureKlermWorkspaceSnapshot(cwd: string): Promise<KlermW
 		const status = field.slice(0, 2);
 		const path = field.slice(3);
 		const absolutePath = resolve(root, path);
-		if (
-			basename(absolutePath) !== KLERM_DECISION_LOG_FILE ||
-			basename(dirname(absolutePath)) !== KLERM_DECISION_LOG_DIRECTORY
-		) {
+		if (relative(root, absolutePath).split(sep)[0] !== ".klerm") {
 			files.set(absolutePath, `${status}:${await hashFile(absolutePath)}`);
 		}
 		if (status.includes("R")) index++;

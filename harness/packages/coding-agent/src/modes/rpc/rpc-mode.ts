@@ -59,9 +59,8 @@ import {
 	finalizationBridgePrompt,
 	KLERM_BRIDGE_EVENT_CUSTOM_TYPE,
 	peerBridgePrompt,
-	selectCodingHarnessPeer,
+	selectCodingHarnessPeers,
 	sharedCodingHarnessContext,
-	shouldDelegateCodingHarnessTask,
 } from "../../klerm/coding-harness-bridge.ts";
 import {
 	type CodingHarnessAgentSettings,
@@ -77,7 +76,7 @@ import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
-import { normalizeProfile } from "../../klerm/profiles.ts";
+import { formatProfilePrompt, normalizeProfile } from "../../klerm/profiles.ts";
 import {
 	connectProviderAccount,
 	customProviderModelIds,
@@ -85,7 +84,15 @@ import {
 	getProviderAccountStatus,
 } from "../../klerm/provider-accounts.ts";
 import { appendCodingHarnessRouteDecision } from "../../klerm/router/decision-log.ts";
+import { classifyKlermTaskIntent } from "../../klerm/router/runtime.ts";
+import type { KlermTaskOutcome } from "../../klerm/router/types.ts";
 import { createSessionTitle } from "../../klerm/session-title.ts";
+import { isVerificationToolCall, isWorkspaceMutationToolCall } from "../../klerm/tool-policy.ts";
+import {
+	captureKlermWorkspaceSnapshot,
+	changedKlermWorkspacePaths,
+	type KlermWorkspaceSnapshot,
+} from "../../klerm/workspace-evidence.ts";
 import { canonicalizePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -148,16 +155,24 @@ interface ActiveCodingHarnessBridge {
 	rootTask: CodingHarnessBridgeTask;
 	childTask?: CodingHarnessBridgeTask;
 	coordinator: RunnableCodingHarnessAgent;
-	peer?: RunnableCodingHarnessAgent;
+	peers: RunnableCodingHarnessAgent[];
+	peerIndex: number;
 	roster: RunnableCodingHarnessAgent[];
 	agents: Map<string, CodingHarnessAgentSettings>;
+	personalPrompts: Map<string, string>;
 	originalPrompt: string;
+	coordinatorResult: string;
+	peerResults: Map<string, string>;
 	sharedContext: string;
 	sharedContextDigest: string;
 	sharedMemoryPresetId?: string;
 	phase: "coordinator" | "peer" | "finalizing";
 	activeAgentId: string;
 	responses: Map<string, string>;
+	taskIntent: "answer" | "review" | "workspace-change";
+	workspaceSnapshot?: KlermWorkspaceSnapshot;
+	toolInputs: Map<string, { name: string; input: unknown }>;
+	successfulToolCalls: Array<{ name: string; input: unknown }>;
 	sequence: number;
 	aborted: boolean;
 	delegationReason: string;
@@ -415,6 +430,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			return;
 		}
 		if (event.type === "tool-start") {
+			if (activeCodingHarnessBridge?.activeAgentId === event.agentId) {
+				activeCodingHarnessBridge.toolInputs.set(event.toolCallId, { name: event.toolName, input: event.input });
+			}
 			output({
 				type: "tool_execution_start",
 				toolCallId: event.toolCallId,
@@ -425,6 +443,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			return;
 		}
 		if (event.type === "tool-end") {
+			const toolInput = activeCodingHarnessBridge?.toolInputs.get(event.toolCallId);
+			if (activeCodingHarnessBridge?.activeAgentId === event.agentId) {
+				activeCodingHarnessBridge.toolInputs.delete(event.toolCallId);
+				if (!event.isError && toolInput) activeCodingHarnessBridge.successfulToolCalls.push(toolInput);
+			}
 			output({
 				type: "tool_execution_end",
 				toolCallId: event.toolCallId,
@@ -522,10 +545,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			return;
 		}
 		activeCodingHarnessSession = adapterSession;
+		const personalPrompt = run.personalPrompts.get(target.agentId);
+		const effectiveMessage = personalPrompt
+			? `${message}\n\n<klerm_personal_memory>\n${personalPrompt}\n</klerm_personal_memory>`
+			: message;
 		appendAiDebugTrace(
 			"PROMPT_SENT",
 			{
-				prompt: message,
+				prompt: effectiveMessage,
 				target,
 				adapterSession,
 				visibleRoster: run.roster,
@@ -535,7 +562,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		output({
 			type: "routing_changed",
 			state: {
-				mode: run.peer ? "auto" : "off",
+				mode: run.peers.length > 0 ? "auto" : "off",
 				activeStartLane: "auto",
 				lane: "direct",
 				selectedTarget: target.model,
@@ -551,7 +578,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			},
 		});
 		output({ type: "agent_start", agentId: target.agentId });
-		void adapter.prompt(adapterSession, message).catch((promptError) => {
+		void adapter.prompt(adapterSession, effectiveMessage).catch((promptError) => {
 			handleCodingHarnessEvent({
 				type: "error",
 				agentId: target.agentId,
@@ -564,6 +591,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	async function finishCodingHarnessBridge(
 		run: ActiveCodingHarnessBridge,
 		status: "completed" | "failed" | "aborted",
+		outcome?: KlermTaskOutcome,
 	): Promise<void> {
 		if (activeCodingHarnessBridge !== run) return;
 		await bridgeWriteQueue;
@@ -572,8 +600,146 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		output({
 			type: "agent_settled",
 			agentId: run.coordinator.agentId,
-			outcome: status === "failed" ? { status: "failed", changedFileCount: 0, verificationCount: 0 } : undefined,
+			outcome:
+				outcome ??
+				(status === "failed" ? { status: "failed", changedFileCount: 0, verificationCount: 0 } : undefined),
 		});
+	}
+
+	async function externalBridgeOutcome(run: ActiveCodingHarnessBridge): Promise<KlermTaskOutcome> {
+		if (run.taskIntent !== "workspace-change") {
+			return { status: "completed", taskIntent: run.taskIntent, changedFileCount: 0, verificationCount: 0 };
+		}
+		const after = await captureKlermWorkspaceSnapshot(session.sessionManager.getCwd());
+		if (!run.workspaceSnapshot || !after) {
+			return {
+				status: "blocked-before-implementation",
+				taskIntent: run.taskIntent,
+				reason: "Klerm could not capture Git workspace evidence for the external task.",
+				changedFileCount: 0,
+				verificationCount: 0,
+			};
+		}
+		const changedPaths = changedKlermWorkspacePaths(run.workspaceSnapshot, after);
+		const mutationIndexes = run.successfulToolCalls
+			.map((call, index) => (isWorkspaceMutationToolCall(call.name, call.input) ? index : -1))
+			.filter((index) => index >= 0);
+		const mutationCount = mutationIndexes.length;
+		const lastMutationIndex = mutationIndexes.at(-1) ?? -1;
+		const verificationCount = run.successfulToolCalls.filter(
+			(call, index) => index > lastMutationIndex && isVerificationToolCall(call.name, call.input, changedPaths),
+		).length;
+		if (changedPaths.size === 0 || mutationCount === 0) {
+			return {
+				status: "plan-returned-instead-of-implementation",
+				taskIntent: run.taskIntent,
+				reason: "The external team completed without a verified workspace mutation.",
+				changedFileCount: changedPaths.size,
+				verificationCount,
+			};
+		}
+		if (verificationCount === 0) {
+			return {
+				status: "verification-missing",
+				taskIntent: run.taskIntent,
+				reason:
+					"Workspace changes were detected, but no successful verification was reported after implementation.",
+				changedFileCount: changedPaths.size,
+				verificationCount,
+			};
+		}
+		return {
+			status: "implemented-and-verified",
+			taskIntent: run.taskIntent,
+			changedFileCount: changedPaths.size,
+			verificationCount,
+		};
+	}
+
+	async function completeExternalBridgeRoot(
+		run: ActiveCodingHarnessBridge,
+		response: string,
+		activeSession: CodingHarnessSessionRef | undefined,
+		reason: string,
+	): Promise<void> {
+		const outcome = await externalBridgeOutcome(run);
+		const completed = outcome.status === "completed" || outcome.status === "implemented-and-verified";
+		emitBridgeEvent(run, {
+			event: completed ? "TASK_COMPLETED" : "TASK_FAILED",
+			taskId: run.rootTask.taskId,
+			sender: run.coordinator.agentId,
+			recipient: "user",
+			status: completed ? "completed" : "failed",
+			reason: completed ? reason : (outcome.reason ?? "External task evidence validation failed"),
+			agentId: run.coordinator.agentId,
+			harness: run.coordinator.harness,
+			model: run.coordinator.model,
+			...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+			...(response ? { responseHash: bridgeResponseHash(response) } : {}),
+			outcomeStatus: outcome.status,
+			taskIntent: outcome.taskIntent,
+			changedFileCount: outcome.changedFileCount,
+			verificationCount: outcome.verificationCount,
+		});
+		await finishCodingHarnessBridge(run, completed ? "completed" : "failed", outcome);
+	}
+
+	async function startCodingHarnessPeerPass(run: ActiveCodingHarnessBridge, waitingResponse?: string): Promise<void> {
+		const peer = run.peers[run.peerIndex];
+		if (!peer) return;
+		run.phase = "peer";
+		run.childTask = {
+			version: 1,
+			taskId: `${run.rootTask.taskId}-peer-${run.peerIndex + 1}`,
+			parentTaskId: run.rootTask.taskId,
+			correlationId: run.rootTask.correlationId,
+			kind: "peer-review",
+			sender: run.coordinator.agentId,
+			recipient: peer.agentId,
+			sequence: run.peerIndex + 2,
+			reason: `Focused peer pass ${run.peerIndex + 1} of ${run.peers.length}`,
+			status: "assigned",
+		};
+		emitBridgeEvent(run, {
+			event: "TASK_WAITING",
+			taskId: run.rootTask.taskId,
+			sender: run.coordinator.agentId,
+			recipient: peer.agentId,
+			status: "waiting",
+			reason: `${run.coordinator.agentId} is waiting for ${peer.agentId}'s focused return`,
+			agentId: run.coordinator.agentId,
+			harness: run.coordinator.harness,
+			model: run.coordinator.model,
+			...(waitingResponse ? { responseHash: bridgeResponseHash(waitingResponse) } : {}),
+		});
+		for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
+			emitBridgeEvent(run, {
+				event,
+				taskId: run.childTask.taskId,
+				parentTaskId: run.rootTask.taskId,
+				sender: run.coordinator.agentId,
+				recipient: peer.agentId,
+				status: event === "TASK_STARTED" ? "running" : "assigned",
+				reason: run.childTask.reason,
+				agentId: peer.agentId,
+				harness: peer.harness,
+				model: peer.model,
+			});
+		}
+		await promptCodingHarnessBridgeAgent(
+			run,
+			peer,
+			peerBridgePrompt(
+				run.originalPrompt,
+				run.coordinator,
+				peer,
+				run.coordinatorResult,
+				[...run.peerResults].map(([agentId, result]) => ({ agentId, result })),
+				run.sharedContext,
+				run.peerIndex + 1,
+				run.peers.length,
+			),
+		);
 	}
 
 	async function advanceCodingHarnessBridge(
@@ -657,7 +823,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		}
 
 		if (run.phase === "coordinator") {
-			if (!run.peer) {
+			if (run.peers.length === 0) {
 				emitBridgeEvent(run, {
 					event: "NO_DELEGATION",
 					taskId: run.rootTask.taskId,
@@ -671,81 +837,32 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
 					...(response ? { responseHash: bridgeResponseHash(response) } : {}),
 				});
-				emitBridgeEvent(run, {
-					event: "TASK_COMPLETED",
-					taskId: run.rootTask.taskId,
-					sender: run.coordinator.agentId,
-					recipient: "user",
-					status: "completed",
-					reason: "Coordinator completed the task directly",
-					agentId: run.coordinator.agentId,
-					harness: run.coordinator.harness,
-					model: run.coordinator.model,
-					...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
-					...(response ? { responseHash: bridgeResponseHash(response) } : {}),
-				});
-				await finishCodingHarnessBridge(run, "completed");
+				await completeExternalBridgeRoot(run, response, activeSession, "Coordinator completed the task directly");
 				return;
 			}
-			run.phase = "peer";
-			run.childTask = {
-				version: 1,
-				taskId: `${run.rootTask.taskId}-peer-1`,
-				parentTaskId: run.rootTask.taskId,
-				correlationId: run.rootTask.correlationId,
-				kind: "peer-review",
-				sender: run.coordinator.agentId,
-				recipient: run.peer.agentId,
-				sequence: 2,
-				reason: "Capability-ranked focused second pass",
-				status: "assigned",
-			};
-			emitBridgeEvent(run, {
-				event: "TASK_WAITING",
-				taskId: run.rootTask.taskId,
-				sender: run.coordinator.agentId,
-				recipient: run.peer.agentId,
-				status: "waiting",
-				reason: `${run.coordinator.agentId} is waiting for the focused peer return`,
-				agentId: run.coordinator.agentId,
-				harness: run.coordinator.harness,
-				model: run.coordinator.model,
-				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
-			});
-			for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
-				emitBridgeEvent(run, {
-					event,
-					taskId: run.childTask.taskId,
-					parentTaskId: run.rootTask.taskId,
-					sender: run.coordinator.agentId,
-					recipient: run.peer.agentId,
-					status: event === "TASK_STARTED" ? "running" : "assigned",
-					reason: run.childTask.reason,
-					agentId: run.peer.agentId,
-					harness: run.peer.harness,
-					model: run.peer.model,
-				});
-			}
-			await promptCodingHarnessBridgeAgent(
-				run,
-				run.peer,
-				peerBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response, run.sharedContext),
-			);
+			run.coordinatorResult = response;
+			run.peerIndex = 0;
+			await startCodingHarnessPeerPass(run, response);
 			return;
 		}
 
-		if (run.phase === "peer" && run.peer && run.childTask) {
+		if (run.phase === "peer" && run.childTask) {
+			const peer = run.peers[run.peerIndex];
+			if (!peer) {
+				await finishCodingHarnessBridge(run, "failed");
+				return;
+			}
 			emitBridgeEvent(run, {
 				event: "TASK_RETURNED",
 				taskId: run.childTask.taskId,
 				parentTaskId: run.rootTask.taskId,
-				sender: run.peer.agentId,
+				sender: peer.agentId,
 				recipient: run.coordinator.agentId,
 				status: "returned",
-				reason: `${run.peer.agentId} returned the focused second pass`,
-				agentId: run.peer.agentId,
-				harness: run.peer.harness,
-				model: run.peer.model,
+				reason: `${peer.agentId} returned focused peer pass ${run.peerIndex + 1}`,
+				agentId: peer.agentId,
+				harness: peer.harness,
+				model: peer.model,
 				...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
 				...(response ? { responseHash: bridgeResponseHash(response) } : {}),
 			});
@@ -753,19 +870,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				event: "TASK_COMPLETED",
 				taskId: run.childTask.taskId,
 				parentTaskId: run.rootTask.taskId,
-				sender: run.peer.agentId,
+				sender: peer.agentId,
 				recipient: run.coordinator.agentId,
 				status: "completed",
 				reason: "Focused peer task completed",
-				agentId: run.peer.agentId,
-				harness: run.peer.harness,
-				model: run.peer.model,
+				agentId: peer.agentId,
+				harness: peer.harness,
+				model: peer.model,
 			});
+			run.peerResults.set(peer.agentId, response);
+			if (run.peerIndex + 1 < run.peers.length) {
+				run.peerIndex++;
+				await startCodingHarnessPeerPass(run);
+				return;
+			}
 			run.phase = "finalizing";
 			emitBridgeEvent(run, {
 				event: "TASK_RETURNED",
 				taskId: run.rootTask.taskId,
-				sender: run.peer.agentId,
+				sender: peer.agentId,
 				recipient: run.coordinator.agentId,
 				status: "running",
 				reason: `${run.coordinator.agentId} resumed for final review`,
@@ -776,25 +899,22 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			await promptCodingHarnessBridgeAgent(
 				run,
 				run.coordinator,
-				finalizationBridgePrompt(run.originalPrompt, run.coordinator, run.peer, response, run.sharedContext),
+				finalizationBridgePrompt(
+					run.originalPrompt,
+					run.coordinator,
+					[...run.peerResults].map(([agentId, result]) => ({ agentId, result })),
+					run.sharedContext,
+				),
 			);
 			return;
 		}
 
-		emitBridgeEvent(run, {
-			event: "TASK_COMPLETED",
-			taskId: run.rootTask.taskId,
-			sender: run.coordinator.agentId,
-			recipient: "user",
-			status: "completed",
-			reason: "Coordinator reviewed the peer return and finalized the task",
-			agentId: run.coordinator.agentId,
-			harness: run.coordinator.harness,
-			model: run.coordinator.model,
-			...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
-			...(response ? { responseHash: bridgeResponseHash(response) } : {}),
-		});
-		await finishCodingHarnessBridge(run, "completed");
+		await completeExternalBridgeRoot(
+			run,
+			response,
+			activeSession,
+			"Coordinator reviewed all peer returns and finalized the task",
+		);
 	}
 
 	const success = <T extends RpcCommand["type"]>(
@@ -916,11 +1036,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	const getCodingHarnessSetup = async (refreshDiscovery = false): Promise<RpcCodingHarnessSetup> => {
 		const harnesses = await loadCodingHarnesses(refreshDiscovery);
 		const klermModels = session.modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}/${model.id}`);
-		return createCodingHarnessSetup(
+		const setup = createCodingHarnessSetup(
 			session.settingsManager.getCodingHarnessSlots(),
 			harnesses.map((harness) => (harness.kind === "klerm" ? { ...harness, models: klermModels } : harness)),
 			new Set(codingHarnessAdapters.keys()),
 		);
+		const externalRoster = setup.runnableAgents.filter(
+			(agent) => agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),
+		);
+		return {
+			...setup,
+			sharedContextPreview: sharedCodingHarnessContext(
+				externalRoster,
+				session.settingsManager.getKlermProfiles().sharedMemory,
+			),
+		};
 	};
 	const startExternalCodingHarnessPrompt = async (
 		setup: RpcCodingHarnessSetup,
@@ -934,20 +1064,47 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const profileState = session.settingsManager.getKlermProfiles();
 		const sharedContext = sharedCodingHarnessContext(roster, profileState.sharedMemory);
 		const sharedContextDigest = crypto.createHash("sha256").update(sharedContext).digest("hex");
-		const peer =
-			setup.slots.workTogetherEnabled === true && shouldDelegateCodingHarnessTask(message, roster.length)
-				? selectCodingHarnessPeer(roster, coordinator.agentId)
-				: undefined;
+		const peers =
+			setup.slots.workTogetherEnabled === true ? selectCodingHarnessPeers(roster, coordinator.agentId) : [];
 		const delegationReason =
 			roster.length < 2
 				? "Only one runnable external agent was available"
 				: setup.slots.workTogetherEnabled !== true
 					? "Work together was disabled for this prompt snapshot"
-					: peer
-						? `Selected ${peer.agentId} for a deterministic capability-ranked second pass`
-						: "The deterministic breadth check did not require a peer pass";
+					: `Scheduled ${peers.length} deterministic capability-ranked peer pass${peers.length === 1 ? "" : "es"}`;
 		const timestamp = new Date().toISOString();
 		const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${message}`).digest("hex").slice(0, 16)}`;
+		const agents = new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }]));
+		const personalPrompts = new Map<string, string>();
+		for (const agent of roster) {
+			const configured = agents.get(agent.agentId);
+			const profileId =
+				configured?.memoryProfileId ??
+				(agent.agentId === "agent1"
+					? profileState.localProfileId
+					: agent.agentId === "agent2"
+						? profileState.frontierProfileId
+						: undefined);
+			const profile = profileId ? profileState.profiles.find((candidate) => candidate.id === profileId) : undefined;
+			const rolePrompt =
+				agent.role === "planner"
+					? `Work in Plan mode: inspect and reason, then return a concrete implementation plan, risks, and verification steps.${agent.adapterCapabilities.roleEnforcement ? "" : " This adapter uses prompt-only role enforcement, so do not modify the workspace."}`
+					: "Work in Build mode: implement the assigned work in the workspace, then run relevant verification and report concrete results.";
+			personalPrompts.set(
+				agent.agentId,
+				[
+					rolePrompt,
+					profile ? formatProfilePrompt(`Agent ${Number(agent.agentId.slice(5))}`, profile, agent.role) : "",
+				]
+					.filter(Boolean)
+					.join("\n\n"),
+			);
+		}
+		const taskIntent = classifyKlermTaskIntent(message);
+		const workspaceSnapshot =
+			taskIntent === "workspace-change"
+				? await captureKlermWorkspaceSnapshot(session.sessionManager.getCwd())
+				: undefined;
 		const run: ActiveCodingHarnessBridge = {
 			rootTask: {
 				version: 1,
@@ -961,10 +1118,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				status: "assigned",
 			},
 			coordinator,
-			...(peer ? { peer } : {}),
+			peers,
+			peerIndex: 0,
 			roster,
-			agents: new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }])),
+			agents,
+			personalPrompts,
 			originalPrompt: message,
+			coordinatorResult: "",
+			peerResults: new Map(),
 			sharedContext,
 			sharedContextDigest,
 			...(profileState.selectedSharedMemoryPresetId
@@ -973,6 +1134,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			phase: "coordinator",
 			activeAgentId: coordinator.agentId,
 			responses: new Map(),
+			taskIntent,
+			...(workspaceSnapshot ? { workspaceSnapshot } : {}),
+			toolInputs: new Map(),
+			successfulToolCalls: [],
 			sequence: 0,
 			aborted: false,
 			delegationReason,
@@ -984,7 +1149,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				excludedAgents: setup.excludedAgents,
 				externalRoster: roster,
 				coordinator,
-				peer,
+				peers,
 				workTogetherEnabled: setup.slots.workTogetherEnabled === true,
 				delegationReason,
 				selectedSharedMemoryPresetId: profileState.selectedSharedMemoryPresetId,
@@ -1042,7 +1207,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		await promptCodingHarnessBridgeAgent(
 			run,
 			coordinator,
-			coordinatorBridgePrompt(message, coordinator, peer, sharedContext),
+			coordinatorBridgePrompt(message, coordinator, peers, sharedContext),
 		);
 		return run;
 	};

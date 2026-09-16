@@ -74,6 +74,7 @@
 		buildModeOffer,
 		sharedMemory,
 		defaultSharedMemory,
+		sharedContextPreview,
 		sharedMemoryPresets,
 		selectedSharedMemoryPresetId,
 		onsend,
@@ -150,6 +151,7 @@
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
 		sharedMemory: string;
 		defaultSharedMemory: string;
+		sharedContextPreview: string;
 		sharedMemoryPresets: KlermSharedMemoryPreset[];
 		selectedSharedMemoryPresetId: string;
 		onsend: (text: string, images: ImageAttachment[]) => void;
@@ -198,6 +200,7 @@
 	let sharedMemoryOpen = $state(false);
 	let sharedMemoryDraft = $state("");
 	let sharedMemoryName = $state("");
+	let sharedMemoryPresetDraftId = $state("");
 	let sharedMemoryBusy = $state(false);
 	let roleMenuRoot: HTMLElement | undefined = $state();
 	let agentStripRoot: HTMLElement | undefined = $state();
@@ -799,6 +802,7 @@
 					onclick={() => {
 						sharedMemoryDraft = sharedMemory;
 						sharedMemoryName = sharedMemoryPresets.find((preset) => preset.id === selectedSharedMemoryPresetId)?.name ?? "";
+						sharedMemoryPresetDraftId = selectedSharedMemoryPresetId;
 						sharedMemoryOpen = !sharedMemoryOpen;
 					}}
 				>
@@ -806,29 +810,33 @@
 					<ChevronDown size={11} />
 				</button>
 				{#if sharedMemoryOpen}
-					<div class="absolute right-0 bottom-[44px] z-20 w-[min(360px,calc(100vw-30px))] rounded-lg border border-[#303a42] bg-[#10161b] p-3 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
+					<div class="absolute right-0 bottom-[44px] z-20 max-h-[min(680px,75vh)] w-[min(420px,calc(100vw-30px))] overflow-y-auto rounded-lg border border-[#303a42] bg-[#10161b] p-3 shadow-[0_14px_34px_rgba(0,0,0,.42)] [scrollbar-width:thin]">
 						<strong class="block font-mono text-[10px] text-white">Shared Memory</strong>
 						<p class="mt-1 mb-2 font-mono text-[8px] leading-[1.45] text-[#66727b]">All active external agents receive this text plus a current agent roster when the next task starts.</p>
 						<select
-							value={selectedSharedMemoryPresetId}
+							value={sharedMemoryPresetDraftId}
 							class="mb-2 h-8 w-full rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white [color-scheme:dark]"
 							onchange={(event) => {
 								const preset = sharedMemoryPresets.find((candidate) => candidate.id === event.currentTarget.value);
+								sharedMemoryPresetDraftId = preset?.id ?? "";
 								sharedMemoryDraft = preset?.memory ?? defaultSharedMemory;
 								sharedMemoryName = preset?.name ?? "";
-								void onsharedmemorychange(sharedMemoryDraft, preset?.id);
 							}}
 						>
 							<option value="">Default shared memory</option>
 							{#each sharedMemoryPresets as preset (preset.id)}<option value={preset.id}>{preset.name}</option>{/each}
 						</select>
 						<textarea bind:value={sharedMemoryDraft} maxlength="8000" rows="6" placeholder="Project conventions, constraints, shared decisions..." class="w-full resize-y rounded-md border border-[#303a42] bg-[#080c10] p-2 font-mono text-[9px] leading-[1.5] text-white outline-0"></textarea>
+						<details class="mt-2 rounded-md border border-[#29343c] bg-[#080c10] p-2" open>
+							<summary class="cursor-pointer font-mono text-[8px] text-[#9cc0f2]">Effective prompt sent to agents</summary>
+							<pre class="mt-2 mb-0 max-h-44 overflow-auto whitespace-pre-wrap font-mono text-[7px] leading-[1.55] text-[#8f9ca4] [scrollbar-width:thin]">{sharedContextPreview || "Prompt preview unavailable."}</pre>
+						</details>
 						<div class="mt-2 flex gap-1.5">
 							<input bind:value={sharedMemoryName} maxlength="40" placeholder="preset name" class="h-8 min-w-0 flex-1 rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white outline-0" />
 							<button type="button" disabled={!sharedMemoryName.trim() || sharedMemoryBusy} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#d7e7ff] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsavesharedmemory(sharedMemoryName, sharedMemoryDraft)) sharedMemoryName = ""; sharedMemoryBusy = false; }}>Save preset</button>
 						</div>
 						<div class="mt-2 flex justify-end gap-1.5">
-							<button type="button" class="h-8 rounded-md px-2 font-mono text-[8px] text-[#8b969e]" onclick={() => { sharedMemoryDraft = defaultSharedMemory; sharedMemoryName = ""; void onsharedmemorychange(defaultSharedMemory); }}>Use default</button>
+							<button type="button" disabled={sharedMemoryBusy || sharedMemoryPresetDraftId === selectedSharedMemoryPresetId} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#9cc0f2] disabled:opacity-35" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft, sharedMemoryPresetDraftId || undefined)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Apply selection</button>
 							<button type="button" disabled={sharedMemoryBusy} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Save as default</button>
 						</div>
 					</div>
