@@ -3,6 +3,7 @@ import {
 	addCodingHarnessSlot,
 	assignWorkTogetherModels,
 	canEnableWorkTogether,
+	canPromptTogether,
 	hasTwoEnabledCodingHarnessAgents,
 	removeCodingHarnessSlot,
 	setAllCodingHarnessAgentRoles,
@@ -41,6 +42,44 @@ describe("desktop coding harness slots", () => {
 			]).agents.map((agent) => agent.model),
 		).toEqual(["provider/one", "provider/two"]);
 		expect(canEnableWorkTogether(updateCodingHarnessSlot(configured, "agent2", { enabled: false }))).toBe(false);
+	});
+
+	test("offers Prompt Together only for three runnable external agents", () => {
+		const runnableAgent = (agentId: string, harness: "codex" | "opencode") => ({
+			order: Number(agentId.slice(5)),
+			agentId,
+			harness,
+			model: `${harness}/model`,
+			role: "builder" as const,
+			effort: "high" as const,
+			tools: [],
+			specialties: [],
+			strengthBand: 3 as const,
+			strengths: [],
+			limits: [],
+			capabilitySource: "model-profile-inference" as const,
+			adapterCapabilities: {
+				prompt: true as const,
+				abort: true as const,
+				resumeSession: true,
+				roleEnforcement: true,
+				childTaskEvents: false as const,
+			},
+		});
+		const setup: CodingHarnessSetup = {
+			slots,
+			harnesses: [],
+			effectiveRouting: "auto",
+			externalPromptingAvailable: true,
+			workTogetherAvailable: true,
+			runnableAgents: [runnableAgent("agent1", "opencode"), runnableAgent("agent2", "codex")],
+			excludedAgents: [],
+		};
+		expect(canPromptTogether(setup)).toBe(false);
+		expect(
+			canPromptTogether({ ...setup, runnableAgents: [...setup.runnableAgents, runnableAgent("agent3", "codex")] }),
+		).toBe(true);
+		expect(canPromptTogether({ ...setup, slots: { ...slots, externalHarnessesEnabled: false } })).toBe(false);
 	});
 
 	test("shows selected enabled agent context without requiring Work together", () => {

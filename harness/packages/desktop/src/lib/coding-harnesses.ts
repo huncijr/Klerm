@@ -22,6 +22,13 @@ export function canEnableWorkTogether(slots: CodingHarnessSlots): boolean {
 	return hasTwoEnabledCodingHarnessAgents(slots);
 }
 
+export function canPromptTogether(setup: CodingHarnessSetup | undefined): boolean {
+	return (
+		setup?.slots.externalHarnessesEnabled === true &&
+		setup.runnableAgents.filter((agent) => agent.harness !== "klerm").length >= 3
+	);
+}
+
 export function setAllCodingHarnessAgentRoles(slots: CodingHarnessSlots, role: WorkerRole): CodingHarnessSlots {
 	return {
 		...slots,

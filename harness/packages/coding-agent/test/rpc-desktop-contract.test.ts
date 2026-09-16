@@ -192,6 +192,7 @@ describe("Klerm desktop RPC contract", () => {
 					capabilities: {
 						commands: expect.arrayContaining([
 							"prompt",
+							"prompt_together",
 							"get_local_runtimes",
 							"get_available_thinking_levels",
 							"set_thinking_level",

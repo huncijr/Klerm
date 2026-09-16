@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookOpen, ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, X } from "@lucide/svelte";
+	import { BookOpen, ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, Users, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -10,6 +10,7 @@
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
 	import { imageDataUrl } from "../lib/helpers.ts";
+	import { canPromptTogether } from "../lib/coding-harnesses.ts";
 	import type {
 		ApprovalMode,
 		CodingHarnessKind,
@@ -105,6 +106,7 @@
 		onworktogetherchange,
 		onsharedmemorychange,
 		onsavesharedmemory,
+		onprompttogether,
 	}: {
 		draft: string;
 		attachments: ImageAttachment[];
@@ -182,6 +184,7 @@
 		onworktogetherchange: (enabled: boolean) => void;
 		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
 		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
+		onprompttogether: (text: string) => void;
 	} = $props();
 
 	const routingOptions: SelectOption[] = [
@@ -350,6 +353,14 @@
 		historyIndex = -1;
 		draftBeforeHistory = "";
 		onsend(text, attachments);
+	}
+
+	function submitTogether(): void {
+		const text = draft.trim();
+		if (!text || attachments.length > 0 || sendDisabled) return;
+		historyIndex = -1;
+		draftBeforeHistory = "";
+		onprompttogether(text);
 	}
 
 	async function attachImages(event: Event): Promise<void> {
@@ -981,14 +992,27 @@
 			{/if}
 			</div>
 		{/if}
-		<ModelSelect
-			label="Routing"
-			options={routingOptions}
-			value={routingValue}
-			disabled={routingDisabled || workTogetherEnabled}
-			placeholder="Choose routing"
-			onchange={onroutingchange}
-		/>
+		{#if canPromptTogether(externalHarnessSetup)}
+			<button
+				type="button"
+				disabled={sendDisabled || !draft.trim() || attachments.length > 0}
+				title={attachments.length > 0 ? "Prompt Together does not support image attachments yet" : "Run bounded Planner, Builder, and Reviewer iterations"}
+				class="flex min-w-0 items-center justify-between rounded-lg border border-[#4b5b2b] bg-[#151b0f] px-3 py-2 text-left text-[#d6ff3f] hover:border-[#789537] hover:bg-[#1a2310] disabled:cursor-not-allowed disabled:opacity-40"
+				onclick={submitTogether}
+			>
+				<span><strong class="block font-mono text-[8px] tracking-[.1em] text-[#7f9251] uppercase">Iterative mode</strong><span class="mt-1 block font-mono text-[10px]">Prompt Together</span></span>
+				<Users size={15} stroke-width={1.6} />
+			</button>
+		{:else}
+			<ModelSelect
+				label="Routing"
+				options={routingOptions}
+				value={routingValue}
+				disabled={routingDisabled || workTogetherEnabled}
+				placeholder="Choose routing"
+				onchange={onroutingchange}
+			/>
+		{/if}
 		{#if workTogetherVisible}
 			<button
 				type="button"

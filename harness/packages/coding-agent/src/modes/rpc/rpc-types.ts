@@ -270,6 +270,7 @@ export type RpcCommand =
 			images?: ImageContent[];
 			streamingBehavior?: "steer" | "followUp";
 	  }
+	| { id?: string; type: "prompt_together"; message: string; displayMessage?: string }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort" }
@@ -525,6 +526,7 @@ export type RpcResponse =
 
 	// Prompting (async - events follow)
 	| { id?: string; type: "response"; command: "prompt"; success: true }
+	| { id?: string; type: "response"; command: "prompt_together"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
 	| { id?: string; type: "response"; command: "abort"; success: true }

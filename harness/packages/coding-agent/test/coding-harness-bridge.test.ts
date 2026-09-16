@@ -7,7 +7,11 @@ import {
 	bridgeResponseHash,
 	coordinatorBridgePrompt,
 	getCodingHarnessBridgeLogPath,
+	implementationBridgePrompt,
+	planningBridgePrompt,
+	promptTogetherVerdict,
 	readCodingHarnessBridgeLog,
+	reviewBridgePrompt,
 	selectCodingHarnessPeers,
 	sharedCodingHarnessContext,
 	shouldDelegateCodingHarnessTask,
@@ -103,6 +107,25 @@ describe("coding harness bridge", () => {
 		expect(context).toContain("Default collaboration instructions:");
 		expect(context).toContain("No runnable external agents are currently available.");
 		expect(context).toContain("User-authored shared memory: none");
+	});
+
+	test("builds strict Prompt Together plan, build, and review prompts", () => {
+		const planner = runnableAgent("agent6");
+		const builder = runnableAgent("agent7");
+		const reviewer = runnableAgent("agent8", { role: "planner" });
+		const context = sharedCodingHarnessContext([planner, builder, reviewer], "Follow repository rules.");
+		expect(planningBridgePrompt("Implement it", planner, context)).toContain(
+			"temporarily assigned as the read-only Planner",
+		);
+		expect(implementationBridgePrompt("Implement it", builder, "Plan result", context)).toContain(
+			"Planner result:\nPlan result",
+		);
+		expect(reviewBridgePrompt("Implement it", reviewer, "Plan", "Build", context, 2)).toContain(
+			"KLERM_VERDICT: APPROVED",
+		);
+		expect(promptTogetherVerdict("KLERM_VERDICT: APPROVED\nAll checks pass.")).toBe("approved");
+		expect(promptTogetherVerdict("Notes first\nKLERM_VERDICT: APPROVED")).toBe("repair");
+		expect(promptTogetherVerdict("KLERM_VERDICT: REPAIR\nMissing tests.")).toBe("repair");
 	});
 
 	test("appends deterministic JSONL events and hashes responses", async () => {

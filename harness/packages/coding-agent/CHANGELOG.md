@@ -35,6 +35,7 @@
 - Added an opt-in `KLERM_AI_DEBUG_LOG` JSONL trace for full model prompts, visible agent rosters, explicit reasoning/session events, raw external harness output, tool input/output, responses, and bridge handoffs. Debug traces may contain secrets and are disabled by default.
 - Added shared collaboration-memory presets and a task-start context snapshot containing the runnable external-agent roster, injected unchanged into coordinator, peer, and finalization prompts.
 - Added per-agent Personal Memory and Plan/Build prompt snapshots for external tasks, plus Git workspace-change and successful-verification evidence on task outcomes and bridge completion events.
+- Added an explicit desktop Prompt Together workflow for three or more runnable external agents, with temporary Planner/Builder/Reviewer roles, strict review verdicts, bounded repair iterations, native role-session switching, cancellation, and deterministic bridge logs.
 
 ### Changed
 

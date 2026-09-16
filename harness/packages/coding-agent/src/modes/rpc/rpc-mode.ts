@@ -57,8 +57,14 @@ import {
 	type CodingHarnessBridgeTask,
 	coordinatorBridgePrompt,
 	finalizationBridgePrompt,
+	implementationBridgePrompt,
 	KLERM_BRIDGE_EVENT_CUSTOM_TYPE,
 	peerBridgePrompt,
+	planningBridgePrompt,
+	promptTogetherFinalizationPrompt,
+	promptTogetherVerdict,
+	repairBridgePrompt,
+	reviewBridgePrompt,
 	selectCodingHarnessPeers,
 	sharedCodingHarnessContext,
 } from "../../klerm/coding-harness-bridge.ts";
@@ -152,6 +158,7 @@ export interface RunRpcModeOptions {
 }
 
 interface ActiveCodingHarnessBridge {
+	mode: "work-together" | "prompt-together";
 	rootTask: CodingHarnessBridgeTask;
 	childTask?: CodingHarnessBridgeTask;
 	coordinator: RunnableCodingHarnessAgent;
@@ -166,7 +173,7 @@ interface ActiveCodingHarnessBridge {
 	sharedContext: string;
 	sharedContextDigest: string;
 	sharedMemoryPresetId?: string;
-	phase: "coordinator" | "peer" | "finalizing";
+	phase: "coordinator" | "peer" | "planning" | "implementing" | "reviewing" | "repairing" | "finalizing";
 	activeAgentId: string;
 	responses: Map<string, string>;
 	taskIntent: "answer" | "review" | "workspace-change";
@@ -176,6 +183,16 @@ interface ActiveCodingHarnessBridge {
 	sequence: number;
 	aborted: boolean;
 	delegationReason: string;
+	planner?: RunnableCodingHarnessAgent;
+	builder?: RunnableCodingHarnessAgent;
+	reviewers: RunnableCodingHarnessAgent[];
+	reviewerIndex: number;
+	iteration: number;
+	maxIterations: number;
+	planResult: string;
+	implementationResult: string;
+	reviewResults: Map<string, string>;
+	completionFailureReason?: string;
 }
 
 const DESKTOP_COMMANDS = [
@@ -225,6 +242,7 @@ const DESKTOP_COMMANDS = [
 	"get_available_thinking_levels",
 	"set_thinking_level",
 	"prompt",
+	"prompt_together",
 	"abort",
 	"new_session",
 	"switch_session",
@@ -507,7 +525,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			adapterSession &&
 			(adapterSession.harness !== target.harness ||
 				adapterSession.model !== target.model ||
-				adapterSession.role !== target.role)
+				adapterSession.role !== configuredAgent.role)
 		) {
 			await codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession);
 			codingHarnessSessions.delete(target.agentId);
@@ -662,7 +680,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		activeSession: CodingHarnessSessionRef | undefined,
 		reason: string,
 	): Promise<void> {
-		const outcome = await externalBridgeOutcome(run);
+		const evidenceOutcome = await externalBridgeOutcome(run);
+		const outcome: KlermTaskOutcome = run.completionFailureReason
+			? { ...evidenceOutcome, status: "failed", reason: run.completionFailureReason }
+			: evidenceOutcome;
 		const completed = outcome.status === "completed" || outcome.status === "implemented-and-verified";
 		emitBridgeEvent(run, {
 			event: completed ? "TASK_COMPLETED" : "TASK_FAILED",
@@ -742,6 +763,231 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		);
 	}
 
+	async function startPromptTogetherChild(
+		run: ActiveCodingHarnessBridge,
+		target: RunnableCodingHarnessAgent,
+		kind: "implementation" | "review" | "repair",
+		reason: string,
+		message: string,
+		sender: string,
+	): Promise<void> {
+		const suffix =
+			kind === "review"
+				? `review-${run.iteration}-${run.reviewerIndex + 1}-${target.agentId}`
+				: kind === "repair"
+					? `repair-${run.iteration}`
+					: "implementation";
+		run.childTask = {
+			version: 1,
+			taskId: `${run.rootTask.taskId}-${suffix}`,
+			parentTaskId: run.rootTask.taskId,
+			correlationId: run.rootTask.correlationId,
+			kind,
+			sender,
+			recipient: target.agentId,
+			sequence: run.sequence + 1,
+			reason,
+			status: "assigned",
+		};
+		emitBridgeEvent(run, {
+			event: "TASK_WAITING",
+			taskId: run.rootTask.taskId,
+			sender,
+			recipient: target.agentId,
+			status: "waiting",
+			reason,
+			agentId: sender,
+		});
+		for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
+			emitBridgeEvent(run, {
+				event,
+				taskId: run.childTask.taskId,
+				parentTaskId: run.rootTask.taskId,
+				sender,
+				recipient: target.agentId,
+				status: event === "TASK_STARTED" ? "running" : "assigned",
+				reason,
+				agentId: target.agentId,
+				harness: target.harness,
+				model: target.model,
+			});
+		}
+		await promptCodingHarnessBridgeAgent(run, target, message);
+	}
+
+	function completePromptTogetherChild(
+		run: ActiveCodingHarnessBridge,
+		target: RunnableCodingHarnessAgent,
+		response: string,
+		activeSession: CodingHarnessSessionRef | undefined,
+	): void {
+		if (!run.childTask) return;
+		for (const event of ["TASK_RETURNED", "TASK_COMPLETED"] as const) {
+			emitBridgeEvent(run, {
+				event,
+				taskId: run.childTask.taskId,
+				parentTaskId: run.rootTask.taskId,
+				sender: target.agentId,
+				recipient: run.planner?.agentId ?? run.coordinator.agentId,
+				status: event === "TASK_RETURNED" ? "returned" : "completed",
+				reason:
+					event === "TASK_RETURNED" ? `${run.childTask.reason} returned` : `${run.childTask.reason} completed`,
+				agentId: target.agentId,
+				harness: target.harness,
+				model: target.model,
+				...(activeSession?.nativeSessionId ? { nativeSessionId: activeSession.nativeSessionId } : {}),
+				...(event === "TASK_RETURNED" ? { responseHash: bridgeResponseHash(response) } : {}),
+			});
+		}
+	}
+
+	async function startPromptTogetherReview(run: ActiveCodingHarnessBridge): Promise<void> {
+		const reviewer = run.reviewers[run.reviewerIndex];
+		if (!reviewer) return;
+		run.phase = "reviewing";
+		await startPromptTogetherChild(
+			run,
+			reviewer,
+			"review",
+			`Read-only review ${run.reviewerIndex + 1} of ${run.reviewers.length}, iteration ${run.iteration}`,
+			reviewBridgePrompt(
+				run.originalPrompt,
+				reviewer,
+				run.planResult,
+				run.implementationResult,
+				run.sharedContext,
+				run.iteration,
+			),
+			run.builder?.agentId ?? run.coordinator.agentId,
+		);
+	}
+
+	async function startPromptTogetherFinalization(run: ActiveCodingHarnessBridge): Promise<void> {
+		const planner = run.planner;
+		if (!planner) return;
+		run.phase = "finalizing";
+		emitBridgeEvent(run, {
+			event: "TASK_RETURNED",
+			taskId: run.rootTask.taskId,
+			sender: run.activeAgentId,
+			recipient: planner.agentId,
+			status: "running",
+			reason: run.completionFailureReason
+				? "Planner resumed to report the bounded workflow failure"
+				: "Planner resumed after all reviewers approved",
+			agentId: planner.agentId,
+			harness: planner.harness,
+			model: planner.model,
+		});
+		await promptCodingHarnessBridgeAgent(
+			run,
+			planner,
+			promptTogetherFinalizationPrompt(
+				run.originalPrompt,
+				planner,
+				run.planResult,
+				run.implementationResult,
+				[...run.reviewResults].map(([agentId, result]) => ({ agentId, result })),
+				run.sharedContext,
+				run.completionFailureReason,
+			),
+		);
+	}
+
+	async function advancePromptTogetherBridge(
+		run: ActiveCodingHarnessBridge,
+		response: string,
+		activeSession: CodingHarnessSessionRef | undefined,
+	): Promise<void> {
+		const planner = run.planner;
+		const builder = run.builder;
+		if (!planner || !builder) {
+			await finishCodingHarnessBridge(run, "failed");
+			return;
+		}
+		if (run.phase === "planning") {
+			run.planResult = response;
+			run.phase = "implementing";
+			await startPromptTogetherChild(
+				run,
+				builder,
+				"implementation",
+				"Implement the Planner result",
+				implementationBridgePrompt(run.originalPrompt, builder, response, run.sharedContext),
+				planner.agentId,
+			);
+			return;
+		}
+		if (run.phase === "implementing") {
+			completePromptTogetherChild(run, builder, response, activeSession);
+			run.implementationResult = response;
+			run.iteration = 1;
+			run.reviewerIndex = 0;
+			run.reviewResults.clear();
+			await startPromptTogetherReview(run);
+			return;
+		}
+		if (run.phase === "reviewing") {
+			const reviewer = run.reviewers[run.reviewerIndex];
+			if (!reviewer) {
+				await finishCodingHarnessBridge(run, "failed");
+				return;
+			}
+			completePromptTogetherChild(run, reviewer, response, activeSession);
+			run.reviewResults.set(reviewer.agentId, response);
+			if (run.reviewerIndex + 1 < run.reviewers.length) {
+				run.reviewerIndex++;
+				await startPromptTogetherReview(run);
+				return;
+			}
+			const repairRequired = [...run.reviewResults.values()].some(
+				(result) => promptTogetherVerdict(result) === "repair",
+			);
+			if (!repairRequired) {
+				await startPromptTogetherFinalization(run);
+				return;
+			}
+			if (run.iteration >= run.maxIterations) {
+				run.completionFailureReason = `Prompt Together stopped after ${run.maxIterations} review iterations with unresolved findings.`;
+				await startPromptTogetherFinalization(run);
+				return;
+			}
+			run.iteration++;
+			run.phase = "repairing";
+			await startPromptTogetherChild(
+				run,
+				builder,
+				"repair",
+				`Repair iteration ${run.iteration}`,
+				repairBridgePrompt(
+					run.originalPrompt,
+					builder,
+					run.planResult,
+					run.implementationResult,
+					[...run.reviewResults].map(([agentId, result]) => ({ agentId, result })),
+					run.sharedContext,
+					run.iteration,
+				),
+				planner.agentId,
+			);
+			return;
+		}
+		if (run.phase === "repairing") {
+			completePromptTogetherChild(run, builder, response, activeSession);
+			run.implementationResult = `${run.implementationResult}\n\nRepair iteration ${run.iteration}:\n${response}`;
+			run.reviewerIndex = 0;
+			run.reviewResults.clear();
+			await startPromptTogetherReview(run);
+			return;
+		}
+		await completeExternalBridgeRoot(
+			run,
+			response,
+			activeSession,
+			"Prompt Together completed after independent review approval",
+		);
+	}
+
 	async function advanceCodingHarnessBridge(
 		run: ActiveCodingHarnessBridge,
 		status: "completed" | "failed" | "aborted",
@@ -760,11 +1006,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			{ taskId: run.rootTask.taskId, agentId: run.activeAgentId, phase: run.phase },
 		);
 		if (run.aborted || status === "aborted") {
-			const cancelledTaskId = run.phase === "peer" && run.childTask ? run.childTask.taskId : run.rootTask.taskId;
+			const activeChild =
+				run.childTask && ["peer", "implementing", "reviewing", "repairing"].includes(run.phase)
+					? run.childTask
+					: undefined;
+			const cancelledTaskId = activeChild?.taskId ?? run.rootTask.taskId;
 			emitBridgeEvent(run, {
 				event: "TASK_CANCELLED",
 				taskId: cancelledTaskId,
-				...(run.phase === "peer" && run.childTask ? { parentTaskId: run.rootTask.taskId } : {}),
+				...(activeChild ? { parentTaskId: run.rootTask.taskId } : {}),
 				sender: run.activeAgentId,
 				recipient: "user",
 				status: "cancelled",
@@ -790,11 +1040,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			return;
 		}
 		if (status === "failed" || !response) {
-			const failedTaskId = run.phase === "peer" && run.childTask ? run.childTask.taskId : run.rootTask.taskId;
+			const activeChild =
+				run.childTask && ["peer", "implementing", "reviewing", "repairing"].includes(run.phase)
+					? run.childTask
+					: undefined;
+			const failedTaskId = activeChild?.taskId ?? run.rootTask.taskId;
 			emitBridgeEvent(run, {
 				event: "TASK_FAILED",
 				taskId: failedTaskId,
-				...(run.phase === "peer" && run.childTask ? { parentTaskId: run.rootTask.taskId } : {}),
+				...(activeChild ? { parentTaskId: run.rootTask.taskId } : {}),
 				sender: run.activeAgentId,
 				recipient: "user",
 				status: "failed",
@@ -819,6 +1073,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				});
 			}
 			await finishCodingHarnessBridge(run, "failed");
+			return;
+		}
+		if (run.mode === "prompt-together") {
+			await advancePromptTogetherBridge(run, response, activeSession);
 			return;
 		}
 
@@ -1055,26 +1313,45 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	const startExternalCodingHarnessPrompt = async (
 		setup: RpcCodingHarnessSetup,
 		message: string,
+		mode: "work-together" | "prompt-together" = "work-together",
 	): Promise<ActiveCodingHarnessBridge | undefined> => {
 		const roster = setup.runnableAgents.filter(
 			(agent) => agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),
 		);
 		const coordinator = roster[0];
 		if (!coordinator) return undefined;
+		const rankedPeers = selectCodingHarnessPeers(roster, coordinator.agentId);
+		const builder = mode === "prompt-together" ? rankedPeers[0] : undefined;
+		const reviewers = mode === "prompt-together" ? rankedPeers.slice(1) : [];
+		if (mode === "prompt-together" && (!builder || reviewers.length === 0)) return undefined;
+		if (mode === "prompt-together") {
+			if (!builder) return undefined;
+			coordinator.role = "planner";
+			builder.role = "builder";
+			for (const reviewer of reviewers) reviewer.role = "planner";
+		}
 		const profileState = session.settingsManager.getKlermProfiles();
 		const sharedContext = sharedCodingHarnessContext(roster, profileState.sharedMemory);
 		const sharedContextDigest = crypto.createHash("sha256").update(sharedContext).digest("hex");
 		const peers =
-			setup.slots.workTogetherEnabled === true ? selectCodingHarnessPeers(roster, coordinator.agentId) : [];
+			mode === "prompt-together" ? rankedPeers : setup.slots.workTogetherEnabled === true ? rankedPeers : [];
 		const delegationReason =
-			roster.length < 2
-				? "Only one runnable external agent was available"
-				: setup.slots.workTogetherEnabled !== true
-					? "Work together was disabled for this prompt snapshot"
-					: `Scheduled ${peers.length} deterministic capability-ranked peer pass${peers.length === 1 ? "" : "es"}`;
+			mode === "prompt-together"
+				? `Prompt Together assigned ${coordinator.agentId} as Planner, ${builder?.agentId} as Builder, and ${reviewers.length} Reviewer${reviewers.length === 1 ? "" : "s"}`
+				: roster.length < 2
+					? "Only one runnable external agent was available"
+					: setup.slots.workTogetherEnabled !== true
+						? "Work together was disabled for this prompt snapshot"
+						: `Scheduled ${peers.length} deterministic capability-ranked peer pass${peers.length === 1 ? "" : "es"}`;
 		const timestamp = new Date().toISOString();
 		const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${message}`).digest("hex").slice(0, 16)}`;
 		const agents = new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }]));
+		if (mode === "prompt-together") {
+			for (const agent of roster) {
+				const configured = agents.get(agent.agentId);
+				if (configured) configured.role = agent.role;
+			}
+		}
 		const personalPrompts = new Map<string, string>();
 		for (const agent of roster) {
 			const configured = agents.get(agent.agentId);
@@ -1086,15 +1363,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						? profileState.frontierProfileId
 						: undefined);
 			const profile = profileId ? profileState.profiles.find((candidate) => candidate.id === profileId) : undefined;
+			const assignedRole =
+				mode === "prompt-together" ? (agent.agentId === builder?.agentId ? "builder" : "planner") : agent.role;
 			const rolePrompt =
-				agent.role === "planner"
+				assignedRole === "planner"
 					? `Work in Plan mode: inspect and reason, then return a concrete implementation plan, risks, and verification steps.${agent.adapterCapabilities.roleEnforcement ? "" : " This adapter uses prompt-only role enforcement, so do not modify the workspace."}`
 					: "Work in Build mode: implement the assigned work in the workspace, then run relevant verification and report concrete results.";
 			personalPrompts.set(
 				agent.agentId,
 				[
 					rolePrompt,
-					profile ? formatProfilePrompt(`Agent ${Number(agent.agentId.slice(5))}`, profile, agent.role) : "",
+					profile ? formatProfilePrompt(`Agent ${Number(agent.agentId.slice(5))}`, profile, assignedRole) : "",
 				]
 					.filter(Boolean)
 					.join("\n\n"),
@@ -1106,6 +1385,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				? await captureKlermWorkspaceSnapshot(session.sessionManager.getCwd())
 				: undefined;
 		const run: ActiveCodingHarnessBridge = {
+			mode,
 			rootTask: {
 				version: 1,
 				taskId,
@@ -1114,7 +1394,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				sender: "user",
 				recipient: coordinator.agentId,
 				sequence: 1,
-				reason: `${coordinator.agentId} is the first runnable external coordinator`,
+				reason:
+					mode === "prompt-together"
+						? `${coordinator.agentId} starts as the temporary Prompt Together Planner`
+						: `${coordinator.agentId} is the first runnable external coordinator`,
 				status: "assigned",
 			},
 			coordinator,
@@ -1131,7 +1414,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			...(profileState.selectedSharedMemoryPresetId
 				? { sharedMemoryPresetId: profileState.selectedSharedMemoryPresetId }
 				: {}),
-			phase: "coordinator",
+			phase: mode === "prompt-together" ? "planning" : "coordinator",
 			activeAgentId: coordinator.agentId,
 			responses: new Map(),
 			taskIntent,
@@ -1141,6 +1424,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			sequence: 0,
 			aborted: false,
 			delegationReason,
+			...(mode === "prompt-together" ? { planner: coordinator, builder } : {}),
+			reviewers,
+			reviewerIndex: 0,
+			iteration: 0,
+			maxIterations: 3,
+			planResult: "",
+			implementationResult: "",
+			reviewResults: new Map(),
 		};
 		appendAiDebugTrace(
 			"ROSTER_SNAPSHOT",
@@ -1151,11 +1442,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				coordinator,
 				peers,
 				workTogetherEnabled: setup.slots.workTogetherEnabled === true,
+				mode,
+				builder,
+				reviewers,
 				delegationReason,
 				selectedSharedMemoryPresetId: profileState.selectedSharedMemoryPresetId,
 				sharedContextDigest,
 			},
-			{ taskId, agentId: coordinator.agentId, phase: "coordinator" },
+			{ taskId, agentId: coordinator.agentId, phase: run.phase },
 		);
 		activeCodingHarnessBridge = run;
 		for (const event of ["TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED"] as const) {
@@ -1207,7 +1501,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		await promptCodingHarnessBridgeAgent(
 			run,
 			coordinator,
-			coordinatorBridgePrompt(message, coordinator, peers, sharedContext),
+			mode === "prompt-together"
+				? planningBridgePrompt(message, coordinator, sharedContext)
+				: coordinatorBridgePrompt(message, coordinator, peers, sharedContext),
 		);
 		return run;
 	};
@@ -2526,6 +2822,52 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 			// Prompting
 			// =================================================================
+
+			case "prompt_together": {
+				if (activeCodingHarnessBridge || activeCodingHarnessSession) {
+					return error(id, "prompt_together", "An external coding-harness task is already active.", "AGENT_BUSY");
+				}
+				if (typeof command.message !== "string" || command.message.trim().length === 0) {
+					return error(id, "prompt_together", "Prompt Together requires a task.", "INVALID_PROMPT");
+				}
+				const codingHarnessSetup = await getCodingHarnessSetup();
+				const externalRoster = codingHarnessSetup.runnableAgents.filter(
+					(agent) =>
+						agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),
+				);
+				if (!codingHarnessSetup.slots.externalHarnessesEnabled || externalRoster.length < 3) {
+					return error(
+						id,
+						"prompt_together",
+						"Prompt Together requires at least three runnable external agents.",
+						"PROMPT_TOGETHER_UNAVAILABLE",
+					);
+				}
+				appendAiDebugTrace("USER_PROMPT", {
+					message: command.message,
+					displayMessage: command.displayMessage,
+					workflow: "prompt-together",
+					runnableAgents: externalRoster,
+				});
+				const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
+				session.sessionManager.appendMessage(userMessage);
+				if (command.displayMessage && command.displayMessage !== command.message) {
+					session.sessionManager.appendCustomEntry("klerm-desktop-display-prompt", {
+						text: command.displayMessage,
+					});
+				}
+				const run = await startExternalCodingHarnessPrompt(codingHarnessSetup, command.message, "prompt-together");
+				if (!run) {
+					return error(
+						id,
+						"prompt_together",
+						"Prompt Together could not assign distinct Planner, Builder, and Reviewer agents.",
+						"PROMPT_TOGETHER_UNAVAILABLE",
+					);
+				}
+				output(success(id, "prompt_together"));
+				return undefined;
+			}
 
 			case "prompt": {
 				if (activeCodingHarnessBridge || activeCodingHarnessSession) {

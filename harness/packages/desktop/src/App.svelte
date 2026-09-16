@@ -2192,7 +2192,11 @@
 		}
 	}
 
-	async function sendMessage(text: string, images: ImageAttachment[] = []): Promise<void> {
+	async function sendMessage(
+		text: string,
+		images: ImageAttachment[] = [],
+		mode: "prompt" | "prompt_together" = "prompt",
+	): Promise<void> {
 		if (
 			(!text && images.length === 0) ||
 			taskActive ||
@@ -2218,11 +2222,11 @@
 		try {
 			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
 			const rpcImages = rpcImageAttachments(images);
-			await bridge.send("prompt", {
+			await bridge.send(mode, {
 				message: preparedPrompt.message,
 				displayMessage: text,
-				mcpMentions: preparedPrompt.mentions,
-				...(rpcImages ? { images: rpcImages } : {}),
+				...(mode === "prompt" ? { mcpMentions: preparedPrompt.mentions } : {}),
+				...(mode === "prompt" && rpcImages ? { images: rpcImages } : {}),
 			});
 			if (draft.trim() === text) draft = "";
 			attachments = [];
@@ -2554,6 +2558,7 @@
 			onsharedmemorychange={setSharedMemory}
 			onsavesharedmemory={saveSharedMemoryPreset}
 			onsend={(text, images) => void sendMessage(text, images)}
+			onprompttogether={(text) => void sendMessage(text, [], "prompt_together")}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
 			onlocalchange={(value) => {

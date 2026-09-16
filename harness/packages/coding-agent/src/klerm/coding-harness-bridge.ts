@@ -39,7 +39,7 @@ export interface CodingHarnessBridgeTask {
 	taskId: string;
 	parentTaskId?: string;
 	correlationId: string;
-	kind: "root" | "peer-review" | "finalization";
+	kind: "root" | "peer-review" | "planning" | "implementation" | "review" | "repair" | "finalization";
 	sender: "user" | string;
 	recipient: string;
 	sequence: number;
@@ -219,4 +219,117 @@ export function finalizationBridgePrompt(
 		"",
 		`Original user task:\n${originalPrompt}`,
 	].join("\n");
+}
+
+export function planningBridgePrompt(
+	originalPrompt: string,
+	planner: RunnableCodingHarnessAgent,
+	sharedContext: string,
+): string {
+	return [
+		"<klerm_prompt_together>",
+		`You are ${planner.agentId}, temporarily assigned as the read-only Planner for this workflow.`,
+		sharedContext,
+		"Inspect the workspace and produce a concrete implementation plan for the Builder. Include requirements, files, risks, and exact verification steps. Do not modify the workspace.",
+		"</klerm_prompt_together>",
+		"",
+		`Original user task:\n${originalPrompt}`,
+	].join("\n");
+}
+
+export function implementationBridgePrompt(
+	originalPrompt: string,
+	builder: RunnableCodingHarnessAgent,
+	plan: string,
+	sharedContext: string,
+): string {
+	return [
+		"<klerm_prompt_together>",
+		`You are ${builder.agentId}, assigned as the Builder for this workflow.`,
+		sharedContext,
+		"Implement the plan in the workspace. Run relevant verification after the final mutation and report changed files, checks, and blockers.",
+		`Planner result:\n${plan}`,
+		"</klerm_prompt_together>",
+		"",
+		`Original user task:\n${originalPrompt}`,
+	].join("\n");
+}
+
+export function reviewBridgePrompt(
+	originalPrompt: string,
+	reviewer: RunnableCodingHarnessAgent,
+	plan: string,
+	implementation: string,
+	sharedContext: string,
+	iteration: number,
+): string {
+	return [
+		"<klerm_prompt_together>",
+		`You are ${reviewer.agentId}, a read-only Reviewer in iteration ${iteration}.`,
+		sharedContext,
+		"Inspect the current workspace, diff, requirements, and verification evidence. Do not modify the workspace.",
+		"Your first non-empty line must be exactly KLERM_VERDICT: APPROVED when no further work is needed, or KLERM_VERDICT: REPAIR when a concrete defect remains.",
+		"After the verdict, list precise findings and required fixes. Missing or malformed verdicts are treated as REPAIR.",
+		`Planner result:\n${plan}`,
+		`Builder result:\n${implementation}`,
+		"</klerm_prompt_together>",
+		"",
+		`Original user task:\n${originalPrompt}`,
+	].join("\n");
+}
+
+export function repairBridgePrompt(
+	originalPrompt: string,
+	builder: RunnableCodingHarnessAgent,
+	plan: string,
+	implementation: string,
+	reviews: ReadonlyArray<{ agentId: string; result: string }>,
+	sharedContext: string,
+	iteration: number,
+): string {
+	return [
+		"<klerm_prompt_together>",
+		`Resume as ${builder.agentId}, the Builder for repair iteration ${iteration}.`,
+		sharedContext,
+		"Resolve every concrete reviewer finding that is valid, preserve correct existing work, then run relevant verification after the final mutation.",
+		`Planner result:\n${plan}`,
+		`Previous Builder result:\n${implementation}`,
+		...reviews.map(({ agentId, result }) => `${agentId} review:\n${result}`),
+		"</klerm_prompt_together>",
+		"",
+		`Original user task:\n${originalPrompt}`,
+	].join("\n");
+}
+
+export function promptTogetherFinalizationPrompt(
+	originalPrompt: string,
+	planner: RunnableCodingHarnessAgent,
+	plan: string,
+	implementation: string,
+	reviews: ReadonlyArray<{ agentId: string; result: string }>,
+	sharedContext: string,
+	unresolvedReason?: string,
+): string {
+	return [
+		"<klerm_prompt_together>",
+		`Resume as ${planner.agentId}, the Planner and final answer owner.`,
+		sharedContext,
+		unresolvedReason
+			? `The workflow stopped without approval: ${unresolvedReason}. Report the unresolved work truthfully and do not claim success.`
+			: "All reviewers approved the current workspace. Summarize the implemented result, verification, and any remaining limitations without doing more workspace work.",
+		`Original plan:\n${plan}`,
+		`Latest Builder result:\n${implementation}`,
+		...reviews.map(({ agentId, result }) => `${agentId} review:\n${result}`),
+		"</klerm_prompt_together>",
+		"",
+		`Original user task:\n${originalPrompt}`,
+	].join("\n");
+}
+
+export function promptTogetherVerdict(response: string): "approved" | "repair" {
+	const firstLine = response
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.find(Boolean);
+	return firstLine === "KLERM_VERDICT: APPROVED" ? "approved" : "repair";
 }

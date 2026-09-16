@@ -540,6 +540,125 @@ describe("coding harness setup RPC", () => {
 				changedFileCount: 0,
 				verificationCount: 0,
 			});
+			const unavailableTogether = await send({
+				id: "unavailable-prompt-together",
+				type: "prompt_together",
+				message: "Use the whole team.",
+			});
+			expect(unavailableTogether).toMatchObject({
+				success: false,
+				command: "prompt_together",
+				code: "PROMPT_TOGETHER_UNAVAILABLE",
+			});
+
+			await send({
+				id: "prompt-together-team",
+				type: "set_coding_harness_slots",
+				slots: {
+					externalHarnessesEnabled: true,
+					workTogetherEnabled: false,
+					agents: [
+						{ ...agent("agent6", "opencode"), model: "openai/gpt-5.6-terra" },
+						{ ...agent("agent7", "codex"), model: "gpt-5-codex" },
+						{ ...agent("agent8", "codex"), model: "gpt-5.6-luna" },
+					],
+				},
+			});
+			const promptTogether = await send({
+				id: "prompt-together",
+				type: "prompt_together",
+				message: "Review the implementation, tests, and security until the team agrees.",
+			});
+			expect(promptTogether).toMatchObject({ success: true, command: "prompt_together" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(8));
+			expect(promptCalls[7]).toMatchObject({ session: { agentId: "agent6", role: "planner" } });
+			expect(promptCalls[7]?.text).toContain("temporarily assigned as the read-only Planner");
+
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Plan result" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(9));
+			expect(promptCalls[8]?.text).toContain("assigned as the Builder");
+			expect(promptCalls[8]?.session.role).toBe("builder");
+			const builderId = promptCalls[8]?.session.agentId;
+			const reviewerId = builderId === "agent7" ? "agent8" : "agent7";
+			listeners.get("codex")?.({ type: "message", agentId: builderId, text: "Initial build" });
+			listeners.get("codex")?.({ type: "settled", agentId: builderId, status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(10));
+			expect(promptCalls[9]).toMatchObject({ session: { agentId: reviewerId, role: "planner" } });
+			expect(promptCalls[9]?.text).toContain("KLERM_VERDICT: REPAIR");
+
+			listeners.get("codex")?.({ type: "message", agentId: reviewerId, text: "KLERM_VERDICT: REPAIR\nFix tests." });
+			listeners.get("codex")?.({ type: "settled", agentId: reviewerId, status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(11));
+			expect(promptCalls[10]).toMatchObject({ session: { agentId: builderId } });
+			expect(promptCalls[10]?.text).toContain("repair iteration 2");
+
+			listeners.get("codex")?.({ type: "message", agentId: builderId, text: "Tests repaired" });
+			listeners.get("codex")?.({ type: "settled", agentId: builderId, status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(12));
+			listeners.get("codex")?.({ type: "message", agentId: reviewerId, text: "KLERM_VERDICT: APPROVED\nGood." });
+			listeners.get("codex")?.({ type: "settled", agentId: reviewerId, status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(13));
+			expect(promptCalls[12]).toMatchObject({ session: { agentId: "agent6" } });
+			expect(promptCalls[12]?.text).toContain("All reviewers approved");
+
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Final reviewed result" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(59));
+			expect(bridgeRecords.at(-1)).toMatchObject({ event: "TASK_COMPLETED", outcomeStatus: "completed" });
+			expect(bridgeRecords.some((record) => String(record.reason).includes("Repair iteration 2"))).toBe(true);
+
+			await send({
+				id: "bounded-prompt-together",
+				type: "prompt_together",
+				message: "Review the architecture until the bounded workflow stops.",
+			});
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(14));
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Bounded plan" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(15));
+			listeners.get("codex")?.({ type: "message", agentId: builderId, text: "Bounded build" });
+			listeners.get("codex")?.({ type: "settled", agentId: builderId, status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(16));
+			let expectedPromptCount = 16;
+			for (let iteration = 1; iteration <= 3; iteration++) {
+				listeners.get("codex")?.({
+					type: "message",
+					agentId: reviewerId,
+					text: `KLERM_VERDICT: REPAIR\nIteration ${iteration} still has a defect.`,
+				});
+				listeners.get("codex")?.({ type: "settled", agentId: reviewerId, status: "completed" });
+				expectedPromptCount++;
+				await vi.waitFor(() => expect(promptCalls).toHaveLength(expectedPromptCount));
+				if (iteration === 3) break;
+				listeners.get("codex")?.({ type: "message", agentId: builderId, text: `Repair ${iteration + 1}` });
+				listeners.get("codex")?.({ type: "settled", agentId: builderId, status: "completed" });
+				expectedPromptCount++;
+				await vi.waitFor(() => expect(promptCalls).toHaveLength(expectedPromptCount));
+			}
+			expect(promptCalls[20]?.text).toContain("stopped without approval");
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Unresolved findings remain." });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(100));
+			expect(bridgeRecords.at(-1)).toMatchObject({
+				event: "TASK_FAILED",
+				outcomeStatus: "failed",
+				reason: "Prompt Together stopped after 3 review iterations with unresolved findings.",
+			});
+
+			await send({
+				id: "cancel-prompt-together",
+				type: "prompt_together",
+				message: "Review this architecture and then stop safely.",
+			});
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(22));
+			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Cancellation plan" });
+			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
+			await vi.waitFor(() => expect(promptCalls).toHaveLength(23));
+			await send({ id: "abort-prompt-together", type: "abort" });
+			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(109));
+			expect(bridgeRecords.slice(-2).map((record) => record.event)).toEqual(["TASK_CANCELLED", "TASK_CANCELLED"]);
+			expect(bridgeRecords.at(-2)).toMatchObject({ parentTaskId: expect.any(String) });
 		} finally {
 			harness.cleanup();
 			for (const listener of process.stdin.listeners("end") as NodeListener[]) {
