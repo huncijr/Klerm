@@ -12,6 +12,7 @@ The existing protocol is a useful base for the workspace spike:
 |---|---|---|
 | Read current session and backend state | `get_state`, `get_messages`, `get_entries`, `get_tree`, `get_session_stats` | Available |
 | Start, list, switch, delete, clone, fork, and rename sessions | `new_session`, `list_sessions`, `switch_session`, `rename_session`, `delete_session`, `clone`, `fork`, `set_session_name` | Available; direct active-session deletion and rename-by-token are rejected in favor of their active-session flows |
+| Organize and query project sessions | `get_projects`, `create_project`, `rename_project`, `delete_project`, `move_session_to_project`, `refresh_project_summary`, `ask_project`, `import_legacy_desktop_projects` | Available through a versioned backend registry keyed by stable session IDs; summaries and grounded question prompts use bounded labeled extracts without activating source sessions |
 | Negotiate the desktop boundary | `desktop_handshake` | Available with protocol version, Klerm version, command/event capabilities, session state, and initial routing state |
 | Discover local runtimes and update routing config | `get_local_runtimes`, `get_klerm_config`, `set_klerm_config` | Available for model, routing, active-start, and per-lane `planner`/`builder` controls; planner tool access is enforced by the backend |
 | Discover and assign coding harnesses | `get_coding_harness_setup`, `refresh_coding_harness_models`, `set_coding_harness_slots` | Available for a global master switch and a dynamic stable-ID agent registry with per-agent harness/On-Off/model/role/effort/tools/specialties setup, fixed shell-free discovery, availability-filtered choices, credential-safe inferred capability profiles, and backend-derived `auto`/`none`/`disabled` routing; model discovery errors are returned without credential inspection |
@@ -55,6 +56,14 @@ retains the configured tool set. Sensitive file access, a fifth changed file,
 potentially modifying shell commands, and unknown extension/MCP tools use the
 confirmation sub-protocol before execution. Approval decisions are persisted as
 credential-free `klerm-tool-approval` custom session entries.
+
+Projects are backend-owned. The deterministic `project-default` project cannot
+be deleted, new sessions are assigned to it, deleting a project only unassigns
+its sessions, and deleting a session removes its stale assignment. The legacy
+desktop import accepts old path-token assignments once and resolves them to
+stable session IDs before the frontend removes its local storage keys. The
+backend records import completion so an interrupted response cannot overwrite a
+newer assignment on retry.
 
 ## Remaining Desktop Operations
 

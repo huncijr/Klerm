@@ -35,6 +35,7 @@ import type { CustomModelEntry } from "../../klerm/custom-models.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { McpErrorKind, McpPromptMention, McpServerState, McpToolCapability } from "../../klerm/mcp/runtime.ts";
 import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
+import type { KlermProject, ProjectSessionExtract } from "../../klerm/projects.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
 
 export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
@@ -59,6 +60,17 @@ export interface RpcDesktopSessionInfo {
 	modified: string;
 	messageCount: number;
 	firstMessage: string;
+	projectId?: string;
+}
+
+export interface RpcProject extends KlermProject {
+	sessionCount: number;
+}
+
+export interface RpcProjects {
+	version: number;
+	defaultProjectId: string;
+	projects: RpcProject[];
 }
 
 export interface RpcWorkspaceAttribution {
@@ -230,6 +242,19 @@ export type RpcCommand =
 	| { id?: string; type: "get_klerm_config" }
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
 	| { id?: string; type: "list_sessions" }
+	| { id?: string; type: "get_projects" }
+	| { id?: string; type: "create_project"; name: string }
+	| { id?: string; type: "rename_project"; projectId: string; name: string }
+	| { id?: string; type: "delete_project"; projectId: string }
+	| { id?: string; type: "move_session_to_project"; sessionId: string; projectId?: string }
+	| { id?: string; type: "refresh_project_summary"; projectId: string }
+	| { id?: string; type: "ask_project"; projectId: string; question: string }
+	| {
+			id?: string;
+			type: "import_legacy_desktop_projects";
+			projects: Array<{ id: string; name: string }>;
+			sessionProjects: Record<string, string>;
+	  }
 	| { id?: string; type: "rename_session"; sessionToken: string; name: string }
 	| { id?: string; type: "delete_session"; sessionToken: string }
 	| { id?: string; type: "get_workspace_status" }
@@ -249,7 +274,7 @@ export type RpcCommand =
 	| { id?: string; type: "upsert_klerm_profile"; profile: KlermProfile }
 	| { id?: string; type: "delete_klerm_profile"; profileId: string }
 	| { id?: string; type: "assign_klerm_profile"; lane: KlermWorkerLane; profileId?: string | null }
-	| { id?: string; type: "set_klerm_shared_memory"; memory: string; presetId?: string }
+	| { id?: string; type: "set_klerm_shared_memory"; memory: string; presetId?: string; activate?: boolean }
 	| { id?: string; type: "save_klerm_shared_memory_preset"; name: string; memory: string }
 	| { id?: string; type: "delete_klerm_shared_memory_preset"; presetId: string }
 	| { id?: string; type: "add_custom_model"; model: RpcCustomModelUpdate }
@@ -397,6 +422,32 @@ export type RpcResponse =
 			command: "list_sessions";
 			success: true;
 			data: { sessions: RpcDesktopSessionInfo[] };
+	  }
+	| { id?: string; type: "response"; command: "get_projects"; success: true; data: RpcProjects }
+	| { id?: string; type: "response"; command: "create_project"; success: true; data: RpcProjects }
+	| { id?: string; type: "response"; command: "rename_project"; success: true; data: RpcProjects }
+	| { id?: string; type: "response"; command: "delete_project"; success: true; data: RpcProjects }
+	| { id?: string; type: "response"; command: "move_session_to_project"; success: true; data: RpcProjects }
+	| {
+			id?: string;
+			type: "response";
+			command: "refresh_project_summary";
+			success: true;
+			data: { projects: RpcProjects; summary: string; extracts: ProjectSessionExtract[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "ask_project";
+			success: true;
+			data: { prompt: string; extracts: ProjectSessionExtract[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "import_legacy_desktop_projects";
+			success: true;
+			data: RpcProjects;
 	  }
 	| {
 			id?: string;

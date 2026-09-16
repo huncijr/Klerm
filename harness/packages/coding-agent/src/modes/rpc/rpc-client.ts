@@ -19,6 +19,7 @@ import type {
 } from "../../klerm/coding-harness-setup.ts";
 import type { KlermConfig } from "../../klerm/config.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
+import type { ProjectSessionExtract } from "../../klerm/projects.ts";
 import type { KlermRoutingState } from "../../klerm/router/types.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -27,6 +28,7 @@ import type {
 	RpcDesktopHandshake,
 	RpcDesktopSessionInfo,
 	RpcKlermConfigUpdate,
+	RpcProjects,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -265,6 +267,46 @@ export class RpcClient {
 	async listSessions(): Promise<RpcDesktopSessionInfo[]> {
 		const response = await this.send({ type: "list_sessions" });
 		return this.getData<{ sessions: RpcDesktopSessionInfo[] }>(response).sessions;
+	}
+
+	async getProjects(): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "get_projects" }));
+	}
+
+	async createProject(name: string): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "create_project", name }));
+	}
+
+	async renameProject(projectId: string, name: string): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "rename_project", projectId, name }));
+	}
+
+	async deleteProject(projectId: string): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "delete_project", projectId }));
+	}
+
+	async moveSessionToProject(sessionId: string, projectId?: string): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "move_session_to_project", sessionId, projectId }));
+	}
+
+	async refreshProjectSummary(
+		projectId: string,
+	): Promise<{ projects: RpcProjects; summary: string; extracts: ProjectSessionExtract[] }> {
+		return this.getData(await this.send({ type: "refresh_project_summary", projectId }));
+	}
+
+	async askProject(
+		projectId: string,
+		question: string,
+	): Promise<{ prompt: string; extracts: ProjectSessionExtract[] }> {
+		return this.getData(await this.send({ type: "ask_project", projectId, question }));
+	}
+
+	async importLegacyDesktopProjects(
+		projects: Array<{ id: string; name: string }>,
+		sessionProjects: Record<string, string>,
+	): Promise<RpcProjects> {
+		return this.getData(await this.send({ type: "import_legacy_desktop_projects", projects, sessionProjects }));
 	}
 
 	/**

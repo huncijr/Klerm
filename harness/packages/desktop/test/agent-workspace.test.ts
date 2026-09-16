@@ -38,9 +38,7 @@ describe("desktop agent workspace state", () => {
 		const completed = bridgeEventCard(
 			bridgeEvent({ event: "TASK_COMPLETED", sequence: 2, status: "completed", reason: "done" }),
 		);
-		const peer = bridgeEventCard(
-			bridgeEvent({ taskId: "task-1-peer-1", parentTaskId: "task-1", agentId: "agent7" }),
-		);
+		const peer = bridgeEventCard(bridgeEvent({ taskId: "task-1-peer-1", parentTaskId: "task-1", agentId: "agent7" }));
 		expect(started.dedupeId).toBe(completed.dedupeId);
 		expect(completed).toMatchObject({
 			title: "Root task · Completed",
@@ -53,17 +51,43 @@ describe("desktop agent workspace state", () => {
 
 	test("clears only one agent view through an output boundary", () => {
 		const items: FeedItem[] = [
-			{ id: 1, type: "message", message: { id: 1, role: "assistant", text: "old", agentId: "agent6", streaming: false } },
+			{
+				id: 1,
+				type: "message",
+				message: { id: 1, role: "assistant", text: "old", agentId: "agent6", streaming: false },
+			},
 			{
 				id: 2,
 				type: "activity",
-				activity: { id: 2, kind: "bridge", tone: "amber", title: "peer", detail: "", status: "running", open: false, agentId: "agent7" },
+				activity: {
+					id: 2,
+					kind: "bridge",
+					tone: "amber",
+					title: "peer",
+					detail: "",
+					status: "running",
+					open: false,
+					agentId: "agent7",
+				},
 			},
-			{ id: 3, type: "message", message: { id: 3, role: "assistant", text: "new", agentId: "agent6", streaming: false } },
+			{
+				id: 3,
+				type: "message",
+				message: { id: 3, role: "assistant", text: "new", agentId: "agent6", streaming: false },
+			},
 			{
 				id: 4,
 				type: "activity",
-				activity: { id: 4, kind: "bridge", tone: "green", title: "done", detail: "", status: "settled", open: false, agentId: "agent6" },
+				activity: {
+					id: 4,
+					kind: "bridge",
+					tone: "green",
+					title: "done",
+					detail: "",
+					status: "settled",
+					open: false,
+					agentId: "agent6",
+				},
 			},
 		];
 		expect(agentFeedItems(items, "agent6", 2).map((item) => item.id)).toEqual([3, 4]);

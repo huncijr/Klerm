@@ -349,6 +349,14 @@ export {
 	parseCodingHarnessSlots,
 	probeCodingHarnessVersion,
 } from "./klerm/coding-harness-setup.ts";
+export {
+	DEFAULT_PROJECT_ID,
+	DEFAULT_PROJECT_NAME,
+	type KlermProject,
+	type KlermProjectRegistry,
+	PROJECT_REGISTRY_VERSION,
+	type ProjectSessionExtract,
+} from "./klerm/projects.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
@@ -370,6 +378,8 @@ export {
 	type RpcExtensionUIRequest,
 	type RpcExtensionUIResponse,
 	type RpcKlermConfigUpdate,
+	type RpcProject,
+	type RpcProjects,
 	type RpcResponse,
 	RpcResponseError,
 	type RpcSessionState,

@@ -117,10 +117,16 @@ describe("Klerm profiles", () => {
 			selectedSharedMemoryPresetId: "project-rules",
 			sharedMemoryPresets: [{ id: "project-rules", name: "Project Rules", memory: "Run focused verification." }],
 		});
+		reloaded.setKlermDefaultSharedMemory("Updated default rules.");
+		expect(reloaded.getKlermProfiles()).toMatchObject({
+			sharedMemory: "Run focused verification.",
+			defaultSharedMemory: "Updated default rules.",
+			selectedSharedMemoryPresetId: "project-rules",
+		});
 		reloaded.deleteKlermSharedMemoryPreset("project-rules");
 		expect(reloaded.getKlermProfiles()).toMatchObject({
-			sharedMemory: "Default project rules.",
-			defaultSharedMemory: "Default project rules.",
+			sharedMemory: "Updated default rules.",
+			defaultSharedMemory: "Updated default rules.",
 			sharedMemoryPresets: [],
 		});
 		expect(reloaded.getKlermProfiles().selectedSharedMemoryPresetId).toBeUndefined();

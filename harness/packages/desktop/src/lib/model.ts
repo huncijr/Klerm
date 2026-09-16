@@ -320,11 +320,29 @@ export interface DesktopSession {
 	modified: string;
 	messageCount: number;
 	firstMessage: string;
+	projectId?: string;
 }
 
 export interface DesktopProject {
 	id: string;
 	name: string;
+	summary?: string;
+	sessionCount: number;
+}
+
+export interface DesktopProjects {
+	version: number;
+	defaultProjectId: string;
+	projects: DesktopProject[];
+}
+
+export interface ProjectSessionExtract {
+	sessionId: string;
+	sessionName: string;
+	role: "user" | "assistant";
+	timestamp: string;
+	label: string;
+	text: string;
 }
 
 export interface WorkspaceAttribution {

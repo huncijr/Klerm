@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookOpen, ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, Users, X } from "@lucide/svelte";
+	import { ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, Users, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
 	import {
 		filterMcpSuggestions,
@@ -18,7 +18,6 @@
 		CodingHarnessSlotSettings,
 		ImageAttachment,
 		KlermProfile,
-		KlermSharedMemoryPreset,
 		McpColor,
 		McpServerStatus,
 		SelectOption,
@@ -73,11 +72,6 @@
 		activeAgent,
 		roleDisabled,
 		buildModeOffer,
-		sharedMemory,
-		defaultSharedMemory,
-		sharedContextPreview,
-		sharedMemoryPresets,
-		selectedSharedMemoryPresetId,
 		onsend,
 		onattachmenterror,
 		onstop,
@@ -104,8 +98,6 @@
 		onturnoffexternalagents,
 		onviewexternalagent,
 		onworktogetherchange,
-		onsharedmemorychange,
-		onsavesharedmemory,
 		onprompttogether,
 	}: {
 		draft: string;
@@ -151,11 +143,6 @@
 		activeAgent: "agent1" | "agent2";
 		roleDisabled: boolean;
 		buildModeOffer?: { id: number; agent: "agent1" | "agent2" };
-		sharedMemory: string;
-		defaultSharedMemory: string;
-		sharedContextPreview: string;
-		sharedMemoryPresets: KlermSharedMemoryPreset[];
-		selectedSharedMemoryPresetId: string;
 		onsend: (text: string, images: ImageAttachment[]) => void;
 		onattachmenterror: (message: string) => void;
 		onstop: () => void;
@@ -182,8 +169,6 @@
 		onturnoffexternalagents: () => void;
 		onviewexternalagent: (id: string) => void;
 		onworktogetherchange: (enabled: boolean) => void;
-		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
-		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
 		onprompttogether: (text: string) => void;
 	} = $props();
 
@@ -200,11 +185,6 @@
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
 	let roleMenuOpen = $state(false);
-	let sharedMemoryOpen = $state(false);
-	let sharedMemoryDraft = $state("");
-	let sharedMemoryName = $state("");
-	let sharedMemoryPresetDraftId = $state("");
-	let sharedMemoryBusy = $state(false);
 	let roleMenuRoot: HTMLElement | undefined = $state();
 	let agentStripRoot: HTMLElement | undefined = $state();
 	let pinnedAgentId = $state("");
@@ -230,7 +210,6 @@
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
 	const roleControlDisabled = $derived(externalMode ? externalHarnessBusy : roleDisabled);
-	const sharedMemoryVisible = $derived(externalMode && externalAgentSlots.filter(({ slot }) => slot.enabled).length >= 2);
 	const allExternalAgentsDisabled = $derived(
 		externalAgentSlots.length > 0 && externalAgentSlots.every(({ slot }) => !slot.enabled),
 	);
@@ -315,16 +294,14 @@
 
 	onMount(() => {
 		const closeRoleMenu = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || (!roleMenuOpen && !sharedMemoryOpen && !pinnedAgentId)) return;
+			if (event.key !== "Escape" || (!roleMenuOpen && !pinnedAgentId)) return;
 			event.preventDefault();
 			roleMenuOpen = false;
-			sharedMemoryOpen = false;
 			pinnedAgentId = "";
 		};
 		const closeRoleMenuOutside = (event: PointerEvent) => {
-			if ((!roleMenuOpen && !sharedMemoryOpen) || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
+			if (!roleMenuOpen || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
 			roleMenuOpen = false;
-			sharedMemoryOpen = false;
 		};
 		const closeAgentMenuOutside = (event: PointerEvent) => {
 			if (!pinnedAgentId || !(event.target instanceof Node) || agentStripRoot?.contains(event.target)) return;
@@ -802,58 +779,7 @@
 			>
 				<Plus size={17} stroke-width={1.7} />
 			</button>
-			{#if sharedMemoryVisible}
-			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
-				<button
-					type="button"
-					aria-label="Edit shared memory"
-					aria-expanded={sharedMemoryOpen}
-					disabled={externalHarnessBusy || sharedMemoryBusy}
-					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
-					onclick={() => {
-						sharedMemoryDraft = sharedMemory;
-						sharedMemoryName = sharedMemoryPresets.find((preset) => preset.id === selectedSharedMemoryPresetId)?.name ?? "";
-						sharedMemoryPresetDraftId = selectedSharedMemoryPresetId;
-						sharedMemoryOpen = !sharedMemoryOpen;
-					}}
-				>
-					<BookOpen size={13} />
-					<ChevronDown size={11} />
-				</button>
-				{#if sharedMemoryOpen}
-					<div class="absolute right-0 bottom-[44px] z-20 max-h-[min(680px,75vh)] w-[min(420px,calc(100vw-30px))] overflow-y-auto rounded-lg border border-[#303a42] bg-[#10161b] p-3 shadow-[0_14px_34px_rgba(0,0,0,.42)] [scrollbar-width:thin]">
-						<strong class="block font-mono text-[10px] text-white">Shared Memory</strong>
-						<p class="mt-1 mb-2 font-mono text-[8px] leading-[1.45] text-[#66727b]">All active external agents receive this text plus a current agent roster when the next task starts.</p>
-						<select
-							value={sharedMemoryPresetDraftId}
-							class="mb-2 h-8 w-full rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white [color-scheme:dark]"
-							onchange={(event) => {
-								const preset = sharedMemoryPresets.find((candidate) => candidate.id === event.currentTarget.value);
-								sharedMemoryPresetDraftId = preset?.id ?? "";
-								sharedMemoryDraft = preset?.memory ?? defaultSharedMemory;
-								sharedMemoryName = preset?.name ?? "";
-							}}
-						>
-							<option value="">Default shared memory</option>
-							{#each sharedMemoryPresets as preset (preset.id)}<option value={preset.id}>{preset.name}</option>{/each}
-						</select>
-						<textarea bind:value={sharedMemoryDraft} maxlength="8000" rows="6" placeholder="Project conventions, constraints, shared decisions..." class="w-full resize-y rounded-md border border-[#303a42] bg-[#080c10] p-2 font-mono text-[9px] leading-[1.5] text-white outline-0"></textarea>
-						<details class="mt-2 rounded-md border border-[#29343c] bg-[#080c10] p-2" open>
-							<summary class="cursor-pointer font-mono text-[8px] text-[#9cc0f2]">Effective prompt sent to agents</summary>
-							<pre class="mt-2 mb-0 max-h-44 overflow-auto whitespace-pre-wrap font-mono text-[7px] leading-[1.55] text-[#8f9ca4] [scrollbar-width:thin]">{sharedContextPreview || "Prompt preview unavailable."}</pre>
-						</details>
-						<div class="mt-2 flex gap-1.5">
-							<input bind:value={sharedMemoryName} maxlength="40" placeholder="preset name" class="h-8 min-w-0 flex-1 rounded-md border border-[#303a42] bg-[#080c10] px-2 font-mono text-[9px] text-white outline-0" />
-							<button type="button" disabled={!sharedMemoryName.trim() || sharedMemoryBusy} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#d7e7ff] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsavesharedmemory(sharedMemoryName, sharedMemoryDraft)) sharedMemoryName = ""; sharedMemoryBusy = false; }}>Save preset</button>
-						</div>
-						<div class="mt-2 flex justify-end gap-1.5">
-							<button type="button" disabled={sharedMemoryBusy || sharedMemoryPresetDraftId === selectedSharedMemoryPresetId} class="h-8 rounded-md border border-[#3d4a54] px-2 font-mono text-[8px] text-[#9cc0f2] disabled:opacity-35" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft, sharedMemoryPresetDraftId || undefined)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Apply selection</button>
-							<button type="button" disabled={sharedMemoryBusy} class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:opacity-40" onclick={async () => { sharedMemoryBusy = true; if (await onsharedmemorychange(sharedMemoryDraft)) sharedMemoryOpen = false; sharedMemoryBusy = false; }}>Save as default</button>
-						</div>
-					</div>
-				{/if}
-			</div>
-			{:else if !externalMode}
+			{#if !externalMode}
 			<div bind:this={roleMenuRoot} class="absolute right-[55px] bottom-2.5 narrow-520:right-[49px] narrow-520:bottom-[7px]">
 				<button
 					type="button"

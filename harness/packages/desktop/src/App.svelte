@@ -39,6 +39,7 @@
 		DesktopAppearance,
 		DesktopHandshake,
 		DesktopProject,
+		DesktopProjects,
 		DesktopSettings,
 		DesktopSession,
 		EditorInfo,
@@ -53,6 +54,7 @@
 		ProviderAccount,
 		ProviderConnect,
 		ProviderOauthStep,
+		ProjectSessionExtract,
 		RoutingState,
 		RoutingTransition,
 		RunningService,
@@ -105,8 +107,8 @@
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
-	let projects = $state<DesktopProject[]>(loadStoredProjects());
-	let sessionProjects = $state<Record<string, string>>(loadStoredSessionProjects());
+	let projects = $state<DesktopProject[]>([]);
+	let defaultProjectId = $state("");
 	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
@@ -263,24 +265,19 @@
 			effective === "system" ? (systemPrefersDark ? "dark" : "light") : effective;
 	});
 
-	$effect(() => {
-		localStorage.setItem("klerm-projects", JSON.stringify(projects));
-	});
-
-	$effect(() => {
-		localStorage.setItem("klerm-session-projects", JSON.stringify(sessionProjects));
-	});
-
-	function loadStoredProjects(): DesktopProject[] {
+	function loadStoredProjects(): Array<{ id: string; name: string }> {
 		try {
 			const raw = localStorage.getItem("klerm-projects");
 			if (!raw) return [];
 			const parsed: unknown = JSON.parse(raw);
 			if (!Array.isArray(parsed)) return [];
-			return parsed.filter(
-				(item): item is DesktopProject =>
-					typeof item === "object" && item !== null && typeof (item as DesktopProject).id === "string" && typeof (item as DesktopProject).name === "string",
-			);
+			return parsed.flatMap((item): Array<{ id: string; name: string }> => {
+				if (!item || typeof item !== "object") return [];
+				const project = item as Record<string, unknown>;
+				return typeof project.id === "string" && typeof project.name === "string"
+					? [{ id: project.id, name: project.name }]
+					: [];
+			});
 		} catch {
 			return [];
 		}
@@ -303,33 +300,114 @@
 		}
 	}
 
-	function createProject(name: string): void {
-		const trimmed = name.trim();
-		if (!trimmed) return;
-		const id = `proj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		projects = [...projects, { id, name: trimmed }];
+	function applyProjects(result: DesktopProjects): void {
+		projects = result.projects;
+		defaultProjectId = result.defaultProjectId;
 	}
 
-	function renameProject(project: DesktopProject, name: string): void {
-		const trimmed = name.trim();
-		if (!trimmed) return;
-		projects = projects.map((item) => (item.id === project.id ? { ...item, name: trimmed } : item));
-	}
-
-	function deleteProject(project: DesktopProject): void {
-		projects = projects.filter((item) => item.id !== project.id);
-		const next: Record<string, string> = {};
-		for (const [token, projectId] of Object.entries(sessionProjects)) {
-			if (projectId !== project.id) next[token] = projectId;
+	async function refreshProjects(): Promise<void> {
+		if (!backendReady || !supportsCommand("get_projects")) return;
+		try {
+			applyProjects(await bridge.send<DesktopProjects>("get_projects"));
+		} catch (error) {
+			showError(toError(error).message);
 		}
-		sessionProjects = next;
 	}
 
-	function moveSessionToProject(session: DesktopSession, projectId: string | undefined): void {
-		const next = { ...sessionProjects };
-		if (projectId) next[session.sessionToken] = projectId;
-		else delete next[session.sessionToken];
-		sessionProjects = next;
+	async function initializeProjects(): Promise<void> {
+		if (!supportsCommand("get_projects")) return;
+		const hasLegacyProjects = localStorage.getItem("klerm-projects") !== null;
+		const hasLegacyAssignments = localStorage.getItem("klerm-session-projects") !== null;
+		try {
+			if ((hasLegacyProjects || hasLegacyAssignments) && supportsCommand("import_legacy_desktop_projects")) {
+				applyProjects(
+					await bridge.send<DesktopProjects>("import_legacy_desktop_projects", {
+						projects: loadStoredProjects(),
+						sessionProjects: loadStoredSessionProjects(),
+					}),
+				);
+				localStorage.removeItem("klerm-projects");
+				localStorage.removeItem("klerm-session-projects");
+				return;
+			}
+			applyProjects(await bridge.send<DesktopProjects>("get_projects"));
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function createProject(name: string): Promise<void> {
+		const trimmed = name.trim();
+		if (!trimmed || !supportsCommand("create_project")) return;
+		try {
+			applyProjects(await bridge.send<DesktopProjects>("create_project", { name: trimmed }));
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function renameProject(project: DesktopProject, name: string): Promise<void> {
+		const trimmed = name.trim();
+		if (!trimmed || !supportsCommand("rename_project")) return;
+		try {
+			applyProjects(await bridge.send<DesktopProjects>("rename_project", { projectId: project.id, name: trimmed }));
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function deleteProject(project: DesktopProject): Promise<void> {
+		if (!supportsCommand("delete_project")) return;
+		try {
+			applyProjects(await bridge.send<DesktopProjects>("delete_project", { projectId: project.id }));
+			await refreshSessions();
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function moveSessionToProject(session: DesktopSession, projectId: string | undefined): Promise<void> {
+		if (!supportsCommand("move_session_to_project")) return;
+		try {
+			applyProjects(
+				await bridge.send<DesktopProjects>("move_session_to_project", { sessionId: session.id, projectId }),
+			);
+			await refreshSessions();
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function refreshProjectSummary(project: DesktopProject): Promise<void> {
+		if (!supportsCommand("refresh_project_summary")) return;
+		try {
+			const result = await bridge.send<{
+				projects: DesktopProjects;
+				summary: string;
+				extracts: ProjectSessionExtract[];
+			}>("refresh_project_summary", { projectId: project.id });
+			applyProjects(result.projects);
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function askProject(project: DesktopProject, question: string): Promise<boolean> {
+		if (!supportsCommand("ask_project") || interactionActive) return false;
+		try {
+			const result = await bridge.send<{ prompt: string; extracts: ProjectSessionExtract[] }>("ask_project", {
+				projectId: project.id,
+				question,
+			});
+			if (result.extracts.length === 0) {
+				showError("This project has no readable session messages yet.");
+				return false;
+			}
+			return sendMessage(result.prompt, [], "prompt", question);
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
 	}
 
 	$effect(() => {
@@ -1623,6 +1701,21 @@
 		}
 	}
 
+	async function saveDefaultSharedMemory(memory: string): Promise<boolean> {
+		if (!supportsCommand("set_klerm_shared_memory")) return false;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("set_klerm_shared_memory", {
+				memory,
+				activate: false,
+			});
+			await refreshCodingHarnessSetup();
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
 	async function saveSharedMemoryPreset(name: string, memory: string): Promise<boolean> {
 		if (!supportsCommand("save_klerm_shared_memory_preset")) return false;
 		try {
@@ -1867,7 +1960,7 @@
 					: undefined;
 			}
 			await bridge.send("delete_session", { sessionToken: session.sessionToken });
-			await refreshSessions();
+			await Promise.all([refreshSessions(), refreshProjects()]);
 		} catch (error) {
 			showError(toError(error).message);
 		} finally {
@@ -2112,6 +2205,7 @@
 		sessionCwd = handshake.state.cwd;
 		resetTerminal(handshake.state.cwd);
 		currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
+		await initializeProjects();
 		const entriesPromise = bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries");
 		// Optional catalogs and integrations must not keep the app splash visible.
 		// Some providers can legitimately take several seconds or wait on a local service.
@@ -2149,7 +2243,7 @@
 				? { ...currentRoutingState, lane: "direct", selectedTarget: undefined, lastTransition: undefined }
 				: undefined;
 			await refreshWorkspace();
-			await refreshSessions();
+			await Promise.all([refreshSessions(), refreshProjects()]);
 			sidebarOpen = false;
 		} catch (error) {
 			showError(toError(error).message);
@@ -2196,7 +2290,8 @@
 		text: string,
 		images: ImageAttachment[] = [],
 		mode: "prompt" | "prompt_together" = "prompt",
-	): Promise<void> {
+		displayText = text,
+	): Promise<boolean> {
 		if (
 			(!text && images.length === 0) ||
 			taskActive ||
@@ -2205,7 +2300,7 @@
 			sessionTransitionActive ||
 			!backendReady
 		)
-			return;
+			return false;
 		buildModeOffer = undefined;
 		bottomPanelOpen = false;
 		bottomPanelRevealed = true;
@@ -2218,18 +2313,25 @@
 		taskSawAssistant = false;
 		lastAssistantStopReason = undefined;
 		activeTaskKey = ++taskSeq;
-		const userMessage = pushMessage({ id: ++messageSeq, role: "user", text, images: [...images], streaming: false });
+		const userMessage = pushMessage({
+			id: ++messageSeq,
+			role: "user",
+			text: displayText,
+			images: [...images],
+			streaming: false,
+		});
 		try {
 			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
 			const rpcImages = rpcImageAttachments(images);
 			await bridge.send(mode, {
 				message: preparedPrompt.message,
-				displayMessage: text,
+				displayMessage: displayText,
 				...(mode === "prompt" ? { mcpMentions: preparedPrompt.mentions } : {}),
 				...(mode === "prompt" && rpcImages ? { images: rpcImages } : {}),
 			});
 			if (draft.trim() === text) draft = "";
 			attachments = [];
+			return true;
 		} catch (error) {
 			taskActive = false;
 			activeTaskKey = 0;
@@ -2237,6 +2339,7 @@
 			const failure = toError(error).message;
 			pushTimeline("error", "red", failure, "", "error");
 			showError(failure);
+			return false;
 		}
 	}
 
@@ -2322,7 +2425,7 @@
 	<Sidebar
 		{sessions}
 		{projects}
-		{sessionProjects}
+		{defaultProjectId}
 		activeSessionToken={lastState?.sessionFile ?? ""}
 		{mcpStatus}
 		{mcpBusy}
@@ -2333,10 +2436,12 @@
 		onswitch={(session) => void switchSession(session)}
 		onrename={renameSession}
 		ondelete={(session) => (pendingDelete = session)}
-		oncreateproject={createProject}
-		onrenameproject={renameProject}
-		ondeleteproject={deleteProject}
-		onmovesession={moveSessionToProject}
+		oncreateproject={(name) => void createProject(name)}
+		onrenameproject={(project, name) => void renameProject(project, name)}
+		ondeleteproject={(project) => void deleteProject(project)}
+		onmovesession={(session, projectId) => void moveSessionToProject(session, projectId)}
+		onrefreshproject={(project) => void refreshProjectSummary(project)}
+		onaskproject={askProject}
 		onexpand={() => (sessionsExpanded = true)}
 		onrefreshmcp={() => void refreshMcpStatus()}
 		onreloadmcp={() => void reloadMcpServers()}
@@ -2418,6 +2523,7 @@
 				onupsertprofile={upsertProfile}
 				ondeleteprofile={deleteProfile}
 				onsharedmemorychange={setSharedMemory}
+				onsavedefaultsharedmemory={saveDefaultSharedMemory}
 				onsavesharedmemory={saveSharedMemoryPreset}
 				ondeletesharedmemory={deleteSharedMemoryPreset}
 				onrefreshmcp={() => void refreshMcpStatus()}
@@ -2544,19 +2650,12 @@
 			localProfileId={desktopSettings?.profiles.localProfileId ?? ""}
 			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
 			profileDisabled={!backendReady || interactionActive}
-			sharedMemory={desktopSettings?.profiles.sharedMemory ?? ""}
-			defaultSharedMemory={desktopSettings?.profiles.defaultSharedMemory ?? ""}
-			sharedContextPreview={codingHarnessSetup?.sharedContextPreview ?? ""}
-			sharedMemoryPresets={desktopSettings?.profiles.sharedMemoryPresets ?? []}
-			selectedSharedMemoryPresetId={desktopSettings?.profiles.selectedSharedMemoryPresetId ?? ""}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
 			approvalMode={currentConfig?.localApprovalMode ?? "risky"}
 			{activeAgent}
 			roleDisabled={!backendReady || interactionActive}
 			{buildModeOffer}
-			onsharedmemorychange={setSharedMemory}
-			onsavesharedmemory={saveSharedMemoryPreset}
 			onsend={(text, images) => void sendMessage(text, images)}
 			onprompttogether={(text) => void sendMessage(text, [], "prompt_together")}
 			onattachmenterror={showError}

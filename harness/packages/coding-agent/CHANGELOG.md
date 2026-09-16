@@ -36,10 +36,12 @@
 - Added shared collaboration-memory presets and a task-start context snapshot containing the runnable external-agent roster, injected unchanged into coordinator, peer, and finalization prompts.
 - Added per-agent Personal Memory and Plan/Build prompt snapshots for external tasks, plus Git workspace-change and successful-verification evidence on task outcomes and bridge completion events.
 - Added an explicit desktop Prompt Together workflow for three or more runnable external agents, with temporary Planner/Builder/Reviewer roles, strict review verdicts, bounded repair iterations, native role-session switching, cancellation, and deterministic bridge logs.
+- Added persistent desktop Projects with stable session membership, backend CRUD and migration RPC, bounded summaries, and grounded project questions.
 
 ### Changed
 
 - Changed desktop Memory settings to separate shared team context from personal agent profiles and show the exact active shared prompt sent to external agents.
+- Moved all Shared Memory editing and saved-memory selection from the composer into desktop Memory settings.
 - Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization, and changed composer memory selection to require explicit application.
 - Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
 - Changed the desktop external-team composer to keep per-agent roles in Settings and show Shared Memory instead of a team-wide `All Plan` / `All Build` override.
@@ -55,7 +57,7 @@
 
 ### Fixed
 
-- Fixed shared-memory preset selection overwriting the reusable default memory, and redesigned desktop Memory settings around a persistent default and separate saved-memory flow.
+- Fixed shared-memory preset selection overwriting the reusable default memory, kept default edits from deselecting an active saved memory, and redesigned desktop Memory settings around a persistent default and separate saved-memory flow.
 - Fixed text-only desktop prompts sending an invalid empty image list, and replaced the stale external-adapter model placeholder with the actual discovery state.
 - Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.
 - Fixed Work together persistence and visibility for two to four runnable agents and mapped the OpenCode harness logo.

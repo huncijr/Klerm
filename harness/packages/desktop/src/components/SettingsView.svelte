@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { BookOpen, Check, Maximize2, Plus, Shrink, Trash2 } from "@lucide/svelte";
+	import { BookOpen, Check, Eye, Maximize2, Plus, Shrink, Trash2, UserRound } from "@lucide/svelte";
+	import { slide } from "svelte/transition";
 	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import { addCodingHarnessSlot, codingHarnessSlotsEqual, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
@@ -63,6 +64,7 @@
 		onupsertprofile,
 		ondeleteprofile,
 		onsharedmemorychange,
+		onsavedefaultsharedmemory,
 		onsavesharedmemory,
 		ondeletesharedmemory,
 		onrefreshmcp,
@@ -96,6 +98,7 @@
 		onupsertprofile: (profile: KlermProfile) => Promise<boolean>;
 		ondeleteprofile: (id: string) => Promise<boolean>;
 		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
+		onsavedefaultsharedmemory: (memory: string) => Promise<boolean>;
 		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
 		ondeletesharedmemory: (id: string) => Promise<boolean>;
 		onrefreshmcp: () => void;
@@ -296,12 +299,42 @@
 	async function selectHarness(id: string, kind: CodingHarnessKind): Promise<void> {
 		updateAgent(id, { kind, enabled: harnessAvailable(kind), model: undefined });
 		if (kind === "klerm") return;
+		await loadHarnessModels(kind);
+	}
+
+	async function loadHarnessModels(kind: CodingHarnessKind): Promise<void> {
 		loadingHarnessModels = [...new Set([...loadingHarnessModels, kind])];
 		try {
 			await onrefreshharnessmodels(kind);
 		} finally {
 			loadingHarnessModels = loadingHarnessModels.filter((candidate) => candidate !== kind);
 		}
+	}
+
+	async function addExternalHarnessAgent(kind: CodingHarnessKind): Promise<void> {
+		if (!codingHarnessSetup || savingChanges) return;
+		const slots = addCodingHarnessSlot(draftHarnessSlots);
+		if (slots === draftHarnessSlots) return;
+		const newId = slots.agents[slots.agents.length - 1]?.id;
+		if (!newId) return;
+		const previous = structuredClone(draftHarnessSlots);
+		const next = updateCodingHarnessSlot(slots, newId, { kind, enabled: true, model: undefined });
+		draftHarnessSlots = next;
+		savingChanges = true;
+		saveNotice = "";
+		saveError = "";
+		try {
+			if (!(await onsaveharnesses(structuredClone(next)))) {
+				draftHarnessSlots = previous;
+				saveError = "Could not add the external agent.";
+				return;
+			}
+			draftHarnessSlots = structuredClone(next);
+			saveNotice = "Changes saved";
+		} finally {
+			savingChanges = false;
+		}
+		await loadHarnessModels(kind);
 	}
 
 	function editProfile(profile: KlermProfile): void {
@@ -468,6 +501,21 @@
 	const harnessDirty = $derived(
 		codingHarnessSetup !== undefined && !codingHarnessSlotsEqual(draftHarnessSlots, codingHarnessSetup.slots),
 	);
+
+	let autoScanDone = $state(false);
+	$effect(() => {
+		if (autoScanDone || tab !== "general") return;
+		if (draftHarnessSlots.externalHarnessesEnabled && codingHarnessSetup && !codingHarnessLoading) {
+			autoScanDone = true;
+			onrefreshharnesses();
+		}
+	});
+
+	const externalHarnessChoices = $derived(
+		codingHarnessSetup?.harnesses.filter(
+			(harness) => harness.available && !harness.builtin && harness.kind !== "klerm",
+		) ?? [],
+	);
 	const dirty = $derived(
 		draftAppearance !== settings.appearance ||
 			draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0) ||
@@ -552,6 +600,7 @@
 			externalHarnessesEnabled: !draftHarnessSlots.externalHarnessesEnabled,
 			...(!draftHarnessSlots.externalHarnessesEnabled ? {} : { workTogetherEnabled: undefined }),
 		};
+		autoScanDone = next.externalHarnessesEnabled ? false : autoScanDone;
 		draftHarnessSlots = next;
 		savingChanges = true;
 		saveNotice = "";
@@ -685,7 +734,50 @@
 						<span>{draftHarnessSlots.externalHarnessesEnabled ? "On" : "Off"}</span>
 						<span class={`relative h-4 w-7 rounded-full transition-colors ${draftHarnessSlots.externalHarnessesEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${draftHarnessSlots.externalHarnessesEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
 					</button>
+			</div>
+			{#if draftHarnessSlots.externalHarnessesEnabled}
+				<div transition:slide={{ duration: 260 }} class="w-full pl-1">
+					{#if codingHarnessLoading}
+						<div class="flex items-center gap-2 py-1">
+							<span class="relative flex h-2 w-2">
+								<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#d6a63f] opacity-60"></span>
+								<span class="relative inline-flex h-2 w-2 rounded-full bg-[#d6a63f]"></span>
+							</span>
+							<p class="m-0 font-mono text-[9px] tracking-[.14em] text-[#d6a63f] uppercase">Auto search scanning...</p>
+						</div>
+					{:else if externalHarnessChoices.length > 0}
+						<div class="flex items-center gap-2 pb-1.5">
+							<span class="relative flex h-2 w-2">
+								<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#81c995] opacity-50"></span>
+								<span class="relative inline-flex h-2 w-2 rounded-full bg-[#81c995]"></span>
+							</span>
+							<p class="m-0 font-mono text-[9px] tracking-[.14em] text-[#81c995] uppercase">Auto search found</p>
+						</div>
+						<div class="flex flex-col gap-0.5 border-l border-[#2c4a34] pl-3">
+							{#each externalHarnessChoices as harness (harness.kind)}
+								<button
+									type="button"
+									disabled={savingChanges || codingHarnessLoading || draftHarnessSlots.agents.length >= 4}
+									class="group flex items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left transition-colors hover:bg-[rgba(38,77,48,.18)] disabled:cursor-not-allowed disabled:opacity-40"
+									onclick={() => void addExternalHarnessAgent(harness.kind)}
+								>
+									<span class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-[#3d4a54] font-mono text-[9px] leading-none text-[#81c995] transition-colors group-hover:border-[#81c995]">+</span>
+									<span class="font-mono text-[10px] text-[#d7e7ff] group-hover:text-white">Add {codingHarnessLabel(harness.kind)} agent</span>
+									<span class="font-mono text-[7px] tracking-[.1em] text-[#7b868e] uppercase">{harness.acp ? `ACP · ${harness.acp.agentName ?? harness.kind}` : harness.version ? harness.version : ""}</span>
+								</button>
+							{/each}
+							{#if draftHarnessSlots.agents.length >= 4}
+								<p class="m-0 px-2 font-mono text-[8px] text-[#d6a63f]">Agent limit reached (4) — remove an agent to add another harness.</p>
+							{/if}
+						</div>
+					{:else}
+						<div class="flex items-center gap-3 py-1 pl-3">
+							<p class="m-0 font-mono text-[9px] text-[#66747d]">No external harnesses found yet.</p>
+							<button type="button" disabled={savingChanges || codingHarnessLoading} class="cursor-pointer border-0 bg-transparent font-mono text-[9px] text-[#69757e] uppercase hover:text-accent disabled:cursor-not-allowed disabled:opacity-40" onclick={onrefreshharnesses}>Refresh</button>
+						</div>
+					{/if}
 				</div>
+			{/if}
 				<p class="m-0 font-mono text-[9px] tracking-[.16em] text-[#536069] uppercase">Appearance</p>
 				<div class="flex w-full flex-col gap-2">
 					{#each ["dark", "light", "system"] as option}
@@ -953,10 +1045,17 @@
 							<span class="font-mono text-[8px] text-[#58656d]">{defaultSharedMemoryDraft.length.toLocaleString()} / 8,000</span>
 							<div class="flex gap-2">
 								{#if settings.profiles.selectedSharedMemoryPresetId}<button type="button" class="h-8 rounded-lg border border-[#3a464e] px-3 font-mono text-[8px] text-[#aab4bb] hover:border-[#607f20] hover:text-white" onclick={() => void onsharedmemorychange(settings.profiles.defaultSharedMemory)}>Use default</button>{/if}
-								<button type="button" disabled={defaultSharedMemorySaving || defaultSharedMemoryDraft === settings.profiles.defaultSharedMemory} class="h-8 rounded-lg bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:cursor-not-allowed disabled:opacity-35" onclick={async () => { defaultSharedMemorySaving = true; await onsharedmemorychange(defaultSharedMemoryDraft); defaultSharedMemorySaving = false; }}>{defaultSharedMemorySaving ? "Saving..." : "Save default"}</button>
+								<button type="button" disabled={defaultSharedMemorySaving || defaultSharedMemoryDraft === settings.profiles.defaultSharedMemory} class="h-8 rounded-lg bg-[#d7e7ff] px-3 font-mono text-[8px] text-[#091019] disabled:cursor-not-allowed disabled:opacity-35" onclick={async () => { defaultSharedMemorySaving = true; await onsavedefaultsharedmemory(defaultSharedMemoryDraft); defaultSharedMemorySaving = false; }}>{defaultSharedMemorySaving ? "Saving..." : "Save default"}</button>
 							</div>
 						</div>
 					</div>
+				</section>
+				<section class="overflow-hidden rounded-2xl border border-[#30404b] bg-[#080d11]">
+					<div class="flex items-start gap-3 border-b border-[#253039] bg-[#0c1318] p-4">
+						<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#344956] bg-[#101d25] text-[#9cc0f2]"><Eye size={17} stroke-width={1.6} /></span>
+						<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><strong class="text-[12px] text-white">Prompt used by all agents</strong><span class="rounded-full border border-[#36536a] bg-[#101d27] px-2 py-0.5 font-mono text-[7px] tracking-[.1em] text-[#9cc0f2] uppercase">{settings.profiles.sharedMemoryPresets.find((preset) => preset.id === settings.profiles.selectedSharedMemoryPresetId)?.name ?? "Default"}</span></div><p class="m-0 mt-1 font-mono text-[8px] leading-[1.5] text-[#738089]">This exact shared block is added to every external agent prompt when the next task starts.</p></div>
+					</div>
+					<pre class="m-0 max-h-[280px] overflow-auto p-4 whitespace-pre-wrap font-mono text-[8px] leading-[1.65] text-[#aebbc3] [scrollbar-width:thin]">{codingHarnessSetup?.sharedContextPreview ?? "Shared prompt preview is unavailable until coding-harness setup is loaded."}</pre>
 				</section>
 
 				<button type="button" class="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#40505a] bg-[#0a0f13] font-mono text-[9px] text-[#b8c3c9] transition-colors hover:border-[#738895] hover:bg-[#0d1419] hover:text-white" onclick={() => (addMemoryOpen = !addMemoryOpen)}><Plus size={14} /> {addMemoryOpen ? "Close new memory" : "Add New Memory"}</button>
@@ -983,7 +1082,12 @@
 					{#if settings.profiles.sharedMemoryPresets.length === 0}<div class="rounded-xl border border-dashed border-[#2c3740] px-4 py-8 text-center font-mono text-[9px] text-[#66747d]">No saved memories yet.</div>{/if}
 				</section>
 
-				<div class="border-t border-[#222c33] pt-4"><p class="m-0 font-mono text-[8px] tracking-[.16em] text-[#66747d] uppercase">Agent personality profiles</p></div>
+				<section class="overflow-hidden rounded-2xl border border-[#473c59] bg-[linear-gradient(145deg,#121019,#090c10)] shadow-[0_18px_50px_rgba(0,0,0,.2)]">
+					<header class="flex items-start gap-3 border-b border-[#30293b] bg-[#15111d] p-4">
+						<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#514363] bg-[#1d1727] text-[#c5a9df]"><UserRound size={17} stroke-width={1.6} /></span>
+						<div><p class="m-0 font-mono text-[8px] tracking-[.16em] text-[#a98cc2] uppercase">Agent-specific context</p><h2 class="mt-1 mb-0 text-[16px] font-medium text-white">Personal Memory</h2><p class="m-0 mt-1 max-w-[560px] text-[9px] leading-[1.5] text-[#7f7489]">Individual personality, work style, and role instructions. These profiles belong to one assigned Klerm agent and are not shared with the whole team.</p></div>
+					</header>
+					<div class="space-y-3 p-4">
 				{#if openedProfile}
 					{@const profile = openedProfile}
 					<button type="button" class="flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-[9px] text-[#8b969e] hover:text-white" onclick={closeProfile}>← Back</button>
@@ -1015,6 +1119,8 @@
 						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">Create profile</button>
 					</form>
 				{/if}
+					</div>
+				</section>
 			</div>
 		{/if}
 	</div>

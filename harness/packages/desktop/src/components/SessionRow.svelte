@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { PencilLine, Trash2 } from "@lucide/svelte";
+	import { FolderInput, FolderMinus, PencilLine, Trash2 } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
-	import type { DesktopSession } from "../lib/model.ts";
+	import type { DesktopProject, DesktopSession } from "../lib/model.ts";
 
 	let {
 		session,
@@ -9,12 +9,20 @@
 		onswitch,
 		onrename,
 		ondelete,
+		projects = [],
+		currentProjectId,
+		onmove,
+		onremove,
 	}: {
 		session: DesktopSession;
 		active: boolean;
 		onswitch: () => void;
 		onrename: (name: string) => Promise<boolean>;
 		ondelete: () => void;
+		projects?: DesktopProject[];
+		currentProjectId?: string;
+		onmove?: (projectId: string) => void;
+		onremove?: () => void;
 	} = $props();
 
 	let menuOpen = $state(false);
@@ -116,6 +124,35 @@
 				>
 					<PencilLine size={12} /> Rename
 				</button>
+				{#if onmove && projects.some((project) => project.id !== currentProjectId)}
+					<p class="m-0 px-[9px] pt-1.5 pb-1 font-mono text-[7px] tracking-[.1em] text-[#59646d] uppercase">Move to project</p>
+					<div class="max-h-32 overflow-y-auto [scrollbar-width:thin]">
+						{#each projects.filter((project) => project.id !== currentProjectId) as project (project.id)}
+							<button
+								type="button"
+								class="flex w-full cursor-pointer items-center gap-2 truncate rounded border-0 bg-transparent px-[9px] py-1.5 text-left text-[10px] text-[#aab4bb] hover:bg-[#171e23] hover:text-white"
+								onclick={() => {
+									menuOpen = false;
+									onmove(project.id);
+								}}
+							>
+								<FolderInput size={12} class="shrink-0" /> <span class="truncate">{project.name}</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+				{#if onremove}
+					<button
+						type="button"
+						class="flex w-full cursor-pointer items-center gap-2 rounded border-0 bg-transparent px-[9px] py-2 text-left text-[10px] text-[#aab4bb] hover:bg-[#171e23] hover:text-white"
+						onclick={() => {
+							menuOpen = false;
+							onremove();
+						}}
+					>
+						<FolderMinus size={12} /> Remove from project
+					</button>
+				{/if}
 				<button
 					type="button"
 					class="flex w-full cursor-pointer items-center gap-2 rounded border-0 bg-transparent px-[9px] py-2 text-left text-[10px] text-[#e38780] hover:bg-[rgba(255,111,97,.1)] hover:text-[#ffada6]"

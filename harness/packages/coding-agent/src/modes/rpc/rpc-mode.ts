@@ -84,6 +84,12 @@ import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
 import { formatProfilePrompt, normalizeProfile } from "../../klerm/profiles.ts";
 import {
+	extractProjectSessions,
+	formatProjectExtracts,
+	type KlermProjectRegistry,
+	summarizeProjectExtracts,
+} from "../../klerm/projects.ts";
+import {
 	connectProviderAccount,
 	customProviderModelIds,
 	disconnectProviderAccount,
@@ -115,6 +121,7 @@ import type {
 	RpcExtensionUIResponse,
 	RpcMcpStatus,
 	RpcMcpToolStatus,
+	RpcProjects,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -141,6 +148,8 @@ export type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcKlermConfigUpdate,
+	RpcProject,
+	RpcProjects,
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc-types.ts";
@@ -204,6 +213,14 @@ const DESKTOP_COMMANDS = [
 	"get_klerm_config",
 	"set_klerm_config",
 	"list_sessions",
+	"get_projects",
+	"create_project",
+	"rename_project",
+	"delete_project",
+	"move_session_to_project",
+	"refresh_project_summary",
+	"ask_project",
+	"import_legacy_desktop_projects",
 	"rename_session",
 	"delete_session",
 	"get_workspace_status",
@@ -1206,6 +1223,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		pendingMessageCount: session.pendingMessageCount,
 	});
 
+	const getStoredSessions = (): Promise<SessionInfo[]> => options.listSessions?.() ?? SessionManager.listAll();
+	const assignCurrentSessionToDefaultProject = async (): Promise<void> => {
+		const currentSession = runtimeHost.session;
+		const currentSessionId = currentSession.sessionManager.getSessionId();
+		const settingsManager = currentSession.settingsManager;
+		const registry = settingsManager.getProjectRegistry();
+		if (registry.sessionProjects[currentSessionId]) return;
+		settingsManager.moveSessionToProject(currentSessionId, registry.defaultProjectId);
+		await settingsManager.flush();
+	};
+	const getProjectsPayload = (registry: KlermProjectRegistry): RpcProjects => ({
+		version: registry.version,
+		defaultProjectId: registry.defaultProjectId,
+		projects: registry.projects.map((project) => ({
+			...project,
+			sessionCount: Object.values(registry.sessionProjects).filter((projectId) => projectId === project.id).length,
+		})),
+	});
+
 	const getMcpStatusPayload = (): RpcMcpStatus => {
 		const configuredServers = session.settingsManager.getMcpServers();
 		const runtimeStatuses = new Map(
@@ -2143,7 +2179,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "list_sessions": {
-				const sessions = await (options.listSessions?.() ?? SessionManager.listAll());
+				const sessions = await getStoredSessions();
+				const registry = session.settingsManager.getProjectRegistry();
 				const desktopSessions: RpcDesktopSessionInfo[] = sessions.map((storedSession) => ({
 					id: storedSession.id,
 					sessionToken: storedSession.path,
@@ -2153,8 +2190,152 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					modified: storedSession.modified.toISOString(),
 					messageCount: storedSession.messageCount,
 					firstMessage: storedSession.firstMessage,
+					projectId: registry.sessionProjects[storedSession.id],
 				}));
 				return success(id, "list_sessions", { sessions: desktopSessions });
+			}
+
+			case "get_projects": {
+				const registry = session.settingsManager.getProjectRegistry();
+				await session.settingsManager.flush();
+				return success(id, "get_projects", getProjectsPayload(registry));
+			}
+
+			case "create_project": {
+				if (typeof command.name !== "string" || !command.name.trim() || command.name.trim().length > 100) {
+					return error(
+						id,
+						"create_project",
+						"Project name must be 1 through 100 characters.",
+						"INVALID_PROJECT_NAME",
+					);
+				}
+				const registry = session.settingsManager.createProject(
+					`project-${crypto.randomUUID()}`,
+					command.name.trim(),
+				);
+				await session.settingsManager.flush();
+				return success(id, "create_project", getProjectsPayload(registry));
+			}
+
+			case "rename_project": {
+				if (typeof command.name !== "string" || !command.name.trim() || command.name.trim().length > 100) {
+					return error(
+						id,
+						"rename_project",
+						"Project name must be 1 through 100 characters.",
+						"INVALID_PROJECT_NAME",
+					);
+				}
+				try {
+					const registry = session.settingsManager.renameProject(command.projectId, command.name.trim());
+					await session.settingsManager.flush();
+					return success(id, "rename_project", getProjectsPayload(registry));
+				} catch {
+					return error(id, "rename_project", "Project not found.", "PROJECT_NOT_FOUND");
+				}
+			}
+
+			case "delete_project": {
+				try {
+					const registry = session.settingsManager.deleteProject(command.projectId);
+					await session.settingsManager.flush();
+					return success(id, "delete_project", getProjectsPayload(registry));
+				} catch (projectError) {
+					const isDefault = projectError instanceof Error && projectError.message.includes("default");
+					return error(
+						id,
+						"delete_project",
+						isDefault ? "The default project cannot be deleted." : "Project not found.",
+						isDefault ? "DEFAULT_PROJECT" : "PROJECT_NOT_FOUND",
+					);
+				}
+			}
+
+			case "move_session_to_project": {
+				const sessions = await getStoredSessions();
+				if (!sessions.some((storedSession) => storedSession.id === command.sessionId)) {
+					return error(id, "move_session_to_project", "Session not found.", "SESSION_NOT_FOUND");
+				}
+				try {
+					const registry = session.settingsManager.moveSessionToProject(command.sessionId, command.projectId);
+					await session.settingsManager.flush();
+					return success(id, "move_session_to_project", getProjectsPayload(registry));
+				} catch {
+					return error(id, "move_session_to_project", "Project not found.", "PROJECT_NOT_FOUND");
+				}
+			}
+
+			case "refresh_project_summary": {
+				const registry = session.settingsManager.getProjectRegistry();
+				const project = registry.projects.find((candidate) => candidate.id === command.projectId);
+				if (!project) return error(id, "refresh_project_summary", "Project not found.", "PROJECT_NOT_FOUND");
+				const sessions = await getStoredSessions();
+				const extracts = extractProjectSessions(project.id, registry, sessions);
+				const summary = summarizeProjectExtracts(project.name, extracts);
+				const updated = session.settingsManager.setProjectSummary(project.id, summary);
+				await session.settingsManager.flush();
+				return success(id, "refresh_project_summary", { projects: getProjectsPayload(updated), summary, extracts });
+			}
+
+			case "ask_project": {
+				if (
+					typeof command.question !== "string" ||
+					!command.question.trim() ||
+					command.question.trim().length > 2000
+				) {
+					return error(id, "ask_project", "Question must be 1 through 2000 characters.", "INVALID_QUESTION");
+				}
+				const registry = session.settingsManager.getProjectRegistry();
+				if (!registry.projects.some((project) => project.id === command.projectId)) {
+					return error(id, "ask_project", "Project not found.", "PROJECT_NOT_FOUND");
+				}
+				const extracts = extractProjectSessions(command.projectId, registry, await getStoredSessions());
+				const prompt = extracts.length
+					? [
+							"Answer the user's project question using only the labeled session context below.",
+							"If the context is insufficient, say what information is missing. Do not claim to have inspected files or sessions outside this context.",
+							`User question:\n${command.question.trim()}`,
+							`Project session context:\n${formatProjectExtracts(extracts)}`,
+						].join("\n\n")
+					: "No readable assigned session messages are available for this project.";
+				return success(id, "ask_project", { prompt, extracts });
+			}
+
+			case "import_legacy_desktop_projects": {
+				if (
+					!Array.isArray(command.projects) ||
+					!command.sessionProjects ||
+					typeof command.sessionProjects !== "object"
+				) {
+					return error(
+						id,
+						"import_legacy_desktop_projects",
+						"Invalid legacy project data.",
+						"INVALID_PROJECT_IMPORT",
+					);
+				}
+				const projects = command.projects
+					.filter(
+						(project) =>
+							typeof project?.id === "string" &&
+							project.id.trim().length > 0 &&
+							typeof project.name === "string" &&
+							project.name.trim().length > 0,
+					)
+					.map((project) => ({ id: project.id.trim().slice(0, 128), name: project.name.trim().slice(0, 100) }));
+				const sessions = await getStoredSessions();
+				const byToken = new Map(sessions.map((storedSession) => [storedSession.path, storedSession.id]));
+				const sessionIds = new Set(sessions.map((storedSession) => storedSession.id));
+				const assignments: Record<string, string> = {};
+				for (const [token, projectId] of Object.entries(command.sessionProjects)) {
+					if (typeof projectId !== "string") continue;
+					const sessionId = byToken.get(token) ?? (sessionIds.has(token) ? token : undefined);
+					if (sessionId) assignments[sessionId] = projectId;
+				}
+				const registry = session.settingsManager.importLegacyProjects(projects, assignments);
+				await session.settingsManager.flush();
+				return success(id, "import_legacy_desktop_projects", getProjectsPayload(registry));
 			}
 
 			case "rename_session": {
@@ -2222,6 +2403,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				} catch (deleteError) {
 					const deleteErrorCode = (deleteError as { code?: string | number } | undefined)?.code;
 					if (deleteErrorCode === "ENOENT" || deleteErrorCode === errnoConstants.errno.ENOENT) {
+						session.settingsManager.moveSessionToProject(storedSession.id, undefined);
+						await session.settingsManager.flush();
 						return success(id, "delete_session", { sessionId: storedSession.id });
 					}
 					return error(
@@ -2231,6 +2414,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"DELETE_FAILED",
 					);
 				}
+				session.settingsManager.moveSessionToProject(storedSession.id, undefined);
+				await session.settingsManager.flush();
 				return success(id, "delete_session", { sessionId: storedSession.id });
 			}
 
@@ -2548,7 +2733,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				if (typeof command.memory !== "string") {
 					return error(id, "set_klerm_shared_memory", "Shared memory must be text.", "INVALID_SHARED_MEMORY");
 				}
-				session.settingsManager.setKlermSharedMemory(command.memory, command.presetId);
+				if (command.activate === false) session.settingsManager.setKlermDefaultSharedMemory(command.memory);
+				else session.settingsManager.setKlermSharedMemory(command.memory, command.presetId);
 				await session.settingsManager.flush();
 				return success(id, "set_klerm_shared_memory", await getDesktopSettingsPayload());
 			}
@@ -2843,19 +3029,20 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"PROMPT_TOGETHER_UNAVAILABLE",
 					);
 				}
+				if (session.messages.length === 0) await assignCurrentSessionToDefaultProject();
 				appendAiDebugTrace("USER_PROMPT", {
 					message: command.message,
 					displayMessage: command.displayMessage,
 					workflow: "prompt-together",
 					runnableAgents: externalRoster,
 				});
-				const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
-				session.sessionManager.appendMessage(userMessage);
 				if (command.displayMessage && command.displayMessage !== command.message) {
 					session.sessionManager.appendCustomEntry("klerm-desktop-display-prompt", {
 						text: command.displayMessage,
 					});
 				}
+				const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
+				session.sessionManager.appendMessage(userMessage);
 				const run = await startExternalCodingHarnessPrompt(codingHarnessSetup, command.message, "prompt-together");
 				if (!run) {
 					return error(
@@ -2878,6 +3065,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
 				}
 				const codingHarnessSetup = await getCodingHarnessSetup();
+				if (session.messages.length === 0) await assignCurrentSessionToDefaultProject();
 				appendAiDebugTrace("USER_PROMPT", {
 					message: command.message,
 					displayMessage: command.displayMessage,
@@ -2912,13 +3100,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 								"CODING_HARNESS_IMAGES_UNAVAILABLE",
 							);
 						}
-						const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
-						session.sessionManager.appendMessage(userMessage);
 						if (command.displayMessage && command.displayMessage !== command.message) {
 							session.sessionManager.appendCustomEntry("klerm-desktop-display-prompt", {
 								text: command.displayMessage,
 							});
 						}
+						const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
+						session.sessionManager.appendMessage(userMessage);
 						await startExternalCodingHarnessPrompt(codingHarnessSetup, command.message);
 						output(success(id, "prompt"));
 						return undefined;
@@ -3002,6 +3190,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				await closeCodingHarnessSessions();
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
+				if (!result.cancelled) await assignCurrentSessionToDefaultProject();
 				return success(id, "new_session", result);
 			}
 
@@ -3182,6 +3371,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 			case "fork": {
 				const result = await runtimeHost.fork(command.entryId);
+				if (!result.cancelled) await assignCurrentSessionToDefaultProject();
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
 			}
 
@@ -3191,6 +3381,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(id, "clone", "Cannot clone session: no current entry selected");
 				}
 				const result = await runtimeHost.fork(leafId, { position: "at" });
+				if (!result.cancelled) await assignCurrentSessionToDefaultProject();
 				return success(id, "clone", { cancelled: result.cancelled });
 			}
 

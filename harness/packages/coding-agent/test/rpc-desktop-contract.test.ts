@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
@@ -82,6 +82,28 @@ describe("Klerm desktop RPC contract", () => {
 		execFileSync("git", ["init"], { cwd: harness.tempDir, stdio: "ignore" });
 		const persistedFile = join(harness.tempDir, "persisted-attribution.txt");
 		writeFileSync(persistedFile, "before\n", "utf8");
+		const storedSessionFile = join(harness.tempDir, "stored-session.jsonl");
+		const storedSessionBody = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "session-1",
+				timestamp: "2026-08-30T10:00:00.000Z",
+				cwd: "/project",
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "entry-1",
+				parentId: null,
+				timestamp: "2026-08-30T10:00:01.000Z",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "Keep the project registry deterministic." }],
+					timestamp: 1,
+				},
+			}),
+		].join("\n");
+		writeFileSync(storedSessionFile, `${storedSessionBody}\n`, "utf8");
 		harness.sessionManager.appendCustomEntry("klerm-workspace-attribution", {
 			path: persistedFile,
 			attribution: { source: "local", provider: "ollama", model: "qwen", lane: "local" },
@@ -169,7 +191,7 @@ describe("Klerm desktop RPC contract", () => {
 				listSessions: async () => [
 					{
 						id: "session-1",
-						path: "/private/session.jsonl",
+						path: storedSessionFile,
 						cwd: "/project",
 						name: "Desktop test",
 						created: new Date("2026-08-30T10:00:00.000Z"),
@@ -194,6 +216,10 @@ describe("Klerm desktop RPC contract", () => {
 							"prompt",
 							"prompt_together",
 							"get_local_runtimes",
+							"get_projects",
+							"create_project",
+							"ask_project",
+							"import_legacy_desktop_projects",
 							"get_available_thinking_levels",
 							"set_thinking_level",
 							"rename_session",
@@ -599,6 +625,59 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(invalidStartLane).toMatchObject({ success: false, code: "INVALID_CONFIG" });
 
+			const projects = await send({ id: "projects", type: "get_projects" });
+			expect(projects).toMatchObject({
+				success: true,
+				data: {
+					version: 1,
+					defaultProjectId: "project-default",
+					projects: [{ id: "project-default", name: "My New Project", sessionCount: 0 }],
+				},
+			});
+
+			const imported = await send({
+				id: "import-projects",
+				type: "import_legacy_desktop_projects",
+				projects: [{ id: "legacy-project", name: "Imported" }],
+				sessionProjects: { [storedSessionFile]: "legacy-project" },
+			});
+			expect(imported).toMatchObject({
+				success: true,
+				data: { projects: expect.arrayContaining([{ id: "legacy-project", name: "Imported", sessionCount: 1 }]) },
+			});
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects).toEqual({
+				"session-1": "legacy-project",
+			});
+
+			const asked = await send({
+				id: "ask-project",
+				type: "ask_project",
+				projectId: "legacy-project",
+				question: "What matters?",
+			});
+			expect(asked).toMatchObject({
+				success: true,
+				data: {
+					prompt: expect.stringContaining("[Session: Desktop test | session-1 | user]"),
+					extracts: [{ sessionId: "session-1", role: "user", text: "Keep the project registry deterministic." }],
+				},
+			});
+			expect(asked).toMatchObject({
+				data: { prompt: expect.stringContaining("User question:\nWhat matters?") },
+			});
+			const summary = await send({ id: "summary", type: "refresh_project_summary", projectId: "legacy-project" });
+			expect(summary).toMatchObject({
+				success: true,
+				data: { summary: expect.stringContaining("Assigned sessions: 1") },
+			});
+			expect(readFileSync(storedSessionFile, "utf8")).toBe(`${storedSessionBody}\n`);
+			vi.mocked(runtimeHost.newSession).mockResolvedValueOnce({ cancelled: false });
+			const newSession = await send({ id: "new-session", type: "new_session" });
+			expect(newSession).toMatchObject({ success: true, data: { cancelled: false } });
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects[harness.session.sessionId]).toBe(
+				"project-default",
+			);
+
 			const sessions = await send({ id: "sessions", type: "list_sessions" });
 			expect(sessions).toMatchObject({
 				success: true,
@@ -606,8 +685,9 @@ describe("Klerm desktop RPC contract", () => {
 					sessions: [
 						{
 							id: "session-1",
-							sessionToken: "/private/session.jsonl",
+							sessionToken: storedSessionFile,
 							name: "Desktop test",
+							projectId: "legacy-project",
 						},
 					],
 				},
@@ -617,11 +697,11 @@ describe("Klerm desktop RPC contract", () => {
 			const switched = await send({
 				id: "switch-session",
 				type: "switch_session",
-				sessionPath: "/private/session.jsonl",
+				sessionPath: storedSessionFile,
 			});
 			expect(switched).toMatchObject({ success: true });
 			expect(runtimeHost.switchSession).toHaveBeenCalledOnce();
-			expect(runtimeHost.switchSession).toHaveBeenCalledWith("/private/session.jsonl");
+			expect(runtimeHost.switchSession).toHaveBeenCalledWith(storedSessionFile);
 
 			const invalidSwitch = await send({
 				id: "invalid-switch-session",
@@ -633,11 +713,11 @@ describe("Klerm desktop RPC contract", () => {
 			const renamed = await send({
 				id: "rename-session",
 				type: "rename_session",
-				sessionToken: "/private/session.jsonl",
+				sessionToken: storedSessionFile,
 				name: "  Renamed session  ",
 			});
 			expect(renamed).toMatchObject({ success: true, data: { sessionId: "session-1" } });
-			expect(renameSession).toHaveBeenCalledWith("/private/session.jsonl", "Renamed session");
+			expect(renameSession).toHaveBeenCalledWith(storedSessionFile, "Renamed session");
 
 			const invalidRename = await send({
 				id: "invalid-rename",
@@ -650,7 +730,7 @@ describe("Klerm desktop RPC contract", () => {
 			const emptyRename = await send({
 				id: "empty-rename",
 				type: "rename_session",
-				sessionToken: "/private/session.jsonl",
+				sessionToken: storedSessionFile,
 				name: "  ",
 			});
 			expect(emptyRename).toMatchObject({ success: false, code: "INVALID_SESSION_NAME" });
@@ -658,10 +738,11 @@ describe("Klerm desktop RPC contract", () => {
 			const deleted = await send({
 				id: "delete-session",
 				type: "delete_session",
-				sessionToken: "/private/session.jsonl",
+				sessionToken: storedSessionFile,
 			});
 			expect(deleted).toMatchObject({ success: true, data: { sessionId: "session-1" } });
-			expect(deleteSession).toHaveBeenCalledWith("/private/session.jsonl");
+			expect(deleteSession).toHaveBeenCalledWith(storedSessionFile);
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects["session-1"]).toBeUndefined();
 
 			const invalidDelete = await send({
 				id: "invalid-delete",
@@ -681,10 +762,19 @@ describe("Klerm desktop RPC contract", () => {
 			const missingFileDelete = await send({
 				id: "missing-file-delete",
 				type: "delete_session",
-				sessionToken: "/private/session.jsonl",
+				sessionToken: storedSessionFile,
 			});
 			expect(missingFileDelete).toMatchObject({ success: true, data: { sessionId: "session-1" } });
 			expect(deleteSession).toHaveBeenCalledTimes(2);
+
+			const deletedProject = await send({
+				id: "delete-project",
+				type: "delete_project",
+				projectId: "legacy-project",
+			});
+			expect(deletedProject).toMatchObject({ success: true });
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects["session-1"]).toBeUndefined();
+			expect(existsSync(storedSessionFile)).toBe(true);
 		} finally {
 			harness.cleanup();
 			for (const listener of process.stdin.listeners("end") as NodeListener[]) {

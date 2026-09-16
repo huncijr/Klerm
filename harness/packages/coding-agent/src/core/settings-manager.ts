@@ -14,6 +14,12 @@ import {
 	normalizeProfileState,
 	profileIdFromName,
 } from "../klerm/profiles.ts";
+import {
+	DEFAULT_PROJECT_ID,
+	type KlermProject,
+	type KlermProjectRegistry,
+	normalizeProjectRegistry,
+} from "../klerm/projects.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
@@ -167,6 +173,7 @@ export interface Settings {
 	desktopAppearance?: DesktopAppearance;
 	klermProfiles?: KlermProfileState;
 	codingHarnessSlots?: CodingHarnessSlots;
+	projectRegistry?: KlermProjectRegistry;
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -816,6 +823,83 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getProjectRegistry(): KlermProjectRegistry {
+		const registry = normalizeProjectRegistry(this.globalSettings.projectRegistry);
+		if (JSON.stringify(registry) !== JSON.stringify(this.globalSettings.projectRegistry)) {
+			this.globalSettings.projectRegistry = registry;
+			this.markModified("projectRegistry");
+			this.save();
+		}
+		return structuredClone(registry);
+	}
+
+	private setProjectRegistry(registry: KlermProjectRegistry): KlermProjectRegistry {
+		this.globalSettings.projectRegistry = normalizeProjectRegistry(registry);
+		this.markModified("projectRegistry");
+		this.save();
+		return this.getProjectRegistry();
+	}
+
+	createProject(id: string, name: string): KlermProjectRegistry {
+		const registry = this.getProjectRegistry();
+		if (registry.projects.some((project) => project.id === id)) throw new Error("Project id already exists.");
+		registry.projects.push({ id, name });
+		return this.setProjectRegistry(registry);
+	}
+
+	renameProject(projectId: string, name: string): KlermProjectRegistry {
+		const registry = this.getProjectRegistry();
+		const project = registry.projects.find((candidate) => candidate.id === projectId);
+		if (!project) throw new Error("Project not found.");
+		project.name = name;
+		return this.setProjectRegistry(registry);
+	}
+
+	deleteProject(projectId: string): KlermProjectRegistry {
+		if (projectId === DEFAULT_PROJECT_ID) throw new Error("The default project cannot be deleted.");
+		const registry = this.getProjectRegistry();
+		if (!registry.projects.some((project) => project.id === projectId)) throw new Error("Project not found.");
+		registry.projects = registry.projects.filter((project) => project.id !== projectId);
+		registry.sessionProjects = Object.fromEntries(
+			Object.entries(registry.sessionProjects).filter(([, assignedProjectId]) => assignedProjectId !== projectId),
+		);
+		return this.setProjectRegistry(registry);
+	}
+
+	moveSessionToProject(sessionId: string, projectId: string | undefined): KlermProjectRegistry {
+		const registry = this.getProjectRegistry();
+		if (projectId && !registry.projects.some((project) => project.id === projectId))
+			throw new Error("Project not found.");
+		if (projectId) registry.sessionProjects[sessionId] = projectId;
+		else delete registry.sessionProjects[sessionId];
+		return this.setProjectRegistry(registry);
+	}
+
+	setProjectSummary(projectId: string, summary: string): KlermProjectRegistry {
+		const registry = this.getProjectRegistry();
+		const project = registry.projects.find((candidate) => candidate.id === projectId);
+		if (!project) throw new Error("Project not found.");
+		project.summary = summary;
+		return this.setProjectRegistry(registry);
+	}
+
+	importLegacyProjects(projects: KlermProject[], assignments: Record<string, string>): KlermProjectRegistry {
+		const registry = this.getProjectRegistry();
+		if (registry.legacyDesktopImportCompleted) return registry;
+		const ids = new Set(registry.projects.map((project) => project.id));
+		for (const project of projects) {
+			if (!ids.has(project.id)) {
+				registry.projects.push(project);
+				ids.add(project.id);
+			}
+		}
+		for (const [sessionId, projectId] of Object.entries(assignments)) {
+			if (ids.has(projectId)) registry.sessionProjects[sessionId] = projectId;
+		}
+		registry.legacyDesktopImportCompleted = true;
+		return this.setProjectRegistry(registry);
+	}
+
 	getCodingHarnessSlots(): CodingHarnessSlots {
 		return normalizeCodingHarnessSlots(this.globalSettings.codingHarnessSlots);
 	}
@@ -849,6 +933,14 @@ export class SettingsManager {
 			next.sharedMemory = next.defaultSharedMemory;
 			next.selectedSharedMemoryPresetId = undefined;
 		}
+		this.setKlermProfiles(next);
+		return this.getKlermProfiles();
+	}
+
+	setKlermDefaultSharedMemory(sharedMemory: string): KlermProfileState {
+		const next = this.getKlermProfiles();
+		next.defaultSharedMemory = sharedMemory.slice(0, 8000);
+		if (!next.selectedSharedMemoryPresetId) next.sharedMemory = next.defaultSharedMemory;
 		this.setKlermProfiles(next);
 		return this.getKlermProfiles();
 	}

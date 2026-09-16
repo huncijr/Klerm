@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Pencil, Plus, Settings } from "@lucide/svelte";
+	import { ChevronDown, MessageCircle, Pencil, Plus, RefreshCw, Settings, Trash2 } from "@lucide/svelte";
 	import {
 		MCP_COLOR_BG_CSS,
 		MCP_COLOR_CSS,
@@ -8,12 +8,14 @@
 		mcpServerIdFromName,
 		parseStdioArgs,
 	} from "../lib/mcp-mentions.ts";
-	import type { DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus } from "../lib/model.ts";
+	import type { DesktopProject, DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus } from "../lib/model.ts";
 	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
 
 	let {
 		sessions,
+		projects,
+		defaultProjectId,
 		activeSessionToken,
 		mcpStatus,
 		mcpBusy,
@@ -24,6 +26,12 @@
 		onswitch,
 		onrename,
 		ondelete,
+		oncreateproject,
+		onrenameproject,
+		ondeleteproject,
+		onmovesession,
+		onrefreshproject,
+		onaskproject,
 		onexpand,
 		onrefreshmcp,
 		onreloadmcp,
@@ -32,6 +40,8 @@
 		ontogglesettings,
 	}: {
 		sessions: DesktopSession[];
+		projects: DesktopProject[];
+		defaultProjectId: string;
 		activeSessionToken: string;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
@@ -42,6 +52,12 @@
 		onswitch: (session: DesktopSession) => void;
 		onrename: (session: DesktopSession, name: string) => Promise<boolean>;
 		ondelete: (session: DesktopSession) => void;
+		oncreateproject: (name: string) => void;
+		onrenameproject: (project: DesktopProject, name: string) => void;
+		ondeleteproject: (project: DesktopProject) => void;
+		onmovesession: (session: DesktopSession, projectId: string | undefined) => void;
+		onrefreshproject: (project: DesktopProject) => void;
+		onaskproject: (project: DesktopProject, question: string) => Promise<boolean>;
 		onexpand: () => void;
 		onrefreshmcp: () => void;
 		onreloadmcp: () => void;
@@ -49,6 +65,87 @@
 		settingsOpen: boolean;
 		ontogglesettings: () => void;
 	} = $props();
+
+	let creatingProject = $state(false);
+	let newProjectName = $state("");
+	let collapsedProjectIds = $state<Record<string, boolean>>({});
+	let renamingProjectId = $state<string | undefined>();
+	let renamingProjectValue = $state("");
+	let projectMenuId = $state<string | undefined>();
+	let projectMenuEl: HTMLDivElement | undefined = $state();
+	let askingProjectId = $state<string | undefined>();
+	let projectQuestion = $state("");
+	let projectQuestionBusy = $state(false);
+
+	const projectSessions = $derived.by(() => {
+		const grouped = new Map<string, DesktopSession[]>();
+		const unassigned: DesktopSession[] = [];
+		for (const session of sessions) {
+			const projectId = session.projectId;
+			if (projectId && projects.some((project) => project.id === projectId)) {
+				const list = grouped.get(projectId) ?? [];
+				list.push(session);
+				grouped.set(projectId, list);
+			} else {
+				unassigned.push(session);
+			}
+		}
+		return { grouped, unassigned };
+	});
+
+	$effect(() => {
+		if (!projectMenuId) return;
+		const onPointerDown = (event: PointerEvent) => {
+			if (event.target instanceof Node && projectMenuEl?.contains(event.target)) return;
+			projectMenuId = undefined;
+		};
+		document.addEventListener("pointerdown", onPointerDown, true);
+		return () => document.removeEventListener("pointerdown", onPointerDown, true);
+	});
+
+	function commitNewProject(): void {
+		const name = newProjectName;
+		newProjectName = "";
+		creatingProject = false;
+		if (name.trim()) oncreateproject(name);
+	}
+
+	function cancelNewProject(): void {
+		newProjectName = "";
+		creatingProject = false;
+	}
+
+	function toggleProject(project: DesktopProject): void {
+		collapsedProjectIds = { ...collapsedProjectIds, [project.id]: !collapsedProjectIds[project.id] };
+	}
+
+	function startProjectRename(project: DesktopProject): void {
+		renamingProjectId = project.id;
+		renamingProjectValue = project.name;
+		projectMenuId = undefined;
+	}
+
+	function commitProjectRename(project: DesktopProject): void {
+		const name = renamingProjectValue;
+		renamingProjectId = undefined;
+		renamingProjectValue = "";
+		if (name.trim() && name.trim() !== project.name) onrenameproject(project, name);
+	}
+
+	function sessionsForPicker(project: DesktopProject): DesktopSession[] {
+		return sessions.filter((session) => session.projectId !== project.id);
+	}
+
+	async function submitProjectQuestion(project: DesktopProject): Promise<void> {
+		const question = projectQuestion.trim();
+		if (!question || projectQuestionBusy) return;
+		projectQuestionBusy = true;
+		if (await onaskproject(project, question)) {
+			projectQuestion = "";
+			askingProjectId = undefined;
+		}
+		projectQuestionBusy = false;
+	}
 
 	let mcpPopoverOpen = $state(false);
 	let addingMcp = $state(false);
@@ -419,29 +516,162 @@
 			New session
 		</button>
 
-		<section class="flex min-h-0 flex-1 flex-col pt-[17px] px-2.5 pb-2.5">
-			<div class="flex items-center justify-between px-[11px] pb-2.5">
-				<p class="m-0 font-mono text-[9px] tracking-[.15em] text-[#59646d] uppercase">Sessions</p>
-				<button
-					type="button"
-					aria-label="Refresh sessions"
-					class="cursor-pointer border-0 bg-transparent font-mono text-[9px] text-[#69757e] uppercase hover:text-accent"
-					onclick={onrefresh}
-				>
-					Refresh
-				</button>
-			</div>
+		<section class="flex min-h-0 flex-1 flex-col px-2.5 pb-2.5">
 			<div class="min-h-0 flex-1 overflow-y-auto [overscroll-behavior:contain]">
+				<div class="px-[11px] pt-[17px] pb-1">
+					<div class="flex items-center justify-between pb-2">
+						<p class="m-0 font-mono text-[9px] tracking-[.15em] text-[#59646d] uppercase">Projects</p>
+						{#if !creatingProject}
+							<button type="button" aria-label="New project" class="cursor-pointer border-0 bg-transparent font-mono text-[9px] text-[#69757e] uppercase hover:text-accent" onclick={() => (creatingProject = true)}>
+								New
+							</button>
+						{/if}
+					</div>
+					{#if creatingProject}
+						<input
+							bind:value={newProjectName}
+							placeholder="Project name — Enter to save"
+							aria-label="New project name"
+							class="mb-1.5 w-full rounded border border-[#3b464e] bg-[#0a0f13] px-2 py-1.5 text-[10px] text-[#dce2e5] outline-none focus:border-[#66747d]"
+							onkeydown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									commitNewProject();
+								} else if (event.key === "Escape") {
+									cancelNewProject();
+								}
+							}}
+							onblur={commitNewProject}
+						/>
+					{/if}
+					{#each projects as project (project.id)}
+						<div class="group mb-0.5">
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									aria-label={collapsedProjectIds[project.id] ? `Expand ${project.name}` : `Collapse ${project.name}`}
+									class="grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#66747d] hover:text-white"
+									onclick={() => toggleProject(project)}
+								>
+									<ChevronDown size={11} stroke-width={1.7} class={`transition-transform ${collapsedProjectIds[project.id] ? "-rotate-90" : ""}`} />
+								</button>
+								{#if renamingProjectId === project.id}
+									<input
+										bind:value={renamingProjectValue}
+										aria-label="Project name"
+										class="min-w-0 flex-1 rounded border border-[#3b464e] bg-[#0a0f13] px-2 py-1 text-[10px] text-[#dce2e5] outline-none focus:border-[#66747d]"
+										onkeydown={(event) => {
+											if (event.key === "Enter") {
+												event.preventDefault();
+												commitProjectRename(project);
+											} else if (event.key === "Escape") {
+												renamingProjectId = undefined;
+											}
+										}}
+										onblur={() => commitProjectRename(project)}
+									/>
+								{:else}
+									<button type="button" class="min-w-0 flex-1 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-[11px] font-semibold text-[#c5ced3] hover:text-white" onclick={() => toggleProject(project)}>
+										{project.name}
+									</button>
+								{/if}
+								<span class="shrink-0 font-mono text-[8px] text-[#55616a]">{projectSessions.grouped.get(project.id)?.length ?? 0}</span>
+								<div class="relative shrink-0">
+									<button
+										type="button"
+										aria-label={`Add session to ${project.name}`}
+										aria-expanded={projectMenuId === project.id}
+										class="grid h-5 w-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#66747d] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-white"
+										onclick={() => (projectMenuId = projectMenuId === project.id ? undefined : project.id)}
+									>
+										<Plus size={12} stroke-width={1.7} />
+									</button>
+									{#if projectMenuId === project.id}
+										<div bind:this={projectMenuEl} class="absolute top-[24px] right-0 z-[8] w-[190px] rounded-md border border-[#303941] bg-[#0b0f13] p-[5px] shadow-[0_14px_36px_rgba(0,0,0,.48)]">
+											{#if sessionsForPicker(project).length === 0}
+												<p class="m-0 px-2 py-1.5 text-[10px] text-[#66747d]">No sessions to add.</p>
+											{:else}
+												{#each sessionsForPicker(project).slice(0, 15) as session (session.sessionToken)}
+													<button
+														type="button"
+														class="flex w-full cursor-pointer items-center gap-2 overflow-hidden rounded border-0 bg-transparent px-[9px] py-1.5 text-left text-[10px] text-ellipsis whitespace-nowrap text-[#aab4bb] hover:bg-[#171e23] hover:text-white"
+														onclick={() => {
+															onmovesession(session, project.id);
+															projectMenuId = undefined;
+														}}
+													>
+														<Plus size={10} class="shrink-0" /> {session.name ?? session.firstMessage}
+													</button>
+												{/each}
+											{/if}
+										</div>
+									{/if}
+								</div>
+								<button type="button" aria-label={`Rename ${project.name}`} class="grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#66747d] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-white" onclick={() => startProjectRename(project)}>
+									<Pencil size={11} stroke-width={1.7} />
+								</button>
+								{#if project.id !== defaultProjectId}
+									<button type="button" aria-label={`Delete ${project.name}`} class="grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#66747d] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-[#ffada6]" onclick={() => { projectMenuId = undefined; ondeleteproject(project); }}>
+										<Trash2 size={11} stroke-width={1.7} />
+									</button>
+								{/if}
+							</div>
+							{#if !collapsedProjectIds[project.id]}
+								<div class="mt-0.5 mb-1 ml-2.5 border-l border-[#1c242b] pl-1">
+									<div class="mb-1 flex items-center gap-1 px-2">
+										<button type="button" class="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[7px] text-[#7d8991] hover:bg-[#151d23] hover:text-white" onclick={() => onrefreshproject(project)}><RefreshCw size={9} /> Refresh summary</button>
+										<button type="button" class="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[7px] text-[#7d8991] hover:bg-[#151d23] hover:text-white" onclick={() => { askingProjectId = askingProjectId === project.id ? undefined : project.id; projectQuestion = ""; }}><MessageCircle size={9} /> Ask</button>
+									</div>
+									{#if project.summary}<p class="mx-2 mb-1 max-h-24 overflow-y-auto whitespace-pre-wrap rounded border border-[#202a31] bg-[#0a0f13] px-2 py-1.5 font-mono text-[8px] leading-[1.45] text-[#77858e] [scrollbar-width:thin]">{project.summary}</p>{/if}
+									{#if askingProjectId === project.id}
+										<form class="mx-2 mb-1 flex gap-1" onsubmit={(event) => { event.preventDefault(); void submitProjectQuestion(project); }}>
+											<input bind:value={projectQuestion} maxlength="2000" aria-label={`Ask ${project.name}`} placeholder="Ask across project sessions" class="h-7 min-w-0 flex-1 rounded border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white outline-0" />
+											<button type="submit" disabled={!projectQuestion.trim() || projectQuestionBusy} class="h-7 rounded bg-[#d7e7ff] px-2 font-mono text-[8px] text-[#091019] disabled:opacity-40">{projectQuestionBusy ? "..." : "Ask"}</button>
+										</form>
+									{/if}
+									{#each projectSessions.grouped.get(project.id) ?? [] as session (session.sessionToken)}
+										<SessionRow
+											{session}
+											{projects}
+											currentProjectId={project.id}
+											active={session.sessionToken === activeSessionToken}
+											onswitch={() => onswitch(session)}
+											onrename={(name) => onrename(session, name)}
+											ondelete={() => ondelete(session)}
+											onmove={(projectId) => onmovesession(session, projectId)}
+											onremove={() => onmovesession(session, undefined)}
+										/>
+									{:else}
+										<p class="m-0 px-2 py-1 text-[10px] text-[#55616a]">No sessions in this project yet — use + to add one.</p>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+				<div class="flex items-center justify-between px-[11px] pt-2 pb-2.5">
+					<p class="m-0 font-mono text-[9px] tracking-[.15em] text-[#59646d] uppercase">Sessions</p>
+					<button
+						type="button"
+						aria-label="Refresh sessions"
+						class="cursor-pointer border-0 bg-transparent font-mono text-[9px] text-[#69757e] uppercase hover:text-accent"
+						onclick={onrefresh}
+					>
+						Refresh
+					</button>
+				</div>
 				{#if sessions.length === 0}
 					<p class="px-[11px] py-2 text-[11px] text-muted">No saved sessions yet.</p>
 				{:else}
-					{#each sessions.slice(0, 30) as session (session.sessionToken)}
+					{#each projectSessions.unassigned.slice(0, 30) as session (session.sessionToken)}
 						<SessionRow
 							{session}
+							{projects}
 							active={session.sessionToken === activeSessionToken}
 							onswitch={() => onswitch(session)}
 							onrename={(name) => onrename(session, name)}
 							ondelete={() => ondelete(session)}
+							onmove={(projectId) => onmovesession(session, projectId)}
 						/>
 					{/each}
 				{/if}

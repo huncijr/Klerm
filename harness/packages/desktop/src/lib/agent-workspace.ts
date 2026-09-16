@@ -1,10 +1,4 @@
-import type {
-	CodingHarnessBridgeEvent,
-	FeedItem,
-	TimelineItem,
-	TimelineTone,
-	WorkerRole,
-} from "./model.ts";
+import type { CodingHarnessBridgeEvent, FeedItem, TimelineItem, TimelineTone, WorkerRole } from "./model.ts";
 
 export interface WorkspaceEditDraft {
 	content: string;
@@ -18,11 +12,7 @@ export function teamRoleChange(
 	return taskActive ? { pendingRole: role } : { applyRole: role };
 }
 
-export function agentFeedItems(
-	items: readonly FeedItem[],
-	agentId: string,
-	clearThrough: number,
-): FeedItem[] {
+export function agentFeedItems(items: readonly FeedItem[], agentId: string, clearThrough: number): FeedItem[] {
 	return items.filter(
 		(item) =>
 			item.id > clearThrough &&

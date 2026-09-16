@@ -382,8 +382,24 @@ describe("coding harness setup RPC", () => {
 				id: "team-prompt",
 				type: "prompt",
 				message: "Review the frontend, backend, security, and tests for this architecture.",
+				displayMessage: "What should this project improve?",
 			});
 			await vi.waitFor(() => expect(promptCalls).toHaveLength(1));
+			const promptEntries = harness.session.sessionManager.getEntries();
+			const displayIndex = promptEntries.findIndex(
+				(entry) => entry.type === "custom" && entry.customType === "klerm-desktop-display-prompt",
+			);
+			const promptIndex = promptEntries.findIndex(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "user" &&
+					entry.message.content === "Review the frontend, backend, security, and tests for this architecture.",
+			);
+			expect(displayIndex).toBeGreaterThanOrEqual(0);
+			expect(promptIndex).toBeGreaterThan(displayIndex);
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects[harness.session.sessionId]).toBe(
+				"project-default",
+			);
 			await expect(send({ id: "busy-team-prompt", type: "prompt", message: "overlap" })).resolves.toMatchObject({
 				success: false,
 				code: "AGENT_BUSY",

@@ -22,6 +22,8 @@ export type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcKlermConfigUpdate,
+	RpcProject,
+	RpcProjects,
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc/rpc-types.ts";
