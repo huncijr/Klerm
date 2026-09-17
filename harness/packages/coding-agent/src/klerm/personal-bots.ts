@@ -3,7 +3,6 @@ import {
 	CODING_HARNESS_KINDS,
 	type CodingHarnessEffort,
 	type CodingHarnessKind,
-	type CodingHarnessRole,
 } from "./coding-harness-setup.ts";
 import { isKlermProfileFace, type KlermProfileFace } from "./profiles.ts";
 
@@ -17,7 +16,7 @@ export interface PersonalBot {
 	profileId: string;
 	harness: CodingHarnessKind;
 	model?: string;
-	role: CodingHarnessRole;
+	role: "planner";
 	effort: CodingHarnessEffort;
 	enabled: boolean;
 	createdSequence: number;
@@ -58,7 +57,7 @@ export const DEFAULT_PERSONAL_BOTS: PersonalBot[] = [
 		face: "bear",
 		profileId: "builder",
 		harness: "klerm",
-		role: "builder",
+		role: "planner",
 		effort: "high",
 		enabled: false,
 		createdSequence: 3,
@@ -88,7 +87,7 @@ function normalizeBot(value: unknown): PersonalBot | undefined {
 		profileId,
 		harness: bot.harness as CodingHarnessKind,
 		...(model ? { model } : {}),
-		role: bot.role,
+		role: "planner",
 		effort: bot.effort as CodingHarnessEffort,
 		enabled: bot.enabled && Boolean(model),
 		createdSequence,

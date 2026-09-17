@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { CodingHarnessKind, CodingHarnessRole } from "./coding-harness-setup.ts";
+import type { CodingHarnessKind } from "./coding-harness-setup.ts";
 import type { PersonalBot } from "./personal-bots.ts";
 
 export interface PersonalBotChatMessage {
@@ -11,6 +11,13 @@ export interface PersonalBotChatMessage {
 	timestamp: string;
 }
 
+export interface PersonalBotConversationSummary {
+	text: string;
+	updatedAt: string;
+	sourceMessageCount: number;
+	digest: string;
+}
+
 export interface PersonalBotConversation {
 	version: 1;
 	id: string;
@@ -18,9 +25,12 @@ export interface PersonalBotConversation {
 	cwd: string;
 	harness: CodingHarnessKind;
 	model: string;
-	role: CodingHarnessRole;
+	role: "planner";
 	nativeSessionId?: string;
-	status: "idle" | "running" | "failed";
+	sessionContextDigest?: string;
+	peerSummaryDigest?: string;
+	summary?: PersonalBotConversationSummary;
+	status: "idle" | "running" | "summarizing" | "failed";
 	eventSequence: number;
 	messages: PersonalBotChatMessage[];
 	updatedAt: string;
@@ -32,7 +42,7 @@ export interface PersonalBotConversationEvent {
 	sequence: number;
 	conversationId: string;
 	botId: string;
-	event: "PROMPT_ACCEPTED" | "PROMPT_COMPLETED" | "PROMPT_FAILED" | "CONVERSATION_RESET";
+	event: "PROMPT_ACCEPTED" | "PROMPT_COMPLETED" | "PROMPT_FAILED" | "SUMMARY_UPDATED" | "CONVERSATION_RESET";
 	harness: CodingHarnessKind;
 	model: string;
 	reason: string;
@@ -75,7 +85,11 @@ export async function loadPersonalBotConversation(
 		) {
 			return createPersonalBotConversation(bot, cwd);
 		}
-		return { ...parsed, status: parsed.status === "running" ? "failed" : parsed.status };
+		return {
+			...parsed,
+			role: "planner",
+			status: parsed.status === "running" || parsed.status === "summarizing" ? "failed" : parsed.status,
+		};
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return createPersonalBotConversation(bot, cwd);
 		throw error;

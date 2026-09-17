@@ -344,7 +344,7 @@ export interface PersonalBot {
 	profileId: string;
 	harness: CodingHarnessKind;
 	model?: string;
-	role: WorkerRole;
+	role: "planner";
 	effort: ThinkingLevel;
 	enabled: boolean;
 	createdSequence: number;
@@ -370,9 +370,17 @@ export interface PersonalBotConversation {
 	cwd: string;
 	harness: CodingHarnessKind;
 	model: string;
-	role: WorkerRole;
+	role: "planner";
 	nativeSessionId?: string;
-	status: "idle" | "running" | "failed";
+	sessionContextDigest?: string;
+	peerSummaryDigest?: string;
+	summary?: {
+		text: string;
+		updatedAt: string;
+		sourceMessageCount: number;
+		digest: string;
+	};
+	status: "idle" | "running" | "summarizing" | "failed";
 	eventSequence: number;
 	messages: PersonalBotChatMessage[];
 	updatedAt: string;

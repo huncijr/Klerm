@@ -21,10 +21,19 @@ describe("Personal Bot registry", () => {
 
 	test("ships three stable disabled defaults", () => {
 		expect(normalizePersonalBotRegistry(undefined).bots).toMatchObject([
-			{ id: "bot-scout", name: "Scout", profileId: "scout", enabled: false },
-			{ id: "bot-sage", name: "Sage", profileId: "sage", enabled: false },
-			{ id: "bot-builder", name: "Builder", profileId: "builder", enabled: false },
+			{ id: "bot-scout", name: "Scout", profileId: "scout", role: "planner", enabled: false },
+			{ id: "bot-sage", name: "Sage", profileId: "sage", role: "planner", enabled: false },
+			{ id: "bot-builder", name: "Builder", profileId: "builder", role: "planner", enabled: false },
 		]);
+	});
+
+	test("migrates existing builder bots to discussion-only planner bots", () => {
+		const registry = normalizePersonalBotRegistry({
+			version: 1,
+			defaultsInitialized: true,
+			bots: [{ ...normalizePersonalBotRegistry(undefined).bots[0], role: "builder" }],
+		});
+		expect(registry.bots[0]?.role).toBe("planner");
 	});
 
 	test("persists validated bot updates and preserves creation order", async () => {
@@ -89,11 +98,15 @@ describe("Personal Bot registry", () => {
 			text: "Map the repository.",
 			timestamp: "2026-09-17T00:00:00.000Z",
 		});
+		(conversation as unknown as { role: string }).role = "builder";
+		conversation.status = "summarizing";
 		await savePersonalBotConversation(agentDir, conversation);
 
 		await expect(loadPersonalBotConversation(agentDir, bot, cwd)).resolves.toMatchObject({
 			id: conversation.id,
 			botId: "bot-scout",
+			role: "planner",
+			status: "failed",
 			messages: [{ role: "user", text: "Map the repository." }],
 		});
 		for (const sequence of [1, 2]) {

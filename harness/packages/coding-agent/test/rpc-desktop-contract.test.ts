@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import type {
@@ -294,6 +295,7 @@ describe("Klerm desktop RPC contract", () => {
 							"workspace_files_changed",
 							"bash_execution_update",
 							"personal_bot_conversation_changed",
+							"personal_bot_summary_updated",
 						]),
 					},
 					state: { cwd: expect.any(String) },
@@ -396,6 +398,222 @@ describe("Klerm desktop RPC contract", () => {
 						{ role: "assistant", text: "Independent bot reply." },
 					],
 				},
+			});
+
+			const klermModel = harness.getModel();
+			const klermModelRef = `${klermModel.provider}/${klermModel.id}`;
+			const sharedMessageCount = harness.session.messages.length;
+			harness.setResponses([
+				fauxAssistantMessage("Independent Klerm reply."),
+				fauxAssistantMessage("Decisions: use the Klerm model.\nNext action: continue the discussion."),
+			]);
+			expect(
+				await send({
+					id: "personal-bot-enable-klerm",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-sage",
+						name: "Sage",
+						face: "owl",
+						profileId: "sage",
+						harness: "klerm",
+						model: klermModelRef,
+						role: "planner",
+						effort: "medium",
+						enabled: true,
+						createdSequence: 2,
+					},
+				}),
+			).toMatchObject({ success: true });
+			expect(
+				await send({
+					id: "personal-bot-prompt-klerm",
+					type: "prompt_personal_bot",
+					botId: "bot-sage",
+					message: "Use the configured Klerm model",
+				}),
+			).toMatchObject({ success: true, data: { botId: "bot-sage" } });
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "personal-bot-conversation-klerm",
+					type: "get_personal_bot_conversation",
+					botId: "bot-sage",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: {
+						status: "idle",
+						sessionContextDigest: expect.any(String),
+						summary: expect.objectContaining({
+							text: "Decisions: use the Klerm model.\nNext action: continue the discussion.",
+							digest: expect.any(String),
+						}),
+						messages: [
+							{ role: "user", text: "Use the configured Klerm model" },
+							{ role: "assistant", text: "Independent Klerm reply." },
+						],
+					},
+				});
+			});
+			expect(parseOutputLines()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "personal_bot_summary_updated",
+						conversation: expect.objectContaining({ botId: "bot-sage" }),
+					}),
+				]),
+			);
+			expect(harness.session.messages).toHaveLength(sharedMessageCount);
+			expect(
+				await send({
+					id: "personal-bot-profile-update",
+					type: "upsert_klerm_profile",
+					profile: {
+						id: "sage",
+						name: "Sage",
+						face: "owl",
+						level: 4,
+						behaviour: "Analyze previous coding sessions carefully.",
+						workPlan: "Identify decisions, risks, and next steps.",
+						planMode: "Remain read-only and discussion-focused.",
+						buildMode: "",
+						memoryFormat: "md",
+						memory: "",
+						readme: "",
+					},
+				}),
+			).toMatchObject({
+				success: true,
+				data: {
+					profiles: { profiles: expect.arrayContaining([expect.objectContaining({ id: "sage", level: 4 })]) },
+				},
+			});
+			harness.setResponses([
+				fauxAssistantMessage("Updated profile reply."),
+				fauxAssistantMessage("Decisions: profile updated.\nNext action: continue analysis."),
+			]);
+			expect(
+				await send({
+					id: "personal-bot-prompt-updated-profile",
+					type: "prompt_personal_bot",
+					botId: "bot-sage",
+					message: "Continue with the updated profile",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "personal-bot-conversation-updated-profile",
+					type: "get_personal_bot_conversation",
+					botId: "bot-sage",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: {
+						status: "idle",
+						messages: [
+							{ role: "user", text: "Use the configured Klerm model" },
+							{ role: "assistant", text: "Independent Klerm reply." },
+							{ role: "user", text: "Continue with the updated profile" },
+							{ role: "assistant", text: "Updated profile reply." },
+						],
+					},
+				});
+			});
+			expect(
+				await send({
+					id: "personal-bot-model-settings-update",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-sage",
+						name: "Sage",
+						face: "owl",
+						profileId: "sage",
+						harness: "klerm",
+						model: klermModelRef,
+						role: "planner",
+						effort: "high",
+						enabled: true,
+						createdSequence: 2,
+					},
+				}),
+			).toMatchObject({ success: true });
+			harness.setResponses([
+				fauxAssistantMessage("Updated reasoning reply."),
+				fauxAssistantMessage("Decisions: reasoning updated.\nNext action: continue analysis."),
+			]);
+			expect(
+				await send({
+					id: "personal-bot-prompt-updated-model-settings",
+					type: "prompt_personal_bot",
+					botId: "bot-sage",
+					message: "Continue with updated reasoning",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "personal-bot-conversation-updated-model-settings",
+					type: "get_personal_bot_conversation",
+					botId: "bot-sage",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: {
+						status: "idle",
+						messages: expect.arrayContaining([
+							expect.objectContaining({ role: "user", text: "Continue with updated reasoning" }),
+							expect.objectContaining({ role: "assistant", text: "Updated reasoning reply." }),
+						]),
+					},
+				});
+			});
+			expect(
+				await send({
+					id: "personal-bot-enable-peer",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-builder",
+						name: "Builder",
+						face: "bear",
+						profileId: "builder",
+						harness: "klerm",
+						model: klermModelRef,
+						role: "planner",
+						effort: "medium",
+						enabled: true,
+						createdSequence: 3,
+					},
+				}),
+			).toMatchObject({ success: true });
+			harness.setResponses([
+				fauxAssistantMessage("Peer-aware reply."),
+				fauxAssistantMessage("Decisions: reviewed peer context.\nNext action: compare findings."),
+			]);
+			expect(
+				await send({
+					id: "personal-bot-prompt-peer-aware",
+					type: "prompt_personal_bot",
+					botId: "bot-builder",
+					message: "Review what the other bot discussed",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "personal-bot-conversation-peer-aware",
+					type: "get_personal_bot_conversation",
+					botId: "bot-builder",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: {
+						status: "idle",
+						peerSummaryDigest: expect.any(String),
+						summary: expect.objectContaining({ text: expect.stringContaining("reviewed peer context") }),
+						messages: [
+							{ role: "user", text: "Review what the other bot discussed" },
+							{ role: "assistant", text: "Peer-aware reply." },
+						],
+					},
+				});
 			});
 
 			const addedBot = await send({

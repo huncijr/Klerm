@@ -47,6 +47,7 @@
 		ImageAttachment,
 		JsonObject,
 		KlermConfig,
+		KlermProfile,
 		LocalRuntime,
 		McpServerUpdate,
 		McpStatus,
@@ -1081,7 +1082,8 @@
 
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
-			case "personal_bot_conversation_changed": {
+			case "personal_bot_conversation_changed":
+			case "personal_bot_summary_updated": {
 				const conversation = event.conversation as PersonalBotConversation | undefined;
 				if (conversation && typeof conversation.botId === "string") {
 					personalBotConversations = { ...personalBotConversations, [conversation.botId]: conversation };
@@ -1567,6 +1569,20 @@
 		}
 	}
 
+	async function savePersonalBotProfile(profile: KlermProfile): Promise<boolean> {
+		if (personalBotBusy || !supportsCommand("upsert_klerm_profile")) return false;
+		personalBotBusy = true;
+		try {
+			desktopSettings = await bridge.send<DesktopSettings>("upsert_klerm_profile", { profile });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			personalBotBusy = false;
+		}
+	}
+
 	async function deletePersonalBot(bot: PersonalBot): Promise<void> {
 		if (personalBotBusy || !supportsCommand("delete_personal_bot") || !window.confirm(`Delete ${bot.name}?`)) return;
 		personalBotBusy = true;
@@ -1607,21 +1623,6 @@
 		if (!supportsCommand("abort_personal_bot")) return;
 		try {
 			await bridge.send("abort_personal_bot", { botId });
-		} catch (error) {
-			showError(toError(error).message);
-		}
-	}
-
-	async function resetPersonalBotConversation(botId: string): Promise<void> {
-		if (
-			!supportsCommand("reset_personal_bot_conversation") ||
-			!window.confirm("Start a new chat? The current transcript will be replaced.")
-		) {
-			return;
-		}
-		try {
-			const conversation = await bridge.send<PersonalBotConversation>("reset_personal_bot_conversation", { botId });
-			personalBotConversations = { ...personalBotConversations, [botId]: conversation };
 		} catch (error) {
 			showError(toError(error).message);
 		}
@@ -2709,10 +2710,10 @@
 				onclose={() => (workspaceView = undefined)}
 				onselect={(botId) => void loadPersonalBotConversation(botId)}
 				onsave={savePersonalBot}
+				onprofilesave={savePersonalBotProfile}
 				ondelete={deletePersonalBot}
 				onprompt={promptPersonalBot}
 				onabort={abortPersonalBot}
-				onreset={resetPersonalBotConversation}
 			/>
 		{:else if workspaceView === "kanban"}
 			<WorkspacePlannedView onclose={() => (workspaceView = undefined)} />
