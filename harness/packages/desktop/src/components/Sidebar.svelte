@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, MessageCircle, Pencil, Plus, RefreshCw, Settings, Trash2 } from "@lucide/svelte";
+	import { ChevronDown, Pencil, Plus, Settings, Trash2 } from "@lucide/svelte";
 	import {
 		MCP_COLOR_BG_CSS,
 		MCP_COLOR_CSS,
@@ -16,6 +16,7 @@
 		sessions,
 		projects,
 		defaultProjectId,
+		activeProjectId,
 		activeSessionToken,
 		mcpStatus,
 		mcpBusy,
@@ -27,11 +28,10 @@
 		onrename,
 		ondelete,
 		oncreateproject,
+		onopenproject,
 		onrenameproject,
 		ondeleteproject,
 		onmovesession,
-		onrefreshproject,
-		onaskproject,
 		onexpand,
 		onrefreshmcp,
 		onreloadmcp,
@@ -42,6 +42,7 @@
 		sessions: DesktopSession[];
 		projects: DesktopProject[];
 		defaultProjectId: string;
+		activeProjectId?: string;
 		activeSessionToken: string;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
@@ -53,11 +54,10 @@
 		onrename: (session: DesktopSession, name: string) => Promise<boolean>;
 		ondelete: (session: DesktopSession) => void;
 		oncreateproject: (name: string) => void;
+		onopenproject: (project: DesktopProject) => void;
 		onrenameproject: (project: DesktopProject, name: string) => void;
 		ondeleteproject: (project: DesktopProject) => void;
 		onmovesession: (session: DesktopSession, projectId: string | undefined) => void;
-		onrefreshproject: (project: DesktopProject) => void;
-		onaskproject: (project: DesktopProject, question: string) => Promise<boolean>;
 		onexpand: () => void;
 		onrefreshmcp: () => void;
 		onreloadmcp: () => void;
@@ -73,9 +73,6 @@
 	let renamingProjectValue = $state("");
 	let projectMenuId = $state<string | undefined>();
 	let projectMenuEl: HTMLDivElement | undefined = $state();
-	let askingProjectId = $state<string | undefined>();
-	let projectQuestion = $state("");
-	let projectQuestionBusy = $state(false);
 
 	const projectSessions = $derived.by(() => {
 		const grouped = new Map<string, DesktopSession[]>();
@@ -134,17 +131,6 @@
 
 	function sessionsForPicker(project: DesktopProject): DesktopSession[] {
 		return sessions.filter((session) => session.projectId !== project.id);
-	}
-
-	async function submitProjectQuestion(project: DesktopProject): Promise<void> {
-		const question = projectQuestion.trim();
-		if (!question || projectQuestionBusy) return;
-		projectQuestionBusy = true;
-		if (await onaskproject(project, question)) {
-			projectQuestion = "";
-			askingProjectId = undefined;
-		}
-		projectQuestionBusy = false;
 	}
 
 	let mcpPopoverOpen = $state(false);
@@ -545,7 +531,7 @@
 						/>
 					{/if}
 					{#each projects as project (project.id)}
-						<div class="group mb-0.5">
+						<div class={`group mb-0.5 rounded ${activeProjectId === project.id ? "bg-[#111a1c]" : ""}`}>
 							<div class="flex items-center gap-1">
 								<button
 									type="button"
@@ -571,7 +557,7 @@
 										onblur={() => commitProjectRename(project)}
 									/>
 								{:else}
-									<button type="button" class="min-w-0 flex-1 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-[11px] font-semibold text-[#c5ced3] hover:text-white" onclick={() => toggleProject(project)}>
+									<button type="button" class={`min-w-0 flex-1 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-[11px] font-semibold hover:text-white ${activeProjectId === project.id ? "text-accent" : "text-[#c5ced3]"}`} onclick={() => onopenproject(project)}>
 										{project.name}
 									</button>
 								{/if}
@@ -618,17 +604,6 @@
 							</div>
 							{#if !collapsedProjectIds[project.id]}
 								<div class="mt-0.5 mb-1 ml-2.5 border-l border-[#1c242b] pl-1">
-									<div class="mb-1 flex items-center gap-1 px-2">
-										<button type="button" class="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[7px] text-[#7d8991] hover:bg-[#151d23] hover:text-white" onclick={() => onrefreshproject(project)}><RefreshCw size={9} /> Refresh summary</button>
-										<button type="button" class="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[7px] text-[#7d8991] hover:bg-[#151d23] hover:text-white" onclick={() => { askingProjectId = askingProjectId === project.id ? undefined : project.id; projectQuestion = ""; }}><MessageCircle size={9} /> Ask</button>
-									</div>
-									{#if project.summary}<p class="mx-2 mb-1 max-h-24 overflow-y-auto whitespace-pre-wrap rounded border border-[#202a31] bg-[#0a0f13] px-2 py-1.5 font-mono text-[8px] leading-[1.45] text-[#77858e] [scrollbar-width:thin]">{project.summary}</p>{/if}
-									{#if askingProjectId === project.id}
-										<form class="mx-2 mb-1 flex gap-1" onsubmit={(event) => { event.preventDefault(); void submitProjectQuestion(project); }}>
-											<input bind:value={projectQuestion} maxlength="2000" aria-label={`Ask ${project.name}`} placeholder="Ask across project sessions" class="h-7 min-w-0 flex-1 rounded border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white outline-0" />
-											<button type="submit" disabled={!projectQuestion.trim() || projectQuestionBusy} class="h-7 rounded bg-[#d7e7ff] px-2 font-mono text-[8px] text-[#091019] disabled:opacity-40">{projectQuestionBusy ? "..." : "Ask"}</button>
-										</form>
-									{/if}
 									{#each projectSessions.grouped.get(project.id) ?? [] as session (session.sessionToken)}
 										<SessionRow
 											{session}

@@ -1350,11 +1350,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		setup: RpcCodingHarnessSetup,
 		message: string,
 		mode: "work-together" | "prompt-together" = "work-together",
+		targetAgentId?: string,
 	): Promise<ActiveCodingHarnessBridge | undefined> => {
 		const roster = setup.runnableAgents.filter(
 			(agent) => agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),
 		);
-		const coordinator = roster[0];
+		const coordinator = targetAgentId ? roster.find((agent) => agent.agentId === targetAgentId) : roster[0];
 		if (!coordinator) return undefined;
 		const rankedPeers = selectCodingHarnessPeers(roster, coordinator.agentId);
 		const builder = mode === "prompt-together" ? rankedPeers[0] : undefined;
@@ -1370,15 +1371,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const sharedContext = sharedCodingHarnessContext(roster, profileState.sharedMemory);
 		const sharedContextDigest = crypto.createHash("sha256").update(sharedContext).digest("hex");
 		const peers =
-			mode === "prompt-together" ? rankedPeers : setup.slots.workTogetherEnabled === true ? rankedPeers : [];
+			mode === "prompt-together"
+				? rankedPeers
+				: targetAgentId
+					? []
+					: setup.slots.workTogetherEnabled === true
+						? rankedPeers
+						: [];
 		const delegationReason =
 			mode === "prompt-together"
 				? `Prompt Together assigned ${coordinator.agentId} as Planner, ${builder?.agentId} as Builder, and ${reviewers.length} Reviewer${reviewers.length === 1 ? "" : "s"}`
-				: roster.length < 2
-					? "Only one runnable external agent was available"
-					: setup.slots.workTogetherEnabled !== true
-						? "Work together was disabled for this prompt snapshot"
-						: `Scheduled ${peers.length} deterministic capability-ranked peer pass${peers.length === 1 ? "" : "es"}`;
+				: targetAgentId
+					? `User selected ${coordinator.agentId} for this prompt`
+					: roster.length < 2
+						? "Only one runnable external agent was available"
+						: setup.slots.workTogetherEnabled !== true
+							? "Work together was disabled for this prompt snapshot"
+							: `Scheduled ${peers.length} deterministic capability-ranked peer pass${peers.length === 1 ? "" : "es"}`;
 		const timestamp = new Date().toISOString();
 		const taskId = `task-${crypto.createHash("sha256").update(`${timestamp}\n${message}`).digest("hex").slice(0, 16)}`;
 		const agents = new Map(setup.slots.agents.map((agent) => [agent.id, { ...agent, tools: [...agent.tools] }]));
@@ -1433,7 +1442,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				reason:
 					mode === "prompt-together"
 						? `${coordinator.agentId} starts as the temporary Prompt Together Planner`
-						: `${coordinator.agentId} is the first runnable external coordinator`,
+						: targetAgentId
+							? `${coordinator.agentId} was selected by the user for this prompt`
+							: `${coordinator.agentId} is the first runnable external coordinator`,
 				status: "assigned",
 			},
 			coordinator,
@@ -3065,6 +3076,33 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(id, "prompt", normalizedImages.message, "INVALID_IMAGE_ATTACHMENT");
 				}
 				const codingHarnessSetup = await getCodingHarnessSetup();
+				const targetAgent = command.targetAgentId
+					? codingHarnessSetup.runnableAgents.find((agent) => agent.agentId === command.targetAgentId)
+					: undefined;
+				const directKlermTarget = command.targetAgentId
+					? codingHarnessSetup.slots.agents.find(
+							(agent) =>
+								agent.id === command.targetAgentId &&
+								agent.kind === "klerm" &&
+								agent.enabled &&
+								(agent.id === "agent1" || agent.id === "agent2"),
+						)
+					: undefined;
+				if (command.targetAgentId && !targetAgent && !directKlermTarget) {
+					return error(id, "prompt", "The selected agent is not runnable.", "AGENT_UNAVAILABLE");
+				}
+				if (
+					targetAgent?.harness === "klerm" &&
+					targetAgent.agentId !== "agent1" &&
+					targetAgent.agentId !== "agent2"
+				) {
+					return error(
+						id,
+						"prompt",
+						"Direct Klerm prompts currently support Agent 1 and Agent 2.",
+						"AGENT_UNAVAILABLE",
+					);
+				}
 				if (session.messages.length === 0) await assignCurrentSessionToDefaultProject();
 				appendAiDebugTrace("USER_PROMPT", {
 					message: command.message,
@@ -3077,6 +3115,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					})),
 					routingState: session.klermRouting?.routingState,
 					runnableAgents: codingHarnessSetup.runnableAgents,
+					targetAgentId: targetAgent?.agentId ?? directKlermTarget?.id,
 					excludedAgents: codingHarnessSetup.excludedAgents,
 					klermContext: {
 						systemPrompt: session.systemPrompt,
@@ -3088,11 +3127,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						})),
 					},
 				});
-				if (codingHarnessSetup.slots.externalHarnessesEnabled) {
+				if (codingHarnessSetup.slots.externalHarnessesEnabled && !directKlermTarget) {
 					if (codingHarnessSetup.blockingReason) {
 						return error(id, "prompt", codingHarnessSetup.blockingReason, "CODING_HARNESS_UNAVAILABLE");
 					}
-					if (codingHarnessSetup.runnableAgents.some((agent) => agent.harness !== "klerm")) {
+					if (
+						(targetAgent && targetAgent.harness !== "klerm") ||
+						(!targetAgent && codingHarnessSetup.runnableAgents.some((agent) => agent.harness !== "klerm"))
+					) {
 						if ((normalizedImages.images?.length ?? 0) > 0) {
 							return error(
 								id,
@@ -3107,7 +3149,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						}
 						const userMessage: UserMessage = { role: "user", content: command.message, timestamp: Date.now() };
 						session.sessionManager.appendMessage(userMessage);
-						await startExternalCodingHarnessPrompt(codingHarnessSetup, command.message);
+						await startExternalCodingHarnessPrompt(
+							codingHarnessSetup,
+							command.message,
+							"work-together",
+							targetAgent?.agentId,
+						);
 						output(success(id, "prompt"));
 						return undefined;
 					}
@@ -3139,6 +3186,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						mcpMentions: command.mcpMentions,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
+						routingOverride:
+							targetAgent?.harness === "klerm" || directKlermTarget
+								? (targetAgent?.agentId ?? directKlermTarget?.id) === "agent1"
+									? "local"
+									: "frontier"
+								: undefined,
 						preflightResult: (didSucceed) => {
 							if (didSucceed) {
 								if (command.displayMessage && command.displayMessage !== command.message) {

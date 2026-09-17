@@ -291,6 +291,7 @@ export type RpcCommand =
 			type: "prompt";
 			message: string;
 			displayMessage?: string;
+			targetAgentId?: string;
 			mcpMentions?: McpPromptMention[];
 			images?: ImageContent[];
 			streamingBehavior?: "steer" | "followUp";

@@ -78,6 +78,7 @@
 	import ConfirmDialog from "./components/ConfirmDialog.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
 	import Feed from "./components/Feed.svelte";
+	import ProjectWorkspace from "./components/ProjectWorkspace.svelte";
 	import SettingsView from "./components/SettingsView.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
 	import Splash from "./components/Splash.svelte";
@@ -109,6 +110,8 @@
 	let sessions = $state<DesktopSession[]>([]);
 	let projects = $state<DesktopProject[]>([]);
 	let defaultProjectId = $state("");
+	let selectedProjectId = $state<string | undefined>(undefined);
+	let projectBusy = $state(false);
 	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
@@ -219,6 +222,25 @@
 			})) ?? [{ value: "klerm", label: "Klerm" }],
 	);
 	const configuredHarnessAgents = $derived(codingHarnessSetup?.slots.agents ?? []);
+	const projectPromptAgents = $derived.by(() => {
+		const internal = configuredHarnessAgents.flatMap((agent) => {
+			if (!agent.enabled || agent.kind !== "klerm" || (agent.id !== "agent1" && agent.id !== "agent2")) return [];
+			const model =
+				agent.model ?? (agent.id === "agent1" ? currentConfig?.localModel : currentConfig?.frontierModel);
+			return model ? [{ agentId: agent.id, harness: agent.kind, model, effort: agent.effort }] : [];
+		});
+		const external =
+			codingHarnessSetup?.runnableAgents
+				.filter((agent) => agent.harness !== "klerm")
+				.map(({ agentId, harness, model, effort }) => ({ agentId, harness, model, effort })) ?? [];
+		return [...internal, ...external].sort((left, right) =>
+			left.agentId.localeCompare(right.agentId, undefined, { numeric: true }),
+		);
+	});
+	const selectedProject = $derived(projects.find((project) => project.id === selectedProjectId));
+	const selectedProjectSessions = $derived(
+		selectedProjectId ? sessions.filter((session) => session.projectId === selectedProjectId) : [],
+	);
 	const firstHarnessAgent = $derived(configuredHarnessAgents[0]);
 	const secondHarnessAgent = $derived(configuredHarnessAgents[1]);
 	const workTogetherVisible = $derived((codingHarnessSetup?.runnableAgents.length ?? 0) >= 2);
@@ -303,6 +325,9 @@
 	function applyProjects(result: DesktopProjects): void {
 		projects = result.projects;
 		defaultProjectId = result.defaultProjectId;
+		if (selectedProjectId && !result.projects.some((project) => project.id === selectedProjectId)) {
+			selectedProjectId = undefined;
+		}
 	}
 
 	async function refreshProjects(): Promise<void> {
@@ -379,7 +404,8 @@
 	}
 
 	async function refreshProjectSummary(project: DesktopProject): Promise<void> {
-		if (!supportsCommand("refresh_project_summary")) return;
+		if (!supportsCommand("refresh_project_summary") || projectBusy) return;
+		projectBusy = true;
 		try {
 			const result = await bridge.send<{
 				projects: DesktopProjects;
@@ -389,12 +415,28 @@
 			applyProjects(result.projects);
 		} catch (error) {
 			showError(toError(error).message);
+		} finally {
+			projectBusy = false;
 		}
 	}
 
-	async function askProject(project: DesktopProject, question: string): Promise<boolean> {
-		if (!supportsCommand("ask_project") || interactionActive) return false;
+	async function askProject(
+		project: DesktopProject,
+		question: string,
+		targetAgentId: string,
+		effort: ThinkingLevel,
+	): Promise<boolean> {
+		if (!supportsCommand("ask_project") || interactionActive || projectBusy) return false;
+		const destination =
+			sessions.find((session) => session.projectId === project.id && session.sessionToken === lastState?.sessionFile) ??
+			sessions.find((session) => session.projectId === project.id);
+		if (!destination) {
+			showError("Add a session to this project before asking a project-wide question.");
+			return false;
+		}
+		projectBusy = true;
 		try {
+			if (!(await setCodingHarnessAgentEffort(targetAgentId, effort))) return false;
 			const result = await bridge.send<{ prompt: string; extracts: ProjectSessionExtract[] }>("ask_project", {
 				projectId: project.id,
 				question,
@@ -403,10 +445,13 @@
 				showError("This project has no readable session messages yet.");
 				return false;
 			}
-			return sendMessage(result.prompt, [], "prompt", question);
+			if (destination.sessionToken !== lastState?.sessionFile && !(await switchSession(destination))) return false;
+			return sendMessage(result.prompt, [], "prompt", question, targetAgentId);
 		} catch (error) {
 			showError(toError(error).message);
 			return false;
+		} finally {
+			projectBusy = false;
 		}
 	}
 
@@ -489,7 +534,7 @@
 	const MIN_MAIN_COL = 280;
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
-	const filesColPx = $derived(!settingsOpen && workspacePanelOpen ? filesWidth : 0);
+	const filesColPx = $derived(!settingsOpen && !selectedProject && workspacePanelOpen ? filesWidth : 0);
 	const shellColumns = $derived(
 		settingsOpen && settingsFullscreen
 			? "grid-cols-[minmax(0,1fr)]"
@@ -533,7 +578,7 @@
 	});
 
 	const workspaceRows = $derived(
-		settingsOpen
+		settingsOpen || selectedProject
 			? "grid-rows-[minmax(0,1fr)]"
 			: bottomPanelVisible
 				? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
@@ -1567,12 +1612,12 @@
 		if (id === "agent2") await assignProfile("frontier", profileId);
 	}
 
-	async function setCodingHarnessAgentEffort(id: string, effort: ThinkingLevel): Promise<void> {
-		if (!(await updateCodingHarnessAgent(id, { effort }))) return;
-		if (activeHarnessAgentId !== id || !currentRoutingState) return;
-		if (currentRoutingState.lane === "local" || currentRoutingState.lane === "frontier") {
-			await applyThinkingLevel(currentRoutingState.lane, effort);
-		}
+	async function setCodingHarnessAgentEffort(id: string, effort: ThinkingLevel): Promise<boolean> {
+		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
+		if (!agent || !(await updateCodingHarnessAgent(id, { effort }))) return false;
+		if (agent.kind === "klerm" && id === "agent1") await applyThinkingLevel("local", effort);
+		if (agent.kind === "klerm" && id === "agent2") await applyThinkingLevel("frontier", effort);
+		return true;
 	}
 
 	async function setCodingHarnessAgentRole(id: string, role: "planner" | "builder"): Promise<void> {
@@ -1906,8 +1951,8 @@
 		}
 	}
 
-	async function switchSession(session: DesktopSession): Promise<void> {
-		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return;
+	async function switchSession(session: DesktopSession): Promise<boolean> {
+		if (taskActive || terminalBusy || configBusy || sessionTransitionActive || !backendReady) return false;
 		sessionTransitionActive = true;
 		clearError();
 		try {
@@ -1915,7 +1960,7 @@
 			const transition = await bridge.send<{ cancelled: boolean }>("switch_session", {
 				sessionPath: session.sessionToken,
 			});
-			if (transition.cancelled) return;
+			if (transition.cancelled) return false;
 			const [entries, state] = await Promise.all([
 				bridge.send<{ entries: SessionEntryRecord[]; leafId: string | null }>("get_entries"),
 				bridge.send<SessionState>("get_state"),
@@ -1932,8 +1977,11 @@
 			await refreshWorkspace();
 			void refreshSessions();
 			sidebarOpen = false;
+			selectedProjectId = undefined;
+			return true;
 		} catch (error) {
 			showError(toError(error).message);
+			return false;
 		} finally {
 			sessionTransitionActive = false;
 		}
@@ -2245,6 +2293,7 @@
 			await refreshWorkspace();
 			await Promise.all([refreshSessions(), refreshProjects()]);
 			sidebarOpen = false;
+			selectedProjectId = undefined;
 		} catch (error) {
 			showError(toError(error).message);
 		} finally {
@@ -2291,6 +2340,7 @@
 		images: ImageAttachment[] = [],
 		mode: "prompt" | "prompt_together" = "prompt",
 		displayText = text,
+		targetAgentId?: string,
 	): Promise<boolean> {
 		if (
 			(!text && images.length === 0) ||
@@ -2328,6 +2378,7 @@
 				displayMessage: displayText,
 				...(mode === "prompt" ? { mcpMentions: preparedPrompt.mentions } : {}),
 				...(mode === "prompt" && rpcImages ? { images: rpcImages } : {}),
+				...(mode === "prompt" && targetAgentId ? { targetAgentId } : {}),
 			});
 			if (draft.trim() === text) draft = "";
 			attachments = [];
@@ -2399,6 +2450,7 @@
 				settingsOpen = false;
 				settingsFullscreen = false;
 			}
+			else if (selectedProjectId) selectedProjectId = undefined;
 			else if (sidebarOpen) sidebarOpen = false;
 			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
 		};
@@ -2426,6 +2478,7 @@
 		{sessions}
 		{projects}
 		{defaultProjectId}
+		activeProjectId={selectedProjectId}
 		activeSessionToken={lastState?.sessionFile ?? ""}
 		{mcpStatus}
 		{mcpBusy}
@@ -2437,11 +2490,15 @@
 		onrename={renameSession}
 		ondelete={(session) => (pendingDelete = session)}
 		oncreateproject={(name) => void createProject(name)}
+		onopenproject={(project) => {
+			selectedProjectId = project.id;
+			settingsOpen = false;
+			settingsFullscreen = false;
+			sidebarOpen = false;
+		}}
 		onrenameproject={(project, name) => void renameProject(project, name)}
 		ondeleteproject={(project) => void deleteProject(project)}
 		onmovesession={(session, projectId) => void moveSessionToProject(session, projectId)}
-		onrefreshproject={(project) => void refreshProjectSummary(project)}
-		onaskproject={askProject}
 		onexpand={() => (sessionsExpanded = true)}
 		onrefreshmcp={() => void refreshMcpStatus()}
 		onreloadmcp={() => void reloadMcpServers()}
@@ -2463,7 +2520,7 @@
 		onpointerdown={startSessionResize}
 	></button>
 	{/if}
-	{#if workspacePanelOpen}
+	{#if workspacePanelOpen && !selectedProject}
 		<button
 			type="button"
 			aria-label="Resize file changes"
@@ -2480,7 +2537,7 @@
 			onclick={() => (sidebarOpen = false)}
 		></button>
 	{/if}
-	{#if workspacePanelOpen && !settingsOpen}
+	{#if workspacePanelOpen && !settingsOpen && !selectedProject}
 		<button
 			type="button"
 			aria-label="Close file changes"
@@ -2533,6 +2590,24 @@
 			{:else}
 				<p class="px-7 py-6 font-mono text-[11px] text-[#8b969e]">Loading settings...</p>
 			{/if}
+		{:else if selectedProject}
+			<ProjectWorkspace
+				project={selectedProject}
+				sessions={selectedProjectSessions}
+				{projects}
+				agents={projectPromptAgents}
+				activeSessionToken={lastState?.sessionFile ?? ""}
+				busy={projectBusy || interactionActive}
+				{sidebarOpen}
+				ontogglesidebar={() => (sidebarOpen = !sidebarOpen)}
+				onclose={() => (selectedProjectId = undefined)}
+				onrefresh={() => refreshProjectSummary(selectedProject)}
+				onask={(question, agentId, effort) => askProject(selectedProject, question, agentId, effort)}
+				onswitch={(session) => void switchSession(session)}
+				onrename={renameSession}
+				ondelete={(session) => (pendingDelete = session)}
+				onmove={(session, projectId) => void moveSessionToProject(session, projectId)}
+			/>
 		{:else}
 			<Topbar
 				title={sessionTitle}
@@ -2727,7 +2802,7 @@
 		{/if}
 		{/if}
 	</main>
-	{#if workspacePanelOpen && !settingsOpen}
+	{#if workspacePanelOpen && !settingsOpen && !selectedProject}
 		<WorkspacePanel
 			bind:editDrafts={workspaceEditDrafts}
 			{workspace}

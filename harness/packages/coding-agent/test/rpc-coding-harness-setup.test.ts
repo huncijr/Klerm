@@ -164,6 +164,21 @@ describe("coding harness setup RPC", () => {
 					]),
 				},
 			});
+			const sessionPrompt = vi.spyOn(harness.session, "prompt").mockImplementation(async (_text, options) => {
+				options?.preflightResult?.(true);
+			});
+			const directKlermPrompt = await send({
+				id: "direct-klerm-prompt",
+				type: "prompt",
+				message: "use Agent 1",
+				targetAgentId: "agent1",
+			});
+			expect(directKlermPrompt).toMatchObject({ success: true });
+			expect(sessionPrompt).toHaveBeenCalledWith(
+				"use Agent 1",
+				expect.objectContaining({ routingOverride: "local", source: "rpc" }),
+			);
+			sessionPrompt.mockRestore();
 
 			const models = await send({
 				id: "models",
@@ -249,7 +264,19 @@ describe("coding harness setup RPC", () => {
 					sharedContextPreview: expect.stringMatching(/agent5: available; harness opencode/),
 				},
 			});
-			const nativePrompt = await send({ id: "native-prompt", type: "prompt", message: "use OpenCode" });
+			const unavailableTarget = await send({
+				id: "missing-target",
+				type: "prompt",
+				message: "do not reroute",
+				targetAgentId: "agent99",
+			});
+			expect(unavailableTarget).toMatchObject({ success: false, code: "AGENT_UNAVAILABLE" });
+			const nativePrompt = await send({
+				id: "native-prompt",
+				type: "prompt",
+				message: "use OpenCode",
+				targetAgentId: "agent5",
+			});
 			expect(nativePrompt).toMatchObject({ success: true });
 			await vi.waitFor(() =>
 				expect(opencodeAdapter.prompt).toHaveBeenCalledWith(
