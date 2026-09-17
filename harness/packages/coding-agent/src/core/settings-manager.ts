@@ -8,6 +8,12 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { type CodingHarnessSlots, normalizeCodingHarnessSlots } from "../klerm/coding-harness-setup.ts";
 import {
+	normalizePersonalBotRegistry,
+	type PersonalBot,
+	type PersonalBotRegistry,
+	validatePersonalBot,
+} from "../klerm/personal-bots.ts";
+import {
 	type KlermProfile,
 	type KlermProfileState,
 	normalizeProfile,
@@ -174,6 +180,7 @@ export interface Settings {
 	klermProfiles?: KlermProfileState;
 	codingHarnessSlots?: CodingHarnessSlots;
 	projectRegistry?: KlermProjectRegistry;
+	personalBots?: PersonalBotRegistry;
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -910,6 +917,40 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getPersonalBots(): PersonalBotRegistry {
+		return normalizePersonalBotRegistry(this.globalSettings.personalBots);
+	}
+
+	setPersonalBots(registry: PersonalBotRegistry): PersonalBotRegistry {
+		this.globalSettings.personalBots = normalizePersonalBotRegistry(registry);
+		this.markModified("personalBots");
+		this.save();
+		return this.getPersonalBots();
+	}
+
+	upsertPersonalBot(input: PersonalBot): PersonalBotRegistry {
+		const registry = this.getPersonalBots();
+		const profileIds = new Set(this.getKlermProfiles().profiles.map((profile) => profile.id));
+		const bot = validatePersonalBot(input, profileIds);
+		if (!bot) throw new Error("Invalid Personal Bot.");
+		const index = registry.bots.findIndex((candidate) => candidate.id === bot.id);
+		if (index >= 0) {
+			bot.createdSequence = registry.bots[index]!.createdSequence;
+			registry.bots[index] = bot;
+		} else {
+			if (registry.bots.length >= 20) throw new Error("Personal Bot limit reached.");
+			bot.createdSequence = Math.max(0, ...registry.bots.map((candidate) => candidate.createdSequence)) + 1;
+			registry.bots.push(bot);
+		}
+		return this.setPersonalBots(registry);
+	}
+
+	deletePersonalBot(id: string): PersonalBotRegistry {
+		const registry = this.getPersonalBots();
+		registry.bots = registry.bots.filter((bot) => bot.id !== id);
+		return this.setPersonalBots(registry);
+	}
+
 	getKlermProfiles(): KlermProfileState {
 		return normalizeProfileState(this.settings.klermProfiles);
 	}
@@ -987,6 +1028,9 @@ export class SettingsManager {
 	}
 
 	deleteKlermProfile(id: string): KlermProfileState {
+		if (this.getPersonalBots().bots.some((bot) => bot.profileId === id)) {
+			throw new Error("This profile is used by a Personal Bot.");
+		}
 		const next = this.getKlermProfiles();
 		next.profiles = next.profiles.filter((profile) => profile.id !== id);
 		if (next.localProfileId === id) next.localProfileId = undefined;

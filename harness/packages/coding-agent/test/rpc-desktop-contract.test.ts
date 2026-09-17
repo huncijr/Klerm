@@ -3,6 +3,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
+import type {
+	CodingHarnessAdapter,
+	CodingHarnessAdapterListener,
+	CodingHarnessSessionRef,
+} from "../src/klerm/coding-harness-adapter.ts";
 import type { KlermConfig } from "../src/klerm/config.ts";
 import type { KlermRoutingController } from "../src/klerm/router/runtime.ts";
 import type { KlermRoutingState } from "../src/klerm/router/types.ts";
@@ -177,9 +182,38 @@ describe("Klerm desktop RPC contract", () => {
 				levels: lane === "local" ? ["off", "low"] : ["low", "high"],
 			}));
 		const runtimeHost = createRuntimeHost(harness);
+		const adapterListeners = new Set<CodingHarnessAdapterListener>();
+		const fakeCodexAdapter: CodingHarnessAdapter = {
+			kind: "codex",
+			startSession: async (agent) => ({
+				id: `session-${agent.id}`,
+				agentId: agent.id,
+				harness: "codex",
+				model: agent.model ?? "",
+				role: agent.role,
+				nativeSessionId: `thread-${agent.id}`,
+			}),
+			prompt: async (adapterSession: CodingHarnessSessionRef) => {
+				for (const listener of adapterListeners) {
+					listener({ type: "message", agentId: adapterSession.agentId, text: "Independent bot reply." });
+					listener({ type: "settled", agentId: adapterSession.agentId, status: "completed" });
+				}
+			},
+			abort: async () => {},
+			closeSession: async () => {},
+			subscribe: (listener) => {
+				adapterListeners.add(listener);
+				return () => adapterListeners.delete(listener);
+			},
+		};
 
 		try {
 			void runRpcMode(runtimeHost, {
+				codingHarnessAdapters: new Map([["codex", fakeCodexAdapter]]),
+				personalBotStorageDir: join(harness.tempDir, "agent"),
+				discoverCodingHarnesses: async () => [
+					{ kind: "codex", available: true, builtin: false, adapterConnected: true, models: ["codex/test"] },
+				],
 				discoverLocalRuntimes: async () => [
 					{
 						providerId: "ollama",
@@ -217,6 +251,13 @@ describe("Klerm desktop RPC contract", () => {
 							"prompt_together",
 							"get_local_runtimes",
 							"get_projects",
+							"get_personal_bots",
+							"upsert_personal_bot",
+							"delete_personal_bot",
+							"get_personal_bot_conversation",
+							"prompt_personal_bot",
+							"abort_personal_bot",
+							"reset_personal_bot_conversation",
 							"create_project",
 							"ask_project",
 							"import_legacy_desktop_projects",
@@ -252,6 +293,7 @@ describe("Klerm desktop RPC contract", () => {
 							"auto_retry_end",
 							"workspace_files_changed",
 							"bash_execution_update",
+							"personal_bot_conversation_changed",
 						]),
 					},
 					state: { cwd: expect.any(String) },
@@ -281,6 +323,105 @@ describe("Klerm desktop RPC contract", () => {
 					profiles: { profiles: expect.arrayContaining([expect.objectContaining({ id: "scout" })]) },
 					shortcuts: expect.arrayContaining([expect.objectContaining({ action: "Send prompt" })]),
 				},
+			});
+
+			const personalBots = await send({ id: "personal-bots", type: "get_personal_bots" });
+			expect(personalBots).toMatchObject({
+				success: true,
+				data: {
+					version: 1,
+					bots: [
+						expect.objectContaining({ id: "bot-scout", profileId: "scout" }),
+						expect.objectContaining({ id: "bot-sage", profileId: "sage" }),
+						expect.objectContaining({ id: "bot-builder", profileId: "builder" }),
+					],
+				},
+			});
+			const botConversation = await send({
+				id: "personal-bot-conversation",
+				type: "get_personal_bot_conversation",
+				botId: "bot-scout",
+			});
+			expect(botConversation).toMatchObject({
+				success: true,
+				data: { botId: "bot-scout", status: "idle", messages: [] },
+			});
+			expect(
+				await send({
+					id: "personal-bot-prompt-disabled",
+					type: "prompt_personal_bot",
+					botId: "bot-scout",
+					message: "Hello",
+				}),
+			).toMatchObject({ success: false, code: "PERSONAL_BOT_UNAVAILABLE" });
+			expect(
+				await send({
+					id: "personal-bot-enable",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-scout",
+						name: "Scout",
+						face: "fox",
+						profileId: "scout",
+						harness: "codex",
+						model: "codex/test",
+						role: "planner",
+						effort: "medium",
+						enabled: true,
+						createdSequence: 1,
+					},
+				}),
+			).toMatchObject({ success: true });
+			expect(
+				await send({
+					id: "personal-bot-prompt",
+					type: "prompt_personal_bot",
+					botId: "bot-scout",
+					message: "Hello",
+				}),
+			).toMatchObject({ success: true, data: { botId: "bot-scout" } });
+			expect(
+				await send({
+					id: "personal-bot-conversation-updated",
+					type: "get_personal_bot_conversation",
+					botId: "bot-scout",
+				}),
+			).toMatchObject({
+				success: true,
+				data: {
+					status: "idle",
+					nativeSessionId: "thread-bot-scout",
+					messages: [
+						{ role: "user", text: "Hello" },
+						{ role: "assistant", text: "Independent bot reply." },
+					],
+				},
+			});
+
+			const addedBot = await send({
+				id: "personal-bot-add",
+				type: "upsert_personal_bot",
+				bot: {
+					id: "bot-reviewer",
+					name: "Reviewer",
+					face: "owl",
+					profileId: "sage",
+					harness: "klerm",
+					role: "planner",
+					effort: "high",
+					enabled: false,
+					createdSequence: 4,
+				},
+			});
+			expect(addedBot).toMatchObject({
+				success: true,
+				data: { bots: expect.arrayContaining([expect.objectContaining({ id: "bot-reviewer" })]) },
+			});
+			expect(
+				await send({ id: "personal-bot-delete", type: "delete_personal_bot", botId: "bot-reviewer" }),
+			).toMatchObject({
+				success: true,
+				data: { bots: expect.not.arrayContaining([expect.objectContaining({ id: "bot-reviewer" })]) },
 			});
 
 			const providerStatus = await send({ id: "provider-status", type: "get_provider_status" });

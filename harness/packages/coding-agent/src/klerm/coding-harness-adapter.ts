@@ -40,7 +40,11 @@ export type CodingHarnessAdapterDebugListener = (event: CodingHarnessAdapterDebu
 
 export interface CodingHarnessAdapter {
 	readonly kind: ConnectedCodingHarnessKind;
-	startSession(agent: CodingHarnessAgentSettings, cwd: string): Promise<CodingHarnessSessionRef>;
+	startSession(
+		agent: CodingHarnessAgentSettings,
+		cwd: string,
+		nativeSessionId?: string,
+	): Promise<CodingHarnessSessionRef>;
 	prompt(session: CodingHarnessSessionRef, message: string): Promise<void>;
 	abort(session: CodingHarnessSessionRef): Promise<void>;
 	closeSession(session: CodingHarnessSessionRef): Promise<void>;
@@ -95,7 +99,11 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 		this.spawnProcess = spawnProcess;
 	}
 
-	async startSession(agent: CodingHarnessAgentSettings, cwd: string): Promise<CodingHarnessSessionRef> {
+	async startSession(
+		agent: CodingHarnessAgentSettings,
+		cwd: string,
+		nativeSessionId?: string,
+	): Promise<CodingHarnessSessionRef> {
 		if (agent.kind !== this.kind || !agent.model) {
 			throw new Error(`${agent.id} requires a ${this.kind} model before starting a session.`);
 		}
@@ -105,6 +113,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 			harness: this.kind,
 			model: agent.model,
 			role: agent.role,
+			...(nativeSessionId ? { nativeSessionId } : {}),
 		};
 		this.sessions.set(ref.id, { ref, cwd, role: agent.role, aborted: false });
 		return ref;

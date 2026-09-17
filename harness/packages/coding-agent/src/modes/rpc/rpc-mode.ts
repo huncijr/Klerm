@@ -82,6 +82,14 @@ import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
+import {
+	appendPersonalBotConversationEvent,
+	createPersonalBotConversation,
+	deletePersonalBotConversation,
+	loadPersonalBotConversation,
+	type PersonalBotConversation,
+	savePersonalBotConversation,
+} from "../../klerm/personal-bot-conversations.ts";
 import { formatProfilePrompt, normalizeProfile } from "../../klerm/profiles.ts";
 import {
 	extractProjectSessions,
@@ -159,6 +167,7 @@ export interface RunRpcModeOptions {
 	discoverCodingHarnesses?: typeof discoverCodingHarnesses;
 	discoverCodingHarnessModels?: typeof discoverCodingHarnessModels;
 	codingHarnessAdapters?: Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>;
+	personalBotStorageDir?: string;
 	appendCodingHarnessBridgeEvent?: typeof appendCodingHarnessBridgeEvent;
 	aiDebugTrace?: AiDebugTraceWriter | false;
 	listSessions?: () => Promise<SessionInfo[]>;
@@ -214,6 +223,13 @@ const DESKTOP_COMMANDS = [
 	"set_klerm_config",
 	"list_sessions",
 	"get_projects",
+	"get_personal_bots",
+	"upsert_personal_bot",
+	"delete_personal_bot",
+	"get_personal_bot_conversation",
+	"prompt_personal_bot",
+	"abort_personal_bot",
+	"reset_personal_bot_conversation",
 	"create_project",
 	"rename_project",
 	"delete_project",
@@ -284,6 +300,9 @@ const DESKTOP_EVENTS = [
 	"auto_retry_end",
 	"workspace_files_changed",
 	"bash_execution_update",
+	"personal_bot_conversation_changed",
+	"personal_bot_tool",
+	"personal_bot_error",
 ] as const;
 
 const WORKSPACE_ATTRIBUTION_CUSTOM_TYPE = "klerm-workspace-attribution";
@@ -373,11 +392,24 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	const fileAttributions = new Map<string, RpcWorkspaceAttribution>();
 	let workspaceProjectRoot = session.sessionManager.getCwd();
 	const codingHarnessAdapters = options.codingHarnessAdapters ?? createCodingHarnessAdapters();
+	const personalBotStorageDir = options.personalBotStorageDir ?? session.settingsManager.getAgentDir();
 	const codingHarnessSessions = new Map<string, CodingHarnessSessionRef>();
+	const personalBotSessions = new Map<string, CodingHarnessSessionRef>();
+	const personalBotConversations = new Map<string, PersonalBotConversation>();
+	const personalBotRuns = new Map<
+		string,
+		{
+			conversation: PersonalBotConversation;
+			adapter: CodingHarnessAdapter;
+			adapterSession: CodingHarnessSessionRef;
+			error?: string;
+		}
+	>();
 	let activeCodingHarnessSession: CodingHarnessSessionRef | undefined;
 	let activeCodingHarnessBridge: ActiveCodingHarnessBridge | undefined;
 	let codingHarnessRouteSequence = 0;
 	let bridgeWriteQueue: Promise<void> = Promise.resolve();
+	let personalBotWriteQueue: Promise<void> = Promise.resolve();
 	let bridgeTransitionQueue: Promise<void> = Promise.resolve();
 	const closeCodingHarnessSessions = async () => {
 		await Promise.all(
@@ -385,11 +417,19 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
 			),
 		);
+		await Promise.all(
+			[...personalBotSessions.values()].map((adapterSession) =>
+				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
+			),
+		);
 		await bridgeTransitionQueue;
 		codingHarnessSessions.clear();
+		personalBotSessions.clear();
+		personalBotRuns.clear();
 		activeCodingHarnessSession = undefined;
 		activeCodingHarnessBridge = undefined;
 		await bridgeWriteQueue;
+		await personalBotWriteQueue.catch(() => undefined);
 		await aiDebugTrace?.flush().catch(() => undefined);
 	};
 
@@ -435,7 +475,78 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			});
 		return record;
 	};
+	const queuePersonalBotPersistence = (
+		conversation: PersonalBotConversation,
+		event?: Parameters<typeof appendPersonalBotConversationEvent>[1],
+	): Promise<void> => {
+		personalBotWriteQueue = personalBotWriteQueue
+			.catch(() => undefined)
+			.then(async () => {
+				await savePersonalBotConversation(personalBotStorageDir, conversation);
+				if (event) await appendPersonalBotConversationEvent(conversation.cwd, event);
+			})
+			.catch((writeError) => {
+				output({
+					type: "backend_error",
+					message: `Could not persist the Personal Bot conversation: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+				});
+				throw writeError;
+			});
+		return personalBotWriteQueue;
+	};
+	const handlePersonalBotEvent = (event: CodingHarnessAdapterEvent): boolean => {
+		const run = personalBotRuns.get(event.agentId);
+		if (!run) return false;
+		const conversation = run.conversation;
+		conversation.updatedAt = new Date().toISOString();
+		if (event.type === "message") {
+			conversation.messages.push({
+				id: crypto.randomUUID(),
+				role: "assistant",
+				text: event.text,
+				timestamp: conversation.updatedAt,
+			});
+			void queuePersonalBotPersistence(conversation).catch(() => undefined);
+			output({ type: "personal_bot_conversation_changed", conversation });
+			return true;
+		}
+		if (event.type === "tool-start" || event.type === "tool-end") {
+			output({ type: "personal_bot_tool", botId: event.agentId, conversationId: conversation.id, event });
+			return true;
+		}
+		if (event.type === "error") {
+			run.error = event.message;
+			conversation.status = "failed";
+			output({
+				type: "personal_bot_error",
+				botId: event.agentId,
+				conversationId: conversation.id,
+				message: event.message,
+			});
+			return true;
+		}
+		conversation.nativeSessionId = run.adapterSession.nativeSessionId;
+		conversation.status = event.status === "completed" ? "idle" : "failed";
+		const response = [...conversation.messages].reverse().find((message) => message.role === "assistant")?.text ?? "";
+		const conversationEvent = {
+			version: 1 as const,
+			timestamp: conversation.updatedAt,
+			sequence: ++conversation.eventSequence,
+			conversationId: conversation.id,
+			botId: conversation.botId,
+			event: event.status === "completed" ? ("PROMPT_COMPLETED" as const) : ("PROMPT_FAILED" as const),
+			harness: conversation.harness,
+			model: conversation.model,
+			reason: run.error ?? `Personal Bot prompt ${event.status}.`,
+			...(response ? { responseDigest: crypto.createHash("sha256").update(response).digest("hex") } : {}),
+		};
+		void queuePersonalBotPersistence(conversation, conversationEvent).catch(() => undefined);
+		personalBotRuns.delete(event.agentId);
+		output({ type: "personal_bot_conversation_changed", conversation });
+		return true;
+	};
 	const handleCodingHarnessEvent = (event: CodingHarnessAdapterEvent) => {
+		if (handlePersonalBotEvent(event)) return;
 		appendAiDebugTrace("ADAPTER_EVENT", event, {
 			taskId: activeCodingHarnessBridge?.rootTask.taskId,
 			agentId: event.agentId,
@@ -2688,6 +2799,254 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 			case "get_desktop_settings": {
 				return success(id, "get_desktop_settings", await getDesktopSettingsPayload());
+			}
+
+			case "get_personal_bots": {
+				return success(id, "get_personal_bots", session.settingsManager.getPersonalBots());
+			}
+
+			case "upsert_personal_bot": {
+				try {
+					const registry = session.settingsManager.upsertPersonalBot(command.bot);
+					await session.settingsManager.flush();
+					return success(id, "upsert_personal_bot", registry);
+				} catch (botError) {
+					return error(
+						id,
+						"upsert_personal_bot",
+						botError instanceof Error ? botError.message : String(botError),
+						"INVALID_PERSONAL_BOT",
+					);
+				}
+			}
+
+			case "delete_personal_bot": {
+				if (typeof command.botId !== "string" || !command.botId.trim()) {
+					return error(id, "delete_personal_bot", "A Personal Bot id is required.", "INVALID_PERSONAL_BOT");
+				}
+				if (personalBotRuns.has(command.botId)) {
+					return error(
+						id,
+						"delete_personal_bot",
+						"Stop the Personal Bot before deleting it.",
+						"PERSONAL_BOT_BUSY",
+					);
+				}
+				const adapterSession = personalBotSessions.get(command.botId);
+				if (adapterSession) {
+					await codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession);
+					personalBotSessions.delete(command.botId);
+				}
+				personalBotConversations.delete(command.botId);
+				await deletePersonalBotConversation(personalBotStorageDir, command.botId);
+				const registry = session.settingsManager.deletePersonalBot(command.botId);
+				await session.settingsManager.flush();
+				return success(id, "delete_personal_bot", registry);
+			}
+
+			case "get_personal_bot_conversation": {
+				const bot = session.settingsManager
+					.getPersonalBots()
+					.bots.find((candidate) => candidate.id === command.botId);
+				if (!bot)
+					return error(id, "get_personal_bot_conversation", "Unknown Personal Bot.", "PERSONAL_BOT_NOT_FOUND");
+				let conversation = personalBotConversations.get(bot.id);
+				conversation ??= await loadPersonalBotConversation(
+					personalBotStorageDir,
+					bot,
+					session.sessionManager.getCwd(),
+				);
+				personalBotConversations.set(bot.id, conversation);
+				return success(id, "get_personal_bot_conversation", conversation);
+			}
+
+			case "prompt_personal_bot": {
+				const message = typeof command.message === "string" ? command.message.trim() : "";
+				if (!message || message.length > 20_000) {
+					return error(
+						id,
+						"prompt_personal_bot",
+						"The prompt must contain 1 to 20,000 characters.",
+						"INVALID_PROMPT",
+					);
+				}
+				const bot = session.settingsManager
+					.getPersonalBots()
+					.bots.find((candidate) => candidate.id === command.botId);
+				if (!bot) return error(id, "prompt_personal_bot", "Unknown Personal Bot.", "PERSONAL_BOT_NOT_FOUND");
+				if (!bot.enabled || !bot.model) {
+					return error(
+						id,
+						"prompt_personal_bot",
+						"Select an available model before chatting.",
+						"PERSONAL_BOT_UNAVAILABLE",
+					);
+				}
+				const adapter = codingHarnessAdapters.get(bot.harness as ConnectedCodingHarnessKind);
+				if (!adapter || adapter.kind !== bot.harness) {
+					return error(
+						id,
+						"prompt_personal_bot",
+						"Independent Personal Bot chat currently requires Codex or OpenCode.",
+						"PERSONAL_BOT_HARNESS_UNSUPPORTED",
+					);
+				}
+				const discoveredHarness = (await loadCodingHarnesses(false)).find(
+					(harness) => harness.kind === bot.harness,
+				);
+				if (
+					!discoveredHarness?.available ||
+					(discoveredHarness.models.length > 0 && !discoveredHarness.models.includes(bot.model))
+				) {
+					return error(
+						id,
+						"prompt_personal_bot",
+						"The configured harness or model is unavailable.",
+						"PERSONAL_BOT_UNAVAILABLE",
+					);
+				}
+				if (personalBotRuns.has(bot.id)) {
+					return error(id, "prompt_personal_bot", "This Personal Bot is already working.", "PERSONAL_BOT_BUSY");
+				}
+				const profile = session.settingsManager
+					.getKlermProfiles()
+					.profiles.find((candidate) => candidate.id === bot.profileId);
+				if (!profile)
+					return error(id, "prompt_personal_bot", "The bot personality no longer exists.", "INVALID_PROFILE");
+				const cwd = session.sessionManager.getCwd();
+				let conversation = personalBotConversations.get(bot.id);
+				conversation ??= await loadPersonalBotConversation(personalBotStorageDir, bot, cwd);
+				if (
+					conversation.messages.length > 0 &&
+					(conversation.cwd !== cwd ||
+						conversation.harness !== bot.harness ||
+						conversation.model !== bot.model ||
+						conversation.role !== bot.role)
+				) {
+					return error(
+						id,
+						"prompt_personal_bot",
+						"The bot configuration changed. Start a new chat before prompting it.",
+						"PERSONAL_BOT_CONFIGURATION_CHANGED",
+					);
+				}
+				if (conversation.messages.length === 0) {
+					conversation.cwd = cwd;
+					conversation.harness = bot.harness;
+					conversation.model = bot.model;
+					conversation.role = bot.role;
+					conversation.nativeSessionId = undefined;
+				}
+				let adapterSession = personalBotSessions.get(bot.id);
+				if (
+					adapterSession &&
+					(adapterSession.harness !== bot.harness ||
+						adapterSession.model !== bot.model ||
+						adapterSession.role !== bot.role)
+				) {
+					await codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession);
+					personalBotSessions.delete(bot.id);
+					adapterSession = undefined;
+				}
+				adapterSession ??= await adapter.startSession(
+					{
+						id: bot.id,
+						kind: bot.harness,
+						enabled: true,
+						model: bot.model,
+						memoryProfileId: bot.profileId,
+						role: bot.role,
+						effort: bot.effort,
+						tools: [],
+					},
+					cwd,
+					conversation.nativeSessionId,
+				);
+				personalBotSessions.set(bot.id, adapterSession);
+				conversation.status = "running";
+				conversation.updatedAt = new Date().toISOString();
+				conversation.messages.push({
+					id: crypto.randomUUID(),
+					role: "user",
+					text: message,
+					timestamp: conversation.updatedAt,
+				});
+				const acceptedEvent = {
+					version: 1 as const,
+					timestamp: conversation.updatedAt,
+					sequence: ++conversation.eventSequence,
+					conversationId: conversation.id,
+					botId: bot.id,
+					event: "PROMPT_ACCEPTED" as const,
+					harness: bot.harness,
+					model: bot.model,
+					reason: `User prompted ${bot.name}.`,
+					promptDigest: crypto.createHash("sha256").update(message).digest("hex"),
+				};
+				await queuePersonalBotPersistence(conversation, acceptedEvent);
+				personalBotConversations.set(bot.id, conversation);
+				personalBotRuns.set(bot.id, { conversation, adapter, adapterSession });
+				output({ type: "personal_bot_conversation_changed", conversation });
+				const rolePrompt =
+					bot.role === "planner"
+						? "Work in Plan mode. Inspect and reason, but do not modify the workspace."
+						: "Work in Build mode. Implement carefully, verify the result, and report concrete changes.";
+				const effectivePrompt = `${rolePrompt}\n\n${formatProfilePrompt(bot.name, profile, bot.role)}\n\nUser message:\n${message}`;
+				void adapter.prompt(adapterSession, effectivePrompt).catch((promptError) => {
+					handlePersonalBotEvent({
+						type: "error",
+						agentId: bot.id,
+						message: promptError instanceof Error ? promptError.message : String(promptError),
+					});
+					if (personalBotRuns.has(bot.id)) {
+						handlePersonalBotEvent({ type: "settled", agentId: bot.id, status: "failed" });
+					}
+				});
+				return success(id, "prompt_personal_bot", conversation);
+			}
+
+			case "abort_personal_bot": {
+				const run = personalBotRuns.get(command.botId);
+				if (!run) return success(id, "abort_personal_bot", { aborted: false });
+				await run.adapter.abort(run.adapterSession);
+				return success(id, "abort_personal_bot", { aborted: true });
+			}
+
+			case "reset_personal_bot_conversation": {
+				const bot = session.settingsManager
+					.getPersonalBots()
+					.bots.find((candidate) => candidate.id === command.botId);
+				if (!bot)
+					return error(id, "reset_personal_bot_conversation", "Unknown Personal Bot.", "PERSONAL_BOT_NOT_FOUND");
+				if (personalBotRuns.has(bot.id)) {
+					return error(
+						id,
+						"reset_personal_bot_conversation",
+						"Stop the Personal Bot before starting a new chat.",
+						"PERSONAL_BOT_BUSY",
+					);
+				}
+				const previousSession = personalBotSessions.get(bot.id);
+				if (previousSession)
+					await codingHarnessAdapters.get(previousSession.harness)?.closeSession(previousSession);
+				personalBotSessions.delete(bot.id);
+				const conversation = createPersonalBotConversation(bot, session.sessionManager.getCwd());
+				conversation.eventSequence = 1;
+				const resetEvent = {
+					version: 1 as const,
+					timestamp: conversation.updatedAt,
+					sequence: conversation.eventSequence,
+					conversationId: conversation.id,
+					botId: bot.id,
+					event: "CONVERSATION_RESET" as const,
+					harness: bot.harness,
+					model: bot.model ?? "",
+					reason: `User started a new chat with ${bot.name}.`,
+				};
+				await queuePersonalBotPersistence(conversation, resetEvent);
+				personalBotConversations.set(bot.id, conversation);
+				output({ type: "personal_bot_conversation_changed", conversation });
+				return success(id, "reset_personal_bot_conversation", conversation);
 			}
 
 			case "set_desktop_appearance": {

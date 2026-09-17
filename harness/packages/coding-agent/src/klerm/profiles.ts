@@ -98,6 +98,30 @@ const SAGE_BUILD_MODE = [
 	"done, changed files, verification. One line per item.",
 ].join("\n");
 
+const BUILDER_BEHAVIOUR = [
+	"You are Builder: practical, precise, and implementation-first. Inspect the",
+	"workspace, make the smallest correct change, and report concrete results.",
+	"Never claim completion without relevant verification. Surface blockers and",
+	"unsafe assumptions directly.",
+].join("\n");
+
+const BUILDER_WORK_PLAN = [
+	"1. Inspect the relevant code and constraints before editing.",
+	"2. Implement one reviewable change at a time.",
+	"3. Run focused verification after the implementation boundary.",
+	"4. Report changed files, verification, blockers, and the next useful action.",
+].join("\n");
+
+const BUILDER_PLAN_MODE = [
+	"Read-only: inspect the workspace and return an implementation-ready plan with",
+	"risks, affected files, and exact verification. Do not modify external state.",
+].join("\n");
+
+const BUILDER_BUILD_MODE = [
+	"Implement the requested work with the available tools. Keep changes focused,",
+	"respect approval boundaries, and verify the result before reporting completion.",
+].join("\n");
+
 export const DEFAULT_KLERM_PROFILES: KlermProfile[] = [
 	{
 		id: "scout",
@@ -121,6 +145,19 @@ export const DEFAULT_KLERM_PROFILES: KlermProfile[] = [
 		workPlan: SAGE_WORK_PLAN,
 		planMode: SAGE_PLAN_MODE,
 		buildMode: SAGE_BUILD_MODE,
+		memoryFormat: "md",
+		memory: "",
+		readme: "",
+	},
+	{
+		id: "builder",
+		name: "Builder",
+		face: "bear",
+		level: 2,
+		behaviour: BUILDER_BEHAVIOUR,
+		workPlan: BUILDER_WORK_PLAN,
+		planMode: BUILDER_PLAN_MODE,
+		buildMode: BUILDER_BUILD_MODE,
 		memoryFormat: "md",
 		memory: "",
 		readme: "",
@@ -193,7 +230,10 @@ export function normalizeProfileState(value: unknown): KlermProfileState {
 	const profiles = Array.isArray(record.profiles)
 		? record.profiles.map(normalizeProfile).filter((profile): profile is KlermProfile => profile !== undefined)
 		: [];
-	const resolved = profiles.length > 0 ? profiles : DEFAULT_KLERM_PROFILES.map((profile) => ({ ...profile }));
+	const resolved = profiles.length > 0 ? [...profiles] : [];
+	for (const profile of DEFAULT_KLERM_PROFILES) {
+		if (!resolved.some((candidate) => candidate.id === profile.id)) resolved.push({ ...profile });
+	}
 	const ids = new Set(resolved.map((profile) => profile.id));
 	const localProfileId =
 		typeof record.localProfileId === "string" && ids.has(record.localProfileId) ? record.localProfileId : undefined;
@@ -244,7 +284,7 @@ export function assignedProfile(state: KlermProfileState, lane: "local" | "front
 }
 
 export function formatProfilePrompt(
-	agent: `Agent ${number}`,
+	agent: string,
 	profile: KlermProfile,
 	role: "planner" | "builder" = "builder",
 ): string {

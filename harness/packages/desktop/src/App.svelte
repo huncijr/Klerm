@@ -47,10 +47,12 @@
 		ImageAttachment,
 		JsonObject,
 		KlermConfig,
-		KlermProfile,
 		LocalRuntime,
 		McpServerUpdate,
 		McpStatus,
+		PersonalBot,
+		PersonalBotConversation,
+		PersonalBotRegistry,
 		ProviderAccount,
 		ProviderConnect,
 		ProviderOauthStep,
@@ -69,6 +71,7 @@
 		ThinkingLevel,
 		ThinkingSetting,
 		WorkspaceStatus,
+		WorkspaceView,
 	} from "./lib/model.ts";
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
@@ -78,12 +81,14 @@
 	import ConfirmDialog from "./components/ConfirmDialog.svelte";
 	import EmptyState from "./components/EmptyState.svelte";
 	import Feed from "./components/Feed.svelte";
+	import PersonalBotsView from "./components/PersonalBotsView.svelte";
 	import ProjectWorkspace from "./components/ProjectWorkspace.svelte";
 	import SettingsView from "./components/SettingsView.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
 	import Splash from "./components/Splash.svelte";
 	import Topbar from "./components/Topbar.svelte";
 	import WorkspacePanel from "./components/WorkspacePanel.svelte";
+	import WorkspacePlannedView from "./components/WorkspacePlannedView.svelte";
 
 	const bridge = new RpcBridge();
 
@@ -102,6 +107,7 @@
 	let configBusy = $state<Promise<boolean> | undefined>(undefined);
 	let currentConfig = $state<KlermConfig | undefined>(undefined);
 	let settingsOpen = $state(false);
+	let workspaceView = $state<WorkspaceView>();
 	let settingsFullscreen = $state(false);
 	let desktopSettings = $state<DesktopSettings | undefined>(undefined);
 	let systemPrefersDark = $state(true);
@@ -109,9 +115,12 @@
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
 	let projects = $state<DesktopProject[]>([]);
+	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
+	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
 	let defaultProjectId = $state("");
 	let selectedProjectId = $state<string | undefined>(undefined);
 	let projectBusy = $state(false);
+	let personalBotBusy = $state(false);
 	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
@@ -238,6 +247,9 @@
 		);
 	});
 	const selectedProject = $derived(projects.find((project) => project.id === selectedProjectId));
+	const activeWorkspaceView = $derived<WorkspaceView | undefined>(
+		settingsOpen || selectedProject ? undefined : (workspaceView ?? "agents-routing"),
+	);
 	const selectedProjectSessions = $derived(
 		selectedProjectId ? sessions.filter((session) => session.projectId === selectedProjectId) : [],
 	);
@@ -534,7 +546,7 @@
 	const MIN_MAIN_COL = 280;
 	const SESSION_RAIL = 48;
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
-	const filesColPx = $derived(!settingsOpen && !selectedProject && workspacePanelOpen ? filesWidth : 0);
+	const filesColPx = $derived(!settingsOpen && !selectedProject && !workspaceView && workspacePanelOpen ? filesWidth : 0);
 	const shellColumns = $derived(
 		settingsOpen && settingsFullscreen
 			? "grid-cols-[minmax(0,1fr)]"
@@ -578,12 +590,22 @@
 	});
 
 	const workspaceRows = $derived(
-		settingsOpen || selectedProject
+		settingsOpen || selectedProject || workspaceView
 			? "grid-rows-[minmax(0,1fr)]"
 			: bottomPanelVisible
 				? "grid-rows-[auto_minmax(0,1fr)_auto_auto] narrow-720:grid-rows-[auto_minmax(180px,1fr)_auto_auto]"
 				: "grid-rows-[auto_minmax(0,1fr)_auto]",
 	);
+	const personalBotHarnessSetup = $derived.by(() => {
+		if (!codingHarnessSetup) return undefined;
+		const klermModels = [...new Set([...localOptions, ...frontierOptions].map((option) => option.value))];
+		return {
+			...codingHarnessSetup,
+			harnesses: codingHarnessSetup.harnesses.map((harness) =>
+				harness.kind === "klerm" ? { ...harness, models: klermModels } : harness,
+			),
+		};
+	});
 
 	$effect(() => {
 		if (!hasConversation) {
@@ -1059,6 +1081,19 @@
 
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
+			case "personal_bot_conversation_changed": {
+				const conversation = event.conversation as PersonalBotConversation | undefined;
+				if (conversation && typeof conversation.botId === "string") {
+					personalBotConversations = { ...personalBotConversations, [conversation.botId]: conversation };
+				}
+				return;
+			}
+			case "personal_bot_error": {
+				if (typeof event.message === "string") showError(event.message);
+				return;
+			}
+			case "personal_bot_tool":
+				return;
 			case "extension_ui_request": {
 				if (
 					event.method === "confirm" &&
@@ -1509,6 +1544,89 @@
 		}
 	}
 
+	async function refreshPersonalBots(): Promise<void> {
+		if (!backendReady || !supportsCommand("get_personal_bots")) return;
+		try {
+			personalBots = await bridge.send<PersonalBotRegistry>("get_personal_bots");
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function savePersonalBot(bot: PersonalBot): Promise<boolean> {
+		if (personalBotBusy || !supportsCommand("upsert_personal_bot")) return false;
+		personalBotBusy = true;
+		try {
+			personalBots = await bridge.send<PersonalBotRegistry>("upsert_personal_bot", { bot });
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		} finally {
+			personalBotBusy = false;
+		}
+	}
+
+	async function deletePersonalBot(bot: PersonalBot): Promise<void> {
+		if (personalBotBusy || !supportsCommand("delete_personal_bot") || !window.confirm(`Delete ${bot.name}?`)) return;
+		personalBotBusy = true;
+		try {
+			personalBots = await bridge.send<PersonalBotRegistry>("delete_personal_bot", { botId: bot.id });
+			const { [bot.id]: _deleted, ...remaining } = personalBotConversations;
+			personalBotConversations = remaining;
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			personalBotBusy = false;
+		}
+	}
+
+	async function loadPersonalBotConversation(botId: string): Promise<void> {
+		if (!supportsCommand("get_personal_bot_conversation")) return;
+		try {
+			const conversation = await bridge.send<PersonalBotConversation>("get_personal_bot_conversation", { botId });
+			personalBotConversations = { ...personalBotConversations, [botId]: conversation };
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function promptPersonalBot(botId: string, message: string): Promise<boolean> {
+		if (!supportsCommand("prompt_personal_bot")) return false;
+		try {
+			const conversation = await bridge.send<PersonalBotConversation>("prompt_personal_bot", { botId, message });
+			personalBotConversations = { ...personalBotConversations, [botId]: conversation };
+			return true;
+		} catch (error) {
+			showError(toError(error).message);
+			return false;
+		}
+	}
+
+	async function abortPersonalBot(botId: string): Promise<void> {
+		if (!supportsCommand("abort_personal_bot")) return;
+		try {
+			await bridge.send("abort_personal_bot", { botId });
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function resetPersonalBotConversation(botId: string): Promise<void> {
+		if (
+			!supportsCommand("reset_personal_bot_conversation") ||
+			!window.confirm("Start a new chat? The current transcript will be replaced.")
+		) {
+			return;
+		}
+		try {
+			const conversation = await bridge.send<PersonalBotConversation>("reset_personal_bot_conversation", { botId });
+			personalBotConversations = { ...personalBotConversations, [botId]: conversation };
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
 	let codingHarnessSetupQueue: Promise<void> = Promise.resolve();
 
 	async function enqueueCodingHarnessSetup<T>(work: () => Promise<T>): Promise<T> {
@@ -1691,28 +1809,6 @@
 		if (!supportsCommand("set_desktop_appearance")) return false;
 		try {
 			desktopSettings = await bridge.send<DesktopSettings>("set_desktop_appearance", { appearance });
-			return true;
-		} catch (error) {
-			showError(toError(error).message);
-			return false;
-		}
-	}
-
-	async function upsertProfile(profile: KlermProfile): Promise<boolean> {
-		if (!supportsCommand("upsert_klerm_profile")) return false;
-		try {
-			desktopSettings = await bridge.send<DesktopSettings>("upsert_klerm_profile", { profile });
-			return true;
-		} catch (error) {
-			showError(toError(error).message);
-			return false;
-		}
-	}
-
-	async function deleteProfile(id: string): Promise<boolean> {
-		if (!supportsCommand("delete_klerm_profile")) return false;
-		try {
-			desktopSettings = await bridge.send<DesktopSettings>("delete_klerm_profile", { profileId: id });
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -1978,6 +2074,7 @@
 			void refreshSessions();
 			sidebarOpen = false;
 			selectedProjectId = undefined;
+			workspaceView = undefined;
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -2265,6 +2362,7 @@
 			refreshDesktopSettings(),
 			refreshProviderStatus(),
 			refreshCodingHarnessSetup(),
+			refreshPersonalBots(),
 		]).catch((error) => showError(toError(error).message));
 		const entries = await entriesPromise;
 		clearFeed();
@@ -2294,6 +2392,7 @@
 			await Promise.all([refreshSessions(), refreshProjects()]);
 			sidebarOpen = false;
 			selectedProjectId = undefined;
+			workspaceView = undefined;
 		} catch (error) {
 			showError(toError(error).message);
 		} finally {
@@ -2451,6 +2550,7 @@
 				settingsFullscreen = false;
 			}
 			else if (selectedProjectId) selectedProjectId = undefined;
+			else if (workspaceView) workspaceView = undefined;
 			else if (sidebarOpen) sidebarOpen = false;
 			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
 		};
@@ -2492,6 +2592,7 @@
 		oncreateproject={(name) => void createProject(name)}
 		onopenproject={(project) => {
 			selectedProjectId = project.id;
+			workspaceView = undefined;
 			settingsOpen = false;
 			settingsFullscreen = false;
 			sidebarOpen = false;
@@ -2504,8 +2605,18 @@
 		onreloadmcp={() => void reloadMcpServers()}
 		onaddmcpserver={addMcpServer}
 		settingsOpen={settingsOpen}
+		workspaceView={activeWorkspaceView}
+		onworkspaceview={(view) => {
+			workspaceView = view === "agents-routing" ? undefined : view;
+			selectedProjectId = undefined;
+			settingsOpen = false;
+			settingsFullscreen = false;
+			sidebarOpen = false;
+		}}
 		ontogglesettings={() => {
 			buildModeOffer = undefined;
+			workspaceView = undefined;
+			selectedProjectId = undefined;
 			settingsOpen = !settingsOpen;
 			if (!settingsOpen) settingsFullscreen = false;
 		}}
@@ -2520,7 +2631,7 @@
 		onpointerdown={startSessionResize}
 	></button>
 	{/if}
-	{#if workspacePanelOpen && !selectedProject}
+	{#if workspacePanelOpen && !selectedProject && !workspaceView}
 		<button
 			type="button"
 			aria-label="Resize file changes"
@@ -2537,7 +2648,7 @@
 			onclick={() => (sidebarOpen = false)}
 		></button>
 	{/if}
-	{#if workspacePanelOpen && !settingsOpen && !selectedProject}
+	{#if workspacePanelOpen && !settingsOpen && !selectedProject && !workspaceView}
 		<button
 			type="button"
 			aria-label="Close file changes"
@@ -2577,8 +2688,6 @@
 				onstartoauth={startProviderOauth}
 				oncanceloauth={() => void cancelProviderOauth()}
 				onoauthsubmit={submitOauthPrompt}
-				onupsertprofile={upsertProfile}
-				ondeleteprofile={deleteProfile}
 				onsharedmemorychange={setSharedMemory}
 				onsavedefaultsharedmemory={saveDefaultSharedMemory}
 				onsavesharedmemory={saveSharedMemoryPreset}
@@ -2590,6 +2699,23 @@
 			{:else}
 				<p class="px-7 py-6 font-mono text-[11px] text-[#8b969e]">Loading settings...</p>
 			{/if}
+		{:else if workspaceView === "personal-bots"}
+			<PersonalBotsView
+				bots={personalBots.bots}
+				profiles={desktopSettings?.profiles.profiles ?? []}
+				harnessSetup={personalBotHarnessSetup}
+				conversations={personalBotConversations}
+				busy={personalBotBusy}
+				onclose={() => (workspaceView = undefined)}
+				onselect={(botId) => void loadPersonalBotConversation(botId)}
+				onsave={savePersonalBot}
+				ondelete={deletePersonalBot}
+				onprompt={promptPersonalBot}
+				onabort={abortPersonalBot}
+				onreset={resetPersonalBotConversation}
+			/>
+		{:else if workspaceView === "kanban"}
+			<WorkspacePlannedView onclose={() => (workspaceView = undefined)} />
 		{:else if selectedProject}
 			<ProjectWorkspace
 				project={selectedProject}
@@ -2802,7 +2928,7 @@
 		{/if}
 		{/if}
 	</main>
-	{#if workspacePanelOpen && !settingsOpen && !selectedProject}
+	{#if workspacePanelOpen && !settingsOpen && !selectedProject && !workspaceView}
 		<WorkspacePanel
 			bind:editDrafts={workspaceEditDrafts}
 			{workspace}

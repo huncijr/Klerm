@@ -34,6 +34,8 @@ import type {
 import type { CustomModelEntry } from "../../klerm/custom-models.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { McpErrorKind, McpPromptMention, McpServerState, McpToolCapability } from "../../klerm/mcp/runtime.ts";
+import type { PersonalBotConversation } from "../../klerm/personal-bot-conversations.ts";
+import type { PersonalBot, PersonalBotRegistry } from "../../klerm/personal-bots.ts";
 import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
 import type { KlermProject, ProjectSessionExtract } from "../../klerm/projects.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
@@ -243,6 +245,13 @@ export type RpcCommand =
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "get_projects" }
+	| { id?: string; type: "get_personal_bots" }
+	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
+	| { id?: string; type: "delete_personal_bot"; botId: string }
+	| { id?: string; type: "get_personal_bot_conversation"; botId: string }
+	| { id?: string; type: "prompt_personal_bot"; botId: string; message: string }
+	| { id?: string; type: "abort_personal_bot"; botId: string }
+	| { id?: string; type: "reset_personal_bot_conversation"; botId: string }
 	| { id?: string; type: "create_project"; name: string }
 	| { id?: string; type: "rename_project"; projectId: string; name: string }
 	| { id?: string; type: "delete_project"; projectId: string }
@@ -425,6 +434,31 @@ export type RpcResponse =
 			data: { sessions: RpcDesktopSessionInfo[] };
 	  }
 	| { id?: string; type: "response"; command: "get_projects"; success: true; data: RpcProjects }
+	| { id?: string; type: "response"; command: "get_personal_bots"; success: true; data: PersonalBotRegistry }
+	| { id?: string; type: "response"; command: "upsert_personal_bot"; success: true; data: PersonalBotRegistry }
+	| { id?: string; type: "response"; command: "delete_personal_bot"; success: true; data: PersonalBotRegistry }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_personal_bot_conversation";
+			success: true;
+			data: PersonalBotConversation;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "prompt_personal_bot";
+			success: true;
+			data: PersonalBotConversation;
+	  }
+	| { id?: string; type: "response"; command: "abort_personal_bot"; success: true; data: { aborted: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "reset_personal_bot_conversation";
+			success: true;
+			data: PersonalBotConversation;
+	  }
 	| { id?: string; type: "response"; command: "create_project"; success: true; data: RpcProjects }
 	| { id?: string; type: "response"; command: "rename_project"; success: true; data: RpcProjects }
 	| { id?: string; type: "response"; command: "delete_project"; success: true; data: RpcProjects }

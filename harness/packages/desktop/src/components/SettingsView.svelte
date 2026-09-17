@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookOpen, Check, Eye, Maximize2, Plus, Shrink, Trash2, UserRound } from "@lucide/svelte";
+	import { BookOpen, Check, Eye, Maximize2, Plus, Shrink, Trash2 } from "@lucide/svelte";
 	import { slide } from "svelte/transition";
 	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
@@ -11,8 +11,6 @@
 		DesktopAppearance,
 		DesktopSettings,
 		DesktopShortcut,
-		KlermProfile,
-		KlermProfileFace,
 		KlermConfig,
 		McpServerStatus,
 		McpServerUpdate,
@@ -22,11 +20,9 @@
 		ProviderOauthStep,
 		ThinkingLevel,
 	} from "../lib/model.ts";
-	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
 	import ProviderLogo from "./ProviderLogo.svelte";
-	import { profileIcon } from "../lib/profiles.ts";
 	import {
 		saveDesktopSettingsChanges,
 		shouldReplaceSettingsDrafts,
@@ -61,8 +57,6 @@
 		onstartoauth,
 		oncanceloauth,
 		onoauthsubmit,
-		onupsertprofile,
-		ondeleteprofile,
 		onsharedmemorychange,
 		onsavedefaultsharedmemory,
 		onsavesharedmemory,
@@ -95,8 +89,6 @@
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
 		onconnectprovider: (account: ProviderConnect) => Promise<boolean>;
 		ondisconnectprovider: (provider: string) => Promise<boolean>;
-		onupsertprofile: (profile: KlermProfile) => Promise<boolean>;
-		ondeleteprofile: (id: string) => Promise<boolean>;
 		onsharedmemorychange: (memory: string, presetId?: string) => Promise<boolean>;
 		onsavedefaultsharedmemory: (memory: string) => Promise<boolean>;
 		onsavesharedmemory: (name: string, memory: string) => Promise<boolean>;
@@ -136,16 +128,6 @@
 	let loadingHarnessModels = $state<CodingHarnessKind[]>([]);
 	let confirmDiscardSettings = $state(false);
 	let connectForms = $state<Record<string, { key: string; url: string; error: string; confirmDiscard: boolean }>>({});
-	let profileName = $state("");
-	let profileFace = $state<KlermProfileFace>("fox");
-	let profileLevel = $state(1);
-	let profileBehaviour = $state("");
-	let profileWorkPlan = $state("");
-	let profilePlanMode = $state("");
-	let profileBuildMode = $state("");
-	let profileMemoryFormat = $state<"md" | "html">("md");
-	let editingProfileId = $state("");
-	let openProfileId = $state("");
 	let sharedMemoryPresetName = $state("");
 	let sharedMemoryPresetText = $state("");
 	let sharedMemorySaving = $state(false);
@@ -172,8 +154,6 @@
 		{ id: "memory", label: "Memory" },
 	];
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
-	const profiles = $derived(settings.profiles.profiles);
-	const openedProfile = $derived(profiles.find((profile) => profile.id === openProfileId));
 	const providerCards = $derived(orderProviderGroups(groupProviderAccounts(providers)));
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
 	const connectGroup = $derived(providerCards.find((group) => group.id === connectId));
@@ -335,70 +315,6 @@
 			savingChanges = false;
 		}
 		await loadHarnessModels(kind);
-	}
-
-	function editProfile(profile: KlermProfile): void {
-		editingProfileId = profile.id;
-		profileName = profile.name;
-		profileFace = profile.face;
-		profileLevel = profile.level;
-		profileBehaviour = profile.behaviour || profile.memory;
-		profileWorkPlan = profile.workPlan || profile.readme;
-		profilePlanMode = profile.planMode;
-		profileBuildMode = profile.buildMode;
-		profileMemoryFormat = profile.memoryFormat === "html" ? "html" : "md";
-	}
-
-	function resetProfileForm(): void {
-		editingProfileId = "";
-		profileName = "";
-		profileBehaviour = "";
-		profileWorkPlan = "";
-		profilePlanMode = "";
-		profileBuildMode = "";
-		profileMemoryFormat = "md";
-		profileLevel = 1;
-		profileFace = "fox";
-	}
-
-	function showProfile(profile: KlermProfile): void {
-		openProfileId = profile.id;
-		editProfile(profile);
-	}
-
-	function closeProfile(): void {
-		openProfileId = "";
-		resetProfileForm();
-	}
-
-	async function saveProfile(): Promise<void> {
-		const name = profileName.trim();
-		if (!name) return;
-		const id =
-			editingProfileId ||
-			name
-				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, "-")
-				.replace(/^-+|-+$/g, "");
-		if (!id) return;
-		const saved = await onupsertprofile({
-			id,
-			name,
-			face: profileFace,
-			level: profileLevel,
-			behaviour: profileBehaviour,
-			workPlan: profileWorkPlan,
-			planMode: profilePlanMode,
-			buildMode: profileBuildMode,
-			memoryFormat: profileMemoryFormat,
-			memory: "",
-			readme: "",
-		});
-		if (saved) {
-			const wasEditing = editingProfileId !== "";
-			resetProfileForm();
-			if (wasEditing) openProfileId = "";
-		}
 	}
 
 	async function saveCustomModel(): Promise<void> {
@@ -1081,46 +997,6 @@
 					</div>
 					{#if settings.profiles.sharedMemoryPresets.length === 0}<div class="rounded-xl border border-dashed border-[#2c3740] px-4 py-8 text-center font-mono text-[9px] text-[#66747d]">No saved memories yet.</div>{/if}
 				</section>
-
-				<section class="overflow-hidden rounded-2xl border border-[#473c59] bg-[linear-gradient(145deg,#121019,#090c10)] shadow-[0_18px_50px_rgba(0,0,0,.2)]">
-					<header class="flex items-start gap-3 border-b border-[#30293b] bg-[#15111d] p-4">
-						<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#514363] bg-[#1d1727] text-[#c5a9df]"><UserRound size={17} stroke-width={1.6} /></span>
-						<div><p class="m-0 font-mono text-[8px] tracking-[.16em] text-[#a98cc2] uppercase">Agent-specific context</p><h2 class="mt-1 mb-0 text-[16px] font-medium text-white">Personal Memory</h2><p class="m-0 mt-1 max-w-[560px] text-[9px] leading-[1.5] text-[#7f7489]">Individual personality, work style, and role instructions. These profiles belong to one assigned Klerm agent and are not shared with the whole team.</p></div>
-					</header>
-					<div class="space-y-3 p-4">
-				{#if openedProfile}
-					{@const profile = openedProfile}
-					<button type="button" class="flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-[9px] text-[#8b969e] hover:text-white" onclick={closeProfile}>← Back</button>
-					<section class="rounded-lg border border-[#232c34] bg-[#0a0f13] p-3">
-						<div class="flex items-center justify-between gap-2">
-							<strong class="font-mono text-[11px] text-white">{profileIcon(profile.face)} {profile.name} · L{profile.level}</strong>
-							<button type="button" class="border-0 bg-transparent font-mono text-[9px] text-[#f3a49c]" onclick={() => { closeProfile(); void ondeleteprofile(profile.id); }}>Delete</button>
-						</div>
-						{#if profile.behaviour || profile.memory}<p class="m-0 mt-2 whitespace-pre-wrap font-mono text-[9px] text-[#8b969e]"><strong class="text-[#aab4bb]">Behaviour · {profile.memoryFormat === "html" ? "html" : "md"}</strong><br />{profile.behaviour || profile.memory}</p>{/if}
-						{#if profile.workPlan || profile.readme}<p class="m-0 mt-2 whitespace-pre-wrap font-mono text-[9px] text-[#8b969e]"><strong class="text-[#aab4bb]">Work plan</strong><br />{profile.workPlan || profile.readme}</p>{/if}
-					</section>
-					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
-						{@render profileForm()}
-						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">Save profile</button>
-					</form>
-				{:else}
-					{#each profiles as profile (profile.id)}
-						<button
-							type="button"
-							class="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-[#232c34] bg-[#0a0f13] p-3 text-left hover:border-[#3b464e]"
-							onclick={() => showProfile(profile)}
-						>
-							<strong class="font-mono text-[11px] text-white">{profileIcon(profile.face)} {profile.name} · L{profile.level}</strong>
-							<span class="font-mono text-[11px] text-[#66747d]">›</span>
-						</button>
-					{/each}
-					<form class="space-y-2" onsubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
-						{@render profileForm()}
-						<button type="submit" class="h-8 rounded-md bg-[#d7e7ff] px-3 font-mono text-[9px] text-[#091019]">Create profile</button>
-					</form>
-				{/if}
-					</div>
-				</section>
 			</div>
 		{/if}
 	</div>
@@ -1271,28 +1147,3 @@
 		</div>
 	{/if}
 </section>
-
-{#snippet profileForm()}
-	<input bind:value={profileName} placeholder="profile name" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
-	<div class="flex flex-wrap gap-1.5">
-		{#each KLERM_PROFILE_FACES as face}
-			<button type="button" class={`h-8 rounded-md border bg-[#05080b] px-2 ${profileFace === face ? "border-white" : "border-[#303a42]"}`} onclick={() => (profileFace = face)}>{profileIcon(face)}</button>
-		{/each}
-	</div>
-	<div class="flex items-center gap-2">
-		<input type="number" min="1" max="5" bind:value={profileLevel} class="h-8 w-20 rounded-md border border-[#2d3740] bg-[#05080b] px-2 font-mono text-[10px] text-white outline-0" />
-		{#each ["md", "html"] as format}
-			<button
-				type="button"
-				class={`h-8 rounded-md border px-3 font-mono text-[9px] ${profileMemoryFormat === format ? "border-white bg-[#1a2229] text-white" : "border-[#303a42] bg-[#05080b] text-[#8b969e]"}`}
-				onclick={() => (profileMemoryFormat = format as "md" | "html")}
-			>
-				{format}
-			</button>
-		{/each}
-	</div>
-	<textarea bind:value={profileBehaviour} rows="4" placeholder="Behaviour — personality, tone, delegation style" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-	<textarea bind:value={profileWorkPlan} rows="4" placeholder="Work plan — how this profile approaches tasks" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-	<textarea bind:value={profilePlanMode} rows="3" placeholder="Plan mode — prompt used when this profile plans" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-	<textarea bind:value={profileBuildMode} rows="3" placeholder="Build mode — prompt used when this profile builds" class="w-full rounded-md border border-[#2d3740] bg-[#05080b] px-2 py-1.5 font-mono text-[10px] text-white outline-0"></textarea>
-{/snippet}

@@ -7,6 +7,7 @@ export type DesktopAppearance = "dark" | "light" | "system";
 export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline";
 export type CodingHarnessSlot = CodingHarnessKind | null;
 export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
+export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban";
 
 export interface CodingHarnessSlotSettings {
 	id: string;
@@ -334,6 +335,47 @@ export interface DesktopProjects {
 	version: number;
 	defaultProjectId: string;
 	projects: DesktopProject[];
+}
+
+export interface PersonalBot {
+	id: string;
+	name: string;
+	face: KlermProfileFace;
+	profileId: string;
+	harness: CodingHarnessKind;
+	model?: string;
+	role: WorkerRole;
+	effort: ThinkingLevel;
+	enabled: boolean;
+	createdSequence: number;
+}
+
+export interface PersonalBotRegistry {
+	version: number;
+	defaultsInitialized: true;
+	bots: PersonalBot[];
+}
+
+export interface PersonalBotChatMessage {
+	id: string;
+	role: "user" | "assistant";
+	text: string;
+	timestamp: string;
+}
+
+export interface PersonalBotConversation {
+	version: 1;
+	id: string;
+	botId: string;
+	cwd: string;
+	harness: CodingHarnessKind;
+	model: string;
+	role: WorkerRole;
+	nativeSessionId?: string;
+	status: "idle" | "running" | "failed";
+	eventSequence: number;
+	messages: PersonalBotChatMessage[];
+	updatedAt: string;
 }
 
 export interface ProjectSessionExtract {

@@ -8,9 +8,10 @@
 		mcpServerIdFromName,
 		parseStdioArgs,
 	} from "../lib/mcp-mentions.ts";
-	import type { DesktopProject, DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus } from "../lib/model.ts";
+	import type { DesktopProject, DesktopSession, McpColor, McpServerStatus, McpServerUpdate, McpStatus, WorkspaceView } from "../lib/model.ts";
 	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
+	import WorkspaceNavMenu from "./WorkspaceNavMenu.svelte";
 
 	let {
 		sessions,
@@ -37,6 +38,8 @@
 		onreloadmcp,
 		onaddmcpserver,
 		settingsOpen,
+		workspaceView,
+		onworkspaceview,
 		ontogglesettings,
 	}: {
 		sessions: DesktopSession[];
@@ -63,6 +66,8 @@
 		onreloadmcp: () => void;
 		onaddmcpserver: (server: McpServerUpdate) => Promise<boolean>;
 		settingsOpen: boolean;
+		workspaceView?: WorkspaceView;
+		onworkspaceview: (view: WorkspaceView) => void;
 		ontogglesettings: () => void;
 	} = $props();
 
@@ -448,6 +453,7 @@
 >
 	{#if collapsed}
 		<div class="flex h-full min-h-0 flex-col items-center py-2.5">
+			<WorkspaceNavMenu activeView={workspaceView} compact onselect={onworkspaceview} />
 			<button
 				type="button"
 				aria-label="Open settings"
@@ -481,6 +487,9 @@
 		<header
 			class="relative flex min-h-[112px] items-center border-b border-line-soft px-[13px] py-3.5 short-650:min-h-[76px] short-650:py-2"
 		>
+			<div class="absolute top-2.5 left-11 z-[2]">
+				<WorkspaceNavMenu activeView={workspaceView} onselect={onworkspaceview} />
+			</div>
 			<button
 				type="button"
 				aria-label="Open settings"

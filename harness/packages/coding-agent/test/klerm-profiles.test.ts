@@ -24,7 +24,7 @@ describe("Klerm profiles", () => {
 
 	it("fills default profiles when empty", () => {
 		const state = normalizeProfileState({});
-		expect(state.profiles.map((profile) => profile.id)).toEqual(["scout", "sage"]);
+		expect(state.profiles.map((profile) => profile.id)).toEqual(["scout", "sage", "builder"]);
 		expect(state.defaultSharedMemory).toBe("");
 	});
 
@@ -34,15 +34,16 @@ describe("Klerm profiles", () => {
 		expect(state.defaultSharedMemory).toBe("Keep changes focused.");
 	});
 
-	it("ships default Scout and Sage prompts with levels", () => {
+	it("ships default Scout, Sage, and Builder prompts with levels", () => {
 		const state = normalizeProfileState({});
 		const scout = state.profiles.find((profile) => profile.id === "scout")!;
 		const sage = state.profiles.find((profile) => profile.id === "sage")!;
+		const builder = state.profiles.find((profile) => profile.id === "builder")!;
 		expect(scout.level).toBe(1);
 		expect(sage.level).toBe(3);
 		expect(scout.memoryFormat).toBe("md");
 		expect(sage.memoryFormat).toBe("md");
-		for (const profile of [scout, sage]) {
+		for (const profile of [scout, sage, builder]) {
 			expect(profile.behaviour.length).toBeGreaterThan(0);
 			expect(profile.workPlan.length).toBeGreaterThan(0);
 			expect(profile.planMode.length).toBeGreaterThan(0);
@@ -51,6 +52,7 @@ describe("Klerm profiles", () => {
 		expect(scout.behaviour).toContain("Scout");
 		expect(scout.behaviour).toContain("delegate_frontier");
 		expect(sage.behaviour).toContain("Sage");
+		expect(builder.behaviour).toContain("Builder");
 	});
 
 	it("injects the role-specific mode prompt", () => {
