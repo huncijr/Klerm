@@ -1,0 +1,150 @@
+KLERM COMMUNITY SOURCE LICENSE 1.0
+
+Effective date: September 16, 2026
+
+This is a source-available license. It is not an Open Source license as defined
+by the Open Source Initiative.
+
+1. Definitions
+
+"Licensed Work" means the Klerm-specific source code, documentation, and other
+materials that expressly identify this License as their governing license.
+
+"Licensor" means the copyright holder identified in the applicable file,
+package, release notice, or copyright notice, and any successor to whom those
+rights are validly assigned.
+
+"You" means the individual or legal entity exercising rights under this
+License. "Affiliate" means an entity that controls, is controlled by, or is
+under common control with You.
+
+"Production Use" means use of the Licensed Work for any live, operational,
+commercial, organizational, or public-facing purpose other than evaluation,
+security research, testing, development, or personal experimentation.
+
+"Annual Active User" means a unique natural person who directly accesses or
+uses the Licensed Work, or a product or hosted service whose material function
+is provided by the Licensed Work, during a rolling twelve-month period. A
+person is counted once across all deployments operated by You and Your
+Affiliates. People who only use software created with assistance from Klerm,
+without accessing Klerm itself, are not Annual Active Users.
+
+"Corresponding Source" means the source code and scripts reasonably necessary
+to build and run the Licensed Work as distributed, excluding third-party
+components available under their own licenses.
+
+2. Copyright Grant
+
+Subject to this License, the Licensor grants You a worldwide, royalty-free,
+non-exclusive, non-transferable license to use, reproduce, inspect, modify,
+create derivative works of, and distribute the Licensed Work. Distribution to
+a recipient is permitted only under this License, and each recipient receives
+its rights directly from the Licensor.
+
+3. Production-Use Limit
+
+You may make Production Use only while the aggregate number of Annual Active
+Users across You and Your Affiliates does not exceed 100,000 during any rolling
+twelve-month period.
+
+You may not divide deployments, accounts, organizations, or Affiliates to
+avoid this limit. If the limit is exceeded or is reasonably expected to be
+exceeded, Production Use beyond the limit requires a separate written
+commercial license from the Licensor. The Licensor is not required to offer a
+commercial license.
+
+This limit applies to direct use of Klerm. It does not restrict the number of
+users of independent software or other output created with assistance from
+Klerm when that software or output does not include or provide access to the
+Licensed Work.
+
+4. Redistribution and Modifications
+
+If You distribute the Licensed Work or a modified version, You must:
+
+(a) include this License and all applicable copyright and attribution notices;
+(b) clearly state that You modified the Licensed Work;
+(c) license Your modifications to recipients under this License; and
+(d) make the Corresponding Source available with the distribution at no more
+than the reasonable cost of providing it.
+
+You may distribute the Licensed Work together with separately licensed
+software, provided this License is not used to claim rights over that separate
+software and all applicable third-party license terms are followed.
+
+5. Generated Output
+
+This License does not claim ownership of prompts, source code, applications,
+documents, or other output created by a user with assistance from Klerm merely
+because Klerm was used to create them. Third-party rights and model-provider
+terms may still apply to that output.
+
+6. Third-Party Materials and Historical Releases
+
+This License does not replace or restrict any third-party license. In
+particular, Pi-derived materials remain available under their applicable MIT
+License notices. Copies and versions of Klerm previously distributed under the
+MIT License remain available under those previously granted terms. Those
+permissions are not revoked by this License.
+
+7. Contributions
+
+No contribution transfers copyright to the Licensor unless the contributor
+signs a separate written assignment or contributor agreement. A contribution
+accepted into a part of the Licensed Work must be licensable under this License
+and may also be subject to a separate contributor agreement.
+
+8. Patent Grant
+
+Each Licensor grants You a worldwide, royalty-free, non-exclusive patent
+license under patent claims that the Licensor controls and that are necessarily
+infringed by the unmodified Licensed Work. This patent license terminates if You
+initiate patent litigation alleging that the Licensed Work infringes a patent.
+
+9. No Trademark License
+
+This License does not grant permission to use the names, logos, or trademarks
+of Klerm or the Licensor, except as reasonably necessary to preserve required
+attribution and describe the origin of the Licensed Work.
+
+10. Compliance Records
+
+You must keep records reasonably sufficient to determine compliance with the
+Annual Active User limit. No more than once per calendar year, the Licensor may
+request a written good-faith certification of the applicable user count. This
+section does not require disclosure of personal data or trade secrets.
+
+11. Termination and Cure
+
+Your rights terminate automatically if You materially violate this License.
+Rights are reinstated if You cure the violation within thirty days after
+receiving written notice from the Licensor, unless the violation was willful or
+repeated. Sections that by their nature should survive termination survive.
+
+12. Disclaimer of Warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSED WORK IS PROVIDED "AS IS"
+WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+NON-INFRINGEMENT.
+
+13. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, NO LICENSOR OR COPYRIGHT HOLDER WILL BE
+LIABLE FOR ANY INDIRECT, SPECIAL, INCIDENTAL, CONSEQUENTIAL, OR PUNITIVE
+DAMAGES, OR FOR LOSS OF DATA, PROFITS, REVENUE, OR GOODWILL, ARISING FROM THE
+LICENSED WORK OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGES.
+
+14. Governing Law and Mandatory Rights
+
+This License is governed by the laws of Romania, excluding conflict-of-law
+rules, unless mandatory law requires otherwise. Nothing in this License limits
+non-waivable consumer, employment, privacy, or other statutory rights.
+
+15. Entire License and Severability
+
+This License states the complete permission granted for the Licensed Work
+unless the Licensor signs a separate agreement. If a provision is
+unenforceable, it will be limited to the minimum extent necessary and the
+remaining provisions will continue in effect.

@@ -517,7 +517,15 @@ Project roadmap and implementation status are tracked in [`PLAN.md`](PLAN.md).
 
 ## License And Attribution
 
-Klerm is derived from the `earendil-works/pi` agent harness and is distributed
-under the MIT License. The original copyright and permission notice are
-preserved in [`LICENSE`](LICENSE). The MIT License permits use, modification,
-distribution, sublicensing, and rebranding subject to retaining that notice.
+Klerm is a mixed-license project derived from the `earendil-works/pi` agent
+harness. Pi-derived code, the imported harness, and Klerm material already
+published under MIT remain under their applicable MIT terms; those permissions
+are not revoked. The original notice is preserved in
+[`LICENSES/PI-MIT.txt`](LICENSES/PI-MIT.txt) and [`harness/LICENSE`](harness/LICENSE).
+
+New, expressly marked Klerm-specific material may be released prospectively
+under the [Klerm Community Source License 1.0](LICENSES/KLERM-COMMUNITY-SOURCE-1.0.txt).
+That source-available license permits production use for no more than 100,000
+unique active Klerm users in any rolling twelve-month period. It does not limit
+the audience of independent software created with assistance from Klerm. See
+the repository [`LICENSE`](LICENSE) notice for the controlling license order.

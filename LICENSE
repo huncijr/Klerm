@@ -1,21 +1,48 @@
-MIT License
+KLERM LICENSING NOTICE
 
-Copyright (c) 2025 Mario Zechner
+Klerm is a mixed-license project.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Upstream and historical MIT-licensed material
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Klerm is derived from the Pi agent harness. Pi-derived code, the imported
+harness, third-party MIT material, and Klerm versions or contributions already
+distributed under the MIT License remain licensed under their applicable MIT
+terms. The preserved Pi license is available at:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+    LICENSES/PI-MIT.txt
+
+The imported harness also preserves its license at:
+
+    harness/LICENSE
+
+Previously granted MIT permissions are not revoked. In particular, public
+copies obtained before the prospective licensing change remain usable under
+the MIT License.
+
+2. New Klerm-specific material
+
+Original Klerm-specific material first distributed after September 16, 2026
+and expressly marked as governed by the Klerm Community Source License 1.0 is
+licensed under:
+
+    LICENSES/KLERM-COMMUNITY-SOURCE-1.0.txt
+
+That license permits source access, modification, redistribution under the
+same terms, and production use up to an aggregate limit of 100,000 unique
+active Klerm users in any rolling twelve-month period. Use above that limit
+requires a separate written commercial license. The restriction does not apply
+to users of independent software created with assistance from Klerm.
+
+3. File- and package-level notices control
+
+Where a file, package, dependency, asset, or directory contains a more specific
+license or copyright notice, that notice controls. Nothing in the Klerm
+Community Source License restricts rights granted directly by an upstream
+copyright holder.
+
+4. No automatic relicensing of contributions
+
+Contributors retain copyright unless they sign a separate assignment or
+contributor agreement. Do not represent a contribution as available under the
+Klerm Community Source License unless the contributor has agreed to those
+terms.
