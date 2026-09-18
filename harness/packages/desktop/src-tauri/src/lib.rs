@@ -119,6 +119,7 @@ fn start_backend(
     app: AppHandle,
     state: State<'_, BackendState>,
     cwd: Option<String>,
+	trusted: Option<bool>,
 ) -> Result<BackendStartResult, String> {
     let mut process_guard = state
         .process
@@ -171,6 +172,9 @@ fn start_backend(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(trusted) = trusted {
+        command.arg(if trusted { "--approve" } else { "--no-approve" });
+    }
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
 

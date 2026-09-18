@@ -34,11 +34,11 @@ describe("coding harness setup", () => {
 		expect(normalizeCodingHarnessKind(" Claude Code ")).toBe("claude-code");
 		expect(normalizeCodingHarnessSlots({ agent1: "CODEX", agent2: "unknown" })).toEqual({
 			externalHarnessesEnabled: false,
-			agents: [agent("agent1", "codex")],
+			agents: [agent("agent1", "codex"), { ...agent("agent2", "klerm"), role: "planner" }],
 		});
 		expect(normalizeCodingHarnessSlots(undefined)).toEqual({
 			externalHarnessesEnabled: false,
-			agents: [agent("agent1", "klerm")],
+			agents: [agent("agent1", "klerm"), { ...agent("agent2", "klerm"), role: "planner" }],
 		});
 		expect(
 			normalizeCodingHarnessSlots({
@@ -82,7 +82,7 @@ describe("coding harness setup", () => {
 				externalHarnessesEnabled: true,
 				agents: [{ ...agent("agent1", "klerm"), specialties: [" review ", "review"] }],
 			}),
-		).toMatchObject({ agents: [{ specialties: ["review"] }] });
+		).toMatchObject({ agents: [{ specialties: ["review"] }, { id: "agent2" }] });
 		expect(
 			parseCodingHarnessSlots({
 				externalHarnessesEnabled: true,
@@ -138,7 +138,7 @@ describe("coding harness setup", () => {
 				externalHarnessesEnabled: false,
 				agents: [{ ...agent("agent1", "klerm"), personalBotId: " bot-scout " }],
 			}),
-		).toMatchObject({ agents: [{ personalBotId: "bot-scout" }] });
+		).toMatchObject({ agents: [{ personalBotId: "bot-scout" }, { id: "agent2" }] });
 		expect(
 			parseCodingHarnessSlots({
 				externalHarnessesEnabled: false,
@@ -261,7 +261,7 @@ describe("coding harness setup", () => {
 		const manager = SettingsManager.create(dir, dir);
 		expect(manager.getCodingHarnessSlots()).toEqual({
 			externalHarnessesEnabled: false,
-			agents: [agent("agent1", "klerm")],
+			agents: [agent("agent1", "klerm"), { ...agent("agent2", "klerm"), role: "planner" }],
 		});
 		const slots = {
 			externalHarnessesEnabled: true,

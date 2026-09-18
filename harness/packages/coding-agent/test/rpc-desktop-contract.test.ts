@@ -255,6 +255,7 @@ describe("Klerm desktop RPC contract", () => {
 							"get_projects",
 							"get_personal_bots",
 							"upsert_personal_bot",
+							"generate_personal_bot_memory",
 							"delete_personal_bot",
 							"get_personal_bot_conversation",
 							"prompt_personal_bot",
@@ -449,7 +450,10 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: {
 					slots: {
-						agents: [{ personalBotId: "bot-sage", memoryProfileId: "sage" }],
+						agents: [
+							{ personalBotId: "bot-sage", memoryProfileId: "sage" },
+							{ id: "agent2", kind: "klerm", role: "planner" },
+						],
 					},
 				},
 			});
@@ -559,6 +563,34 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
+			harness.setResponses([fauxAssistantMessage("- Prefers terse answers.\n- Works on backend tasks.")]);
+			expect(
+				await send({
+					id: "personal-bot-memory-generate",
+					type: "generate_personal_bot_memory",
+					model: klermModelRef,
+					brief: "A terse backend helper.",
+				}),
+			).toMatchObject({
+				success: true,
+				data: { model: klermModelRef, text: expect.stringContaining("Prefers terse answers.") },
+			});
+			expect(
+				await send({
+					id: "personal-bot-memory-empty",
+					type: "generate_personal_bot_memory",
+					model: klermModelRef,
+					brief: "   ",
+				}),
+			).toMatchObject({ success: false, code: "INVALID_PERSONAL_BOT_MEMORY_REQUEST" });
+			expect(
+				await send({
+					id: "personal-bot-memory-unknown-model",
+					type: "generate_personal_bot_memory",
+					model: "missing/nope",
+					brief: "A terse backend helper.",
+				}),
+			).toMatchObject({ success: false, code: "PERSONAL_BOT_UNAVAILABLE" });
 			expect(
 				await send({
 					id: "personal-bot-unlink-agent",
@@ -739,7 +771,21 @@ describe("Klerm desktop RPC contract", () => {
 				type: "get_personal_bot_conversation",
 				botId: "bot-sage",
 			});
-			expect((directMessagesAfterSummary.data as { messages: unknown[] }).messages).toHaveLength(6);
+			expect((directMessagesAfterSummary.data as { messages: unknown[] }).messages).toHaveLength(7);
+			expect(directMessagesAfterSummary).toMatchObject({
+				success: true,
+				data: {
+					messages: [
+						{},
+						{},
+						{},
+						{},
+						{},
+						{},
+						{ role: "assistant", text: expect.stringContaining("# Personal Bot Summary") },
+					],
+				},
+			});
 			expect(
 				await send({
 					id: "personal-bot-enable-peer",

@@ -116,6 +116,11 @@ const DEFAULT_AGENT: CodingHarnessAgentSettings = {
 	effort: "off",
 	tools: [],
 };
+const DEFAULT_SECOND_AGENT: CodingHarnessAgentSettings = {
+	...DEFAULT_AGENT,
+	id: "agent2",
+	role: "planner",
+};
 const VERSION_PROBE_OPTIONS: CodingHarnessProbeOptions = {
 	args: ["--version"],
 	timeoutMs: 2000,
@@ -191,7 +196,10 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 
 export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		return { externalHarnessesEnabled: false, agents: [structuredClone(DEFAULT_AGENT)] };
+		return {
+			externalHarnessesEnabled: false,
+			agents: [structuredClone(DEFAULT_AGENT), structuredClone(DEFAULT_SECOND_AGENT)],
+		};
 	}
 	const stored = value as Record<string, unknown>;
 	let agents: CodingHarnessAgentSettings[];
@@ -211,7 +219,9 @@ export function normalizeCodingHarnessSlots(value: unknown): CodingHarnessSlots 
 	}
 	const seen = new Set<string>();
 	agents = agents.filter((agent) => !seen.has(agent.id) && seen.add(agent.id));
-	if (agents.length === 0) agents = [structuredClone(DEFAULT_AGENT)];
+	if (agents.length === 0) agents = [structuredClone(DEFAULT_AGENT), structuredClone(DEFAULT_SECOND_AGENT)];
+	if (agents.length === 1)
+		agents.push({ ...structuredClone(DEFAULT_SECOND_AGENT), id: nextCodingHarnessAgentId(agents) });
 	return {
 		externalHarnessesEnabled: stored.externalHarnessesEnabled === true,
 		...(stored.externalHarnessesEnabled === true &&

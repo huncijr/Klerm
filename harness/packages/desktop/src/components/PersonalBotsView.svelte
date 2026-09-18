@@ -17,10 +17,13 @@
 		harnessSetup,
 		conversations,
 		busy = false,
+		generationModel = "",
+		focusBotId,
 		onclose,
 		onselect,
 		onsave,
 		onprofilesave,
+		ongeneratememory,
 		ondelete,
 		onsummarydelete,
 		onprompt,
@@ -31,10 +34,13 @@
 		harnessSetup?: CodingHarnessSetup;
 		conversations: Record<string, PersonalBotConversation | undefined>;
 		busy?: boolean;
+		generationModel?: string;
+		focusBotId?: string;
 		onclose: () => void;
 		onselect: (botId: string) => void;
 		onsave: (bot: PersonalBot) => Promise<boolean>;
 		onprofilesave: (profile: KlermProfile) => Promise<boolean>;
+		ongeneratememory: (model: string, brief: string) => Promise<string | undefined>;
 		ondelete: (bot: PersonalBot) => Promise<void>;
 		onsummarydelete: (botId: string, summaryId: string) => Promise<void>;
 		onprompt: (botId: string, message: string) => Promise<boolean>;
@@ -52,6 +58,10 @@
 	let profileId = $state("");
 	let model = $state("");
 	let effort = $state<PersonalBot["effort"]>("medium");
+	let botBrief = $state("");
+	let personalMemory = $state("");
+	let generatingMemory = $state(false);
+	let memoryError = $state("");
 	let chatDraft = $state("");
 	let notice = $state("");
 	let profileName = $state("");
@@ -82,11 +92,24 @@
 	const klermHarness = $derived(harnesses.find((item) => item.kind === "klerm"));
 	const models = $derived(klermHarness?.models ?? []);
 	const efforts: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+	const latestReplyPreview = (bot: PersonalBot): string => {
+		const text = [...(conversations[bot.id]?.messages ?? [])]
+			.reverse()
+			.find((message) => message.role === "assistant")
+			?.text.trim();
+		return text ? text.replace(/\s+/g, " ").slice(0, 72) : "";
+	};
 
 	$effect(() => {
 		if (!selectedId && bots[0]) {
 			selectedId = bots[0].id;
 			onselect(bots[0].id);
+		}
+	});
+
+	$effect(() => {
+		if (focusBotId && focusBotId !== selectedId && bots.some((bot) => bot.id === focusBotId)) {
+			selectBot(focusBotId);
 		}
 	});
 
@@ -123,9 +146,13 @@
 		settingsSection = "ai";
 		name = "";
 		face = "fox";
-		profileId = profiles[0]?.id ?? "";
+		profileId = "";
 		model = "";
 		effort = "medium";
+		botBrief = "";
+		personalMemory = "";
+		generatingMemory = false;
+		memoryError = "";
 		notice = "";
 	}
 
@@ -138,23 +165,62 @@
 		return candidate;
 	}
 
+	async function generateMemory(): Promise<void> {
+		memoryError = "";
+		if (!botBrief.trim() || !generationModel || generatingMemory || busy) return;
+		generatingMemory = true;
+		try {
+			const text = await ongeneratememory(generationModel, botBrief.trim());
+			if (text) personalMemory = text;
+			else memoryError = "The AI returned no personal memory.";
+		} finally {
+			generatingMemory = false;
+		}
+	}
+
 	async function save(): Promise<void> {
-		if (!name.trim() || !profileId || busy) return;
+		if (!name.trim() || busy) return;
+		const nextProfileId = creating ? uniqueProfileId(`${name}-personality`) : profileId;
+		if (!nextProfileId) return;
+		let nextModel = model;
+		let nextEffort = effort;
+		if (creating) {
+			nextModel = models[0] ?? "";
+			nextEffort = "medium";
+			const profile: KlermProfile = {
+				id: nextProfileId,
+				name: `${name.trim()} personality`,
+				face,
+				level: 2,
+				behaviour: botBrief.trim() || `Help the user as ${name.trim()} with direct, useful technical guidance.`,
+				workPlan: "Review the available session context, identify decisions and risks, then suggest concrete next steps.",
+				planMode: "Discuss and analyze only. Do not modify files or external state.",
+				buildMode: "",
+				memoryFormat: "md",
+				memory: personalMemory.trim(),
+				readme: "",
+			};
+			if (!(await onprofilesave(profile))) return;
+			profileId = nextProfileId;
+		}
 		const value: PersonalBot = {
 			id: creating ? botId(name) : selected?.id ?? botId(name),
 			name: name.trim(),
 			face,
-			profileId,
+			profileId: nextProfileId,
 			harness: "klerm",
-			...(model ? { model } : {}),
+			...(nextModel ? { model: nextModel } : {}),
 			role: "planner",
-			effort,
-			enabled: Boolean(model) && klermHarness?.available === true && klermHarness.models.includes(model),
+			effort: nextEffort,
+			enabled:
+				Boolean(nextModel) && klermHarness?.available === true && klermHarness.models.includes(nextModel),
 			createdSequence: creating
 				? Math.max(0, ...bots.map((bot) => bot.createdSequence)) + 1
 				: selected?.createdSequence ?? 1,
 		};
 		if (await onsave(value)) {
+			model = nextModel;
+			effort = nextEffort;
 			selectedId = value.id;
 			creating = false;
 			configuring = false;
@@ -207,21 +273,6 @@
 		profileMemoryFormat = profile.memoryFormat;
 		profileMemory = profile.memory;
 		profileReadme = profile.readme;
-		profileEditing = true;
-	}
-
-	function beginProfileCreate(): void {
-		profileCreating = true;
-		profileName = "";
-		profileFace = "fox";
-		profileLevel = 1;
-		profileBehaviour = "Be thoughtful, direct, and useful during technical discussions.";
-		profileWorkPlan = "Review the available session context, identify decisions and risks, then suggest concrete next steps.";
-		profilePlanMode = "Discuss and analyze only. Do not modify files or external state.";
-		profileBuildMode = "";
-		profileMemoryFormat = "md";
-		profileMemory = "";
-		profileReadme = "";
 		profileEditing = true;
 	}
 
@@ -281,7 +332,7 @@
 					<span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#252f35] text-[14px] text-[#d6e0e4]">{profileIcon(bot.face)}</span>
 					<span class="min-w-0 flex-1">
 						<span class="block truncate text-[12px] font-semibold">{bot.name}</span>
-						<span class="block truncate text-[9px] uppercase tracking-[0.08em] text-[#5f6a70]">Private discussion</span>
+						{#if latestReplyPreview(bot)}<span class="block truncate text-[9px] text-[#5f6a70]">{latestReplyPreview(bot)}</span>{/if}
 					</span>
 					<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunnable(bot) ? "bg-[#5cc08a]" : "bg-[#4a5257]"}`}></span>
 				</button>
@@ -335,8 +386,12 @@
 			</div>
 
 			<div class="border-t border-[#20262a] px-5 py-4">
+				<div class="mx-auto mb-2 flex max-w-3xl items-end gap-2 rounded-lg border border-[#253036] bg-[#0d1316] px-2.5 py-2">
+					<div class="min-w-0 flex-1"><span class="mb-1 block text-[8px] font-semibold uppercase tracking-[0.12em] text-[#68747a]">Model & thinking</span><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={busy || klermHarness?.available !== true} placeholder="Select model" onchange={(value: string) => { model = value; void save(); }} /></div>
+					<label class="w-24 shrink-0"><span class="mb-1 block text-[8px] font-semibold uppercase tracking-[0.12em] text-[#68747a]">Thinking</span><select class="h-8 w-full rounded-md border border-[#293238] bg-[#080d10] px-2 text-[9px] text-white" value={effort} disabled={busy} onchange={(event) => { effort = event.currentTarget.value as PersonalBot["effort"]; void save(); }}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
+				</div>
 				{#if !isRunnable(selected)}
-					<p class="mx-auto mb-2 max-w-3xl text-[10px] text-[#7e8a90]">Select a Klerm model under Model settings to start chatting.</p>
+					<p class="mx-auto mb-2 max-w-3xl text-[10px] text-[#7e8a90]">Select a Klerm model above to start chatting.</p>
 				{/if}
 				<div class="mx-auto flex max-w-3xl items-end gap-2 rounded-xl border border-[#2a3439] bg-[#11171a] p-2 focus-within:border-[#4e6964]">
 					<textarea
@@ -377,6 +432,8 @@
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Previous sessions</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.sessionContextDigest ? "Context synchronized" : "Added on first discussion"}</span></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Other bots</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.peerSummaryDigest ? "Summary context synchronized" : "No new summaries"}</span></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary cadence</span><span class="mt-1 block text-[#9ba6ab]">{linkedPromptProgress} / 3 linked agent tasks</span></div>
+				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Pending tasks</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.pendingSummarySources.length ?? 0} queued{(conversation?.pendingSummarySources.length ?? 0) > 0 ? ` (${[...new Set((conversation?.pendingSummarySources ?? []).map((source) => source.agentId))].join(", ")})` : ""}</span></div>
+				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary state</span><span class="mt-1 block text-[#c9827b]">Last bot run failed. Successful linked agent tasks still count toward the next summary.</span></div>{/if}
 			</div>
 			<section class="mt-5 border-t border-[#252e33] pt-4">
 				<div class="mb-2 flex items-center justify-between gap-2"><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#7f8b91]">Summary history</p><span class="text-[8px] text-[#536067]">{summaries.length}</span></div>
@@ -398,8 +455,6 @@
 			</section>
 			<div class="mt-5 grid gap-2">
 				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
-				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("model")}><span class="block">Model settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Klerm model selection</span></button>
-				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("reasoning")}><span class="block">Reasoning settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Thinking effort for this AI</span></button>
 			</div>
 			{#if notice}<p class="mt-3 text-[10px] text-[#72cda8]">{notice}</p>{/if}
 		{/if}
@@ -416,6 +471,7 @@
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Strength level</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileLevel}>{#each [1, 2, 3, 4, 5] as value}<option value={value}>{value} / 5</option>{/each}</select></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Behaviour</span><textarea class="min-h-24 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileBehaviour}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Discussion workflow</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileWorkPlan}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="2000" bind:value={profileMemory}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Read-only guidance</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profilePlanMode}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Reusable build guidance</span><textarea class="min-h-16 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileBuildMode}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Memory format</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileMemoryFormat}><option value="md">Markdown</option><option value="html">HTML</option></select></label>
@@ -427,9 +483,20 @@
 						<div class="space-y-3">
 							<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Name</span><input class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white outline-none focus:border-[#537269]" bind:value={name} /></label>
 							<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[13px] ${face === option ? "border-[#69cdb4] bg-[#163029] text-[#9ce5d2]" : "border-[#293238] bg-[#080d10] text-[#748087]"}`} onclick={() => face = option}>{profileIcon(option)}</button>{/each}</div></div>
-							<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personality profile</span><div class="flex gap-1.5"><select class="min-w-0 flex-1 rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileId}>{#each profiles as profile}<option value={profile.id}>{profile.name}</option>{/each}</select><button type="button" class="rounded-md border border-[#303a40] px-2 text-[9px] text-[#9ba6ab] disabled:opacity-40" disabled={!configuredProfile} onclick={() => configuredProfile && openProfileEditor(configuredProfile)}>Edit</button><button type="button" class="rounded-md border border-[#303a40] px-2 text-[11px] text-[#9ba6ab]" title="Create profile" onclick={beginProfileCreate}>+</button></div></div>
+							{#if creating}
+								<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">What should this AI help with?</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="4000" bind:value={botBrief}></textarea></label>
+								<div>
+									<span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory generator</span>
+									<button type="button" class="w-full rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!botBrief.trim() || !generationModel || generatingMemory || busy} onclick={generateMemory}>{generatingMemory ? "Generating..." : "Generate personal memory"}</button>
+									<p class="mt-1 text-[8px] leading-3 text-[#5f6a70]">{generationModel ? `Runs on ${generationModel}. Describe what you want above, then generate.` : "No configured Klerm model available for generation yet."}</p>
+									{#if memoryError}<p class="mt-1 text-[8px] text-[#c9827b]">{memoryError}</p>{/if}
+								</div>
+								<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="2000" bind:value={personalMemory}></textarea></label>
+							{:else}
+								<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personality</span><div class="flex gap-1.5"><span class="min-w-0 flex-1 rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-[#9ba6ab]">{configuredProfile?.name ?? "Missing profile"}</span><button type="button" class="rounded-md border border-[#303a40] px-2 text-[9px] text-[#9ba6ab] disabled:opacity-40" disabled={!configuredProfile} onclick={() => configuredProfile && openProfileEditor(configuredProfile)}>Edit</button></div></div>
+							{/if}
 						</div>
-						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={!name.trim() || !profileId || busy} onclick={save}>{creating ? "Create AI" : "Save AI"}</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={closeConfiguration}>Cancel</button></div>
+						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={!name.trim() || busy} onclick={save}>{creating ? "Create personal AI" : "Save AI"}</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={closeConfiguration}>Cancel</button></div>
 						{#if !creating && selected}<button type="button" class="mt-3 border-0 bg-transparent p-0 text-[9px] text-[#875d5d] hover:text-[#d58d8d]" onclick={remove}>Delete bot</button>{/if}
 					{:else if settingsSection === "model"}
 						<p class="mb-4 text-[10px] leading-4 text-[#748087]">Personal Bots always run inside Klerm. Choose which configured Klerm model powers this AI.</p>

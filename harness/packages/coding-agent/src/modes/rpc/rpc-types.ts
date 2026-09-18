@@ -185,6 +185,16 @@ export interface RpcDesktopSettings {
 	shortcuts: Array<{ action: string; keys: string }>;
 }
 
+export interface RpcPersonalBotProfileDraft {
+	profile: KlermProfile;
+	model: string;
+}
+
+export interface RpcPersonalBotMemoryDraft {
+	text: string;
+	model: string;
+}
+
 export interface RpcCustomModelUpdate {
 	provider: string;
 	id: string;
@@ -247,6 +257,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_projects" }
 	| { id?: string; type: "get_personal_bots" }
 	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
+	| { id?: string; type: "generate_personal_bot_profile"; botId: string; brief: string; style?: string }
+	| { id?: string; type: "generate_personal_bot_memory"; model: string; brief: string }
 	| { id?: string; type: "delete_personal_bot"; botId: string }
 	| { id?: string; type: "get_personal_bot_conversation"; botId: string }
 	| { id?: string; type: "prompt_personal_bot"; botId: string; message: string }
@@ -437,6 +449,20 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_projects"; success: true; data: RpcProjects }
 	| { id?: string; type: "response"; command: "get_personal_bots"; success: true; data: PersonalBotRegistry }
 	| { id?: string; type: "response"; command: "upsert_personal_bot"; success: true; data: PersonalBotRegistry }
+	| {
+			id?: string;
+			type: "response";
+			command: "generate_personal_bot_profile";
+			success: true;
+			data: RpcPersonalBotProfileDraft;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "generate_personal_bot_memory";
+			success: true;
+			data: RpcPersonalBotMemoryDraft;
+	  }
 	| { id?: string; type: "response"; command: "delete_personal_bot"; success: true; data: PersonalBotRegistry }
 	| {
 			id?: string;

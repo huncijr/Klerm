@@ -1419,7 +1419,7 @@ export class AgentSession {
 			const reason = this._klermCompletionFailureReason;
 			this._klermTaskOutcome = {
 				status: success
-					? taskIntent === "workspace-change"
+					? taskIntent === "workspace-change" && this._klermBuilderParticipated
 						? "implemented-and-verified"
 						: "completed"
 					: reason?.includes("not approved")

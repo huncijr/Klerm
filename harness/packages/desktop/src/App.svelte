@@ -55,6 +55,7 @@
 		McpStatus,
 		PersonalBot,
 		PersonalBotConversation,
+		PersonalBotMemoryDraft,
 		PersonalBotRegistry,
 		ProviderAccount,
 		ProviderConnect,
@@ -610,6 +611,11 @@
 			),
 		};
 	});
+	const personalBotGenerationModel = $derived.by(() => {
+		const first = firstHarnessAgent;
+		if (first?.kind === "klerm" && first.model) return first.model;
+		return klermModelCatalog[0] ?? "";
+	});
 
 	$effect(() => {
 		if (!hasConversation) {
@@ -640,13 +646,33 @@
 		errorBanner = "";
 	}
 
-	function showNotification(message: string): void {
+	let notificationTarget = $state<{ botId: string } | undefined>(undefined);
+	let personalBotsFocus = $state<string | undefined>(undefined);
+
+	function showNotification(message: string, target?: { botId: string }, timeoutMs = 4_000): void {
 		notification = message;
+		notificationTarget = target;
 		if (notificationTimer !== undefined) window.clearTimeout(notificationTimer);
 		notificationTimer = window.setTimeout(() => {
 			notification = "";
+			notificationTarget = undefined;
 			notificationTimer = undefined;
-		}, 4_000);
+		}, timeoutMs);
+	}
+
+	function openPersonalBot(botId: string): void {
+		notification = "";
+		notificationTarget = undefined;
+		if (notificationTimer !== undefined) {
+			window.clearTimeout(notificationTimer);
+			notificationTimer = undefined;
+		}
+		selectedProjectId = undefined;
+		settingsOpen = false;
+		settingsFullscreen = false;
+		workspaceView = "personal-bots";
+		personalBotsFocus = botId;
+		void loadPersonalBotConversation(botId);
 	}
 
 	function recordTaskError(message: string): void {
@@ -774,6 +800,7 @@
 	}
 
 	function renderCodingHarnessBridgeEvent(event: CodingHarnessBridgeEvent): void {
+		if (event.event === "NO_DELEGATION") return;
 		const card = bridgeEventCard(event);
 		const existingEntry = feed.find(
 			(item) => item.type === "activity" && item.activity.dedupeId === card.dedupeId,
@@ -1101,10 +1128,11 @@
 				if (conversation && typeof conversation.botId === "string") {
 					const previous = personalBotConversations[conversation.botId];
 					const botName = personalBots.bots.find((bot) => bot.id === conversation.botId)?.name ?? "Personal Bot";
-					const summaryCreated = conversation.summaries.length > (previous?.summaries.length ?? 0);
+					const summaryCreated =
+						previous !== undefined && conversation.summaries.length > (previous?.summaries.length ?? 0);
 					const latestAssistant = [...conversation.messages].reverse().find((message) => message.role === "assistant");
 					if (summaryCreated && workspaceView !== "personal-bots") {
-						showNotification(`${botName} added a coding summary`);
+						showNotification(`${botName} added a coding summary`, { botId: conversation.botId }, 8_000);
 					} else if (
 						latestAssistant &&
 						!notifiedPersonalBotMessages.has(latestAssistant.id) &&
@@ -1112,7 +1140,7 @@
 						workspaceView !== "personal-bots"
 					) {
 						notifiedPersonalBotMessages.add(latestAssistant.id);
-						showNotification(`${botName} completed a reply`);
+						showNotification(`${botName} completed a reply`, { botId: conversation.botId });
 					}
 					personalBotConversations = { ...personalBotConversations, [conversation.botId]: conversation };
 				}
@@ -1195,6 +1223,15 @@
 				}
 				pendingApproval = undefined;
 				finalizeStreamingMessage();
+				for (const entry of feed) {
+					if (
+						entry.type === "activity" &&
+						entry.activity.kind === "thinking" &&
+						entry.activity.status === "running"
+					) {
+						entry.activity.status = "settled";
+					}
+				}
 				const outcome = event.outcome as TaskOutcome | undefined;
 				const outcomeFailed =
 					outcome !== undefined &&
@@ -1271,6 +1308,22 @@
 			}
 			case "message_update": {
 				const update = event.assistantMessageEvent as JsonObject | undefined;
+				if (update?.type === "thinking_start") {
+					pushTimeline(
+						"thinking",
+						"neutral",
+						"Thinking",
+						"The selected model is reasoning. Klerm does not retain or display raw private reasoning.",
+						"running",
+						`thinking-${activeTaskKey}-${typeof event.agentId === "string" ? event.agentId : "default"}`,
+					);
+				}
+				if (update?.type === "thinking_end") {
+					const item = findTimeline(
+						`thinking-${activeTaskKey}-${typeof event.agentId === "string" ? event.agentId : "default"}`,
+					);
+					if (item) item.status = "settled";
+				}
 				if (update?.type === "text_delta" && typeof update.delta === "string") {
 					if (streamingMessageId === undefined) appendAssistantMessage(undefined, typeof event.agentId === "string" ? event.agentId : undefined);
 					const item = findMessage(streamingMessageId);
@@ -1281,6 +1334,10 @@
 			case "message_end": {
 				const completedMessage = event.message as AgentMessage | undefined;
 				if (completedMessage?.role !== "assistant") return;
+				const thinkingItem = findTimeline(
+					`thinking-${activeTaskKey}-${typeof event.agentId === "string" ? event.agentId : "default"}`,
+				);
+				if (thinkingItem) thinkingItem.status = "settled";
 				taskSawAssistant = true;
 				lastAssistantStopReason = completedMessage.stopReason;
 				const finalText = messageText(completedMessage);
@@ -1611,6 +1668,20 @@
 		} catch (error) {
 			showError(toError(error).message);
 			return false;
+		} finally {
+			personalBotBusy = false;
+		}
+	}
+
+	async function generatePersonalBotMemory(model: string, brief: string): Promise<string | undefined> {
+		if (personalBotBusy || !supportsCommand("generate_personal_bot_memory")) return undefined;
+		personalBotBusy = true;
+		try {
+			const result = await bridge.send<PersonalBotMemoryDraft>("generate_personal_bot_memory", { model, brief });
+			return result.text;
+		} catch (error) {
+			showError(toError(error).message);
+			return undefined;
 		} finally {
 			personalBotBusy = false;
 		}
@@ -2134,6 +2205,8 @@
 			sidebarOpen = false;
 			selectedProjectId = undefined;
 			workspaceView = undefined;
+			settingsOpen = false;
+			settingsFullscreen = false;
 			return true;
 		} catch (error) {
 			showError(toError(error).message);
@@ -2452,6 +2525,8 @@
 			sidebarOpen = false;
 			selectedProjectId = undefined;
 			workspaceView = undefined;
+			settingsOpen = false;
+			settingsFullscreen = false;
 		} catch (error) {
 			showError(toError(error).message);
 		} finally {
@@ -2473,12 +2548,15 @@
 			return;
 		}
 		if (typeof selected !== "string" || selected.length === 0) return;
+		if (!window.confirm(`Trust ${selected}?\n\nKlerm will load project-local settings, extensions, and skills only after you confirm.`)) {
+			return;
+		}
 		sessionTransitionActive = true;
 		backendRestarting = true;
 		clearError();
 		try {
 			await invoke("stop_backend");
-			await invoke("start_backend", { cwd: selected });
+			await invoke("start_backend", { cwd: selected, trusted: true });
 			await connectBackend();
 			await refreshSessions();
 			sidebarOpen = false;
@@ -2627,7 +2705,12 @@
 <Splash visible={splashVisible} />
 
 {#if notification}
-	<div class="pointer-events-none fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)]" role="status" aria-live="polite">{notification}</div>
+	{#if notificationTarget}
+		{@const target = notificationTarget}
+		<button type="button" class="fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-left text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)] hover:border-[#5a7a68]" aria-label={notification} onclick={() => openPersonalBot(target.botId)}>{notification}</button>
+	{:else}
+		<div class="pointer-events-none fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)]" role="status" aria-live="polite">{notification}</div>
+	{/if}
 {/if}
 
 <svelte:window oncontextmenu={preventDesktopContextMenu} />
@@ -2771,10 +2854,13 @@
 				harnessSetup={personalBotHarnessSetup}
 				conversations={personalBotConversations}
 				busy={personalBotBusy}
+				generationModel={personalBotGenerationModel}
+				focusBotId={personalBotsFocus}
 				onclose={() => (workspaceView = undefined)}
 				onselect={(botId) => void loadPersonalBotConversation(botId)}
 				onsave={savePersonalBot}
 				onprofilesave={savePersonalBotProfile}
+				ongeneratememory={generatePersonalBotMemory}
 				ondelete={deletePersonalBot}
 				onsummarydelete={deletePersonalBotSummary}
 				onprompt={promptPersonalBot}

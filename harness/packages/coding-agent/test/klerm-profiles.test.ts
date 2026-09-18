@@ -68,6 +68,14 @@ describe("Klerm profiles", () => {
 		expect(buildPrompt).not.toContain("Profile planner mode:");
 	});
 
+	it("injects first-class personal memory alongside behaviour", () => {
+		const state = normalizeProfileState({});
+		const scout = state.profiles.find((profile) => profile.id === "scout")!;
+		const prompt = formatProfilePrompt("Agent 1", { ...scout, memory: "Prefers terse answers." }, "planner");
+		expect(prompt).toContain("Personal memory:\nPrefers terse answers.");
+		expect(formatProfilePrompt("Agent 1", scout, "planner")).not.toContain("Personal memory:");
+	});
+
 	it("migrates legacy memory and readme fields", () => {
 		const profile = normalizeProfile({ id: "scout", name: "Scout", memory: "Old memory", readme: "Old readme" });
 		expect(profile?.behaviour).toBe("Old memory");

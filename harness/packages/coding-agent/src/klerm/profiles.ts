@@ -296,8 +296,8 @@ export function formatProfilePrompt(
 	if (profile.workPlan.trim()) lines.push(`Profile work plan:\n${profile.workPlan.trim()}`);
 	const modePrompt = role === "planner" ? profile.planMode : profile.buildMode;
 	if (modePrompt.trim()) lines.push(`Profile ${role} mode:\n${modePrompt.trim()}`);
-	// Legacy fields stay readable for older settings until they are migrated.
-	if (!profile.behaviour.trim() && profile.memory.trim()) lines.push(`Profile memory:\n${profile.memory.trim()}`);
+	if (profile.memory.trim()) lines.push(`Personal memory:\n${profile.memory.trim()}`);
+	// Legacy readme stays readable for older settings until they are migrated.
 	if (!profile.workPlan.trim() && profile.readme.trim()) lines.push(`Profile README:\n${profile.readme.trim()}`);
 	lines.push(
 		`Stay in this personality. Update profile text only with update_klerm_profile when the user asks or when a lasting fact should be remembered.`,

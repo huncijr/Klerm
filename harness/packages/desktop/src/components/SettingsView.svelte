@@ -158,6 +158,21 @@
 	];
 	const mcpServers = $derived(mcpStatus?.servers ?? []);
 	const providerCards = $derived(orderProviderGroups(groupProviderAccounts(providers)));
+	let modelSearch = $state("");
+	const filteredProviderCards = $derived.by(() => {
+		const needle = modelSearch.trim().toLowerCase();
+		if (!needle) return providerCards;
+		return providerCards.filter(
+			(card) =>
+				card.id.toLowerCase().includes(needle) ||
+				card.label.toLowerCase().includes(needle) ||
+				card.members.some(
+					(member) =>
+						member.id.toLowerCase().includes(needle) ||
+						member.label.toLowerCase().includes(needle),
+				),
+		);
+	});
 	const conflicts = $derived(shortcutConflicts(draftShortcuts));
 	const connectGroup = $derived(providerCards.find((group) => group.id === connectId));
 	const harnessOptions = $derived.by<Array<{ kind: CodingHarnessKind; label: string }>>(() => [
@@ -266,13 +281,13 @@
 		return codingHarnessSetup?.harnesses.find((item) => item.kind === kind)?.models ?? [];
 	}
 
-	function addAgent(): void {
-		draftHarnessSlots = addCodingHarnessSlot(draftHarnessSlots);
-	}
-
 	function agentNumber(id: string): number {
 		const number = Number(id.replace(/^agent/, ""));
 		return Number.isSafeInteger(number) ? number : 0;
+	}
+
+	function addAgent(): void {
+		draftHarnessSlots = addCodingHarnessSlot(draftHarnessSlots);
 	}
 
 	function updateAgent(id: string, update: Partial<CodingHarnessSetup["slots"]["agents"][number]>): void {
@@ -783,33 +798,39 @@
 								{/each}
 							</select>
 							<p class={`m-0 mt-3 break-words font-mono text-[9px] ${value.kind !== null && !harnessAvailable(value.kind) ? "text-[#f3a49c]" : "text-[#7b868e]"}`}>{harnessStatus(value.kind)} · {value.enabled ? "On" : "Off"}</p>
-							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`personality-${value.id}`}>Personality</label>
-							<select id={`personality-${value.id}`} value={value.personalBotId ?? ""} class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => { const bot = personalBots.find((candidate) => candidate.id === event.currentTarget.value); updateAgent(value.id, bot ? { personalBotId: bot.id, memoryProfileId: bot.profileId } : { personalBotId: undefined, memoryProfileId: undefined }); }}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
-							{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Selected: {personality.name}</p>{/if}
 							{#if value.kind && codingHarnessSetup?.harnesses.find((item) => item.kind === value.kind)?.error}
 								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
 							{/if}
-							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
-							<div class="mt-2" id={`harness-model-${value.id}`}>
-								<ModelSelect
-									label={`Agent ${agentNumber(value.id)} model`}
-									options={models.map((model) => ({ value: model, label: model }))}
-									value={value.model ?? ""}
-									disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
-									placeholder={
-										value.kind === "klerm"
-											? "Use current Klerm model"
-											: value.kind && loadingHarnessModels.includes(value.kind)
-												? "Loading models..."
-												: models.length > 0
-													? "Select harness model"
-													: "No models reported by this harness"
-									}
-									direction="down"
-									allowEmpty
-									emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
-									onchange={(next) => updateAgent(value.id, { model: next || undefined })}
-								/>
+							<div class="mt-4 grid grid-cols-2 gap-2 narrow-720:grid-cols-1">
+								<div class="min-w-0">
+									<label class="block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`personality-${value.id}`}>Personality</label>
+									<select id={`personality-${value.id}`} value={value.personalBotId ?? ""} class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => { const bot = personalBots.find((candidate) => candidate.id === event.currentTarget.value); updateAgent(value.id, bot ? { personalBotId: bot.id, memoryProfileId: bot.profileId } : { personalBotId: undefined, memoryProfileId: undefined }); }}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
+									{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Selected: {personality.name}</p>{/if}
+								</div>
+								<div class="min-w-0">
+									<label class="block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
+									<div class="mt-2" id={`harness-model-${value.id}`}>
+										<ModelSelect
+											label={`Agent ${agentNumber(value.id)} model`}
+											options={models.map((model) => ({ value: model, label: model }))}
+											value={value.model ?? ""}
+											disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
+											placeholder={
+												value.kind === "klerm"
+													? "Use current Klerm model"
+													: value.kind && loadingHarnessModels.includes(value.kind)
+														? "Loading models..."
+														: models.length > 0
+															? "Select harness model"
+															: "No models reported by this harness"
+											}
+											direction="down"
+											allowEmpty
+											emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
+											onchange={(next) => updateAgent(value.id, { model: next || undefined })}
+										/>
+									</div>
+								</div>
 							</div>
 							<div class="mt-4 grid grid-cols-2 gap-2">
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`role-${value.id}`}>Role</label>
@@ -826,8 +847,12 @@
 			</div>
 		{:else if tab === "models"}
 			<div class="mx-auto w-[min(720px,100%)]">
+				<input bind:value={modelSearch} placeholder="Search providers..." aria-label="Search providers" class="mb-3 h-9 w-full rounded-lg border border-[#303a42] bg-[#0a0f13] px-3 font-mono text-[10px] text-white outline-0 placeholder:text-[#4e5a62] focus:border-[#607f20]" />
+				{#if filteredProviderCards.length === 0}
+					<p class="m-0 rounded-lg border border-dashed border-[#2c3740] px-4 py-8 text-center font-mono text-[9px] text-[#66747d]">No providers match "{modelSearch.trim()}".</p>
+				{/if}
 				<div class="grid grid-cols-2 gap-3">
-					{#each providerCards as card (card.id)}
+					{#each filteredProviderCards as card (card.id)}
 						<button
 							type="button"
 							class={`flex min-h-[108px] flex-col items-start justify-between rounded-xl border bg-[#0a0f13] p-4 text-left hover:border-[#4a5861] ${card.members.some((member) => member.configured) ? "border-[#2c4a34]" : "border-[#232c34]"}`}

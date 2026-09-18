@@ -357,6 +357,11 @@ export interface PersonalBotRegistry {
 	bots: PersonalBot[];
 }
 
+export interface PersonalBotMemoryDraft {
+	text: string;
+	model: string;
+}
+
 export interface PersonalBotChatMessage {
 	id: string;
 	role: "user" | "assistant";
