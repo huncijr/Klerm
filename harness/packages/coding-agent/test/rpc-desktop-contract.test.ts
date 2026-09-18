@@ -166,6 +166,7 @@ describe("Klerm desktop RPC contract", () => {
 			}),
 			filterToolsForActiveRole: vi.fn(<T>(tools: T[]) => tools),
 			getSystemPromptContribution: vi.fn(() => undefined),
+			routePrompt: vi.fn(async () => undefined),
 		} as unknown as KlermRoutingController;
 		Object.defineProperty(harness.session, "_klermRoutingController", { value: controller });
 		const renameSession = vi.fn(async () => {});
@@ -259,6 +260,7 @@ describe("Klerm desktop RPC contract", () => {
 							"prompt_personal_bot",
 							"abort_personal_bot",
 							"reset_personal_bot_conversation",
+							"delete_personal_bot_summary",
 							"create_project",
 							"ask_project",
 							"import_legacy_desktop_projects",
@@ -296,6 +298,7 @@ describe("Klerm desktop RPC contract", () => {
 							"bash_execution_update",
 							"personal_bot_conversation_changed",
 							"personal_bot_summary_updated",
+							"personal_bot_summaries_changed",
 						]),
 					},
 					state: { cwd: expect.any(String) },
@@ -403,10 +406,7 @@ describe("Klerm desktop RPC contract", () => {
 			const klermModel = harness.getModel();
 			const klermModelRef = `${klermModel.provider}/${klermModel.id}`;
 			const sharedMessageCount = harness.session.messages.length;
-			harness.setResponses([
-				fauxAssistantMessage("Independent Klerm reply."),
-				fauxAssistantMessage("Decisions: use the Klerm model.\nNext action: continue the discussion."),
-			]);
+			harness.setResponses([fauxAssistantMessage("Independent Klerm reply.")]);
 			expect(
 				await send({
 					id: "personal-bot-enable-klerm",
@@ -427,6 +427,54 @@ describe("Klerm desktop RPC contract", () => {
 			).toMatchObject({ success: true });
 			expect(
 				await send({
+					id: "personal-bot-link-agent",
+					type: "set_coding_harness_slots",
+					slots: {
+						externalHarnessesEnabled: false,
+						agents: [
+							{
+								id: "agent1",
+								kind: "klerm",
+								enabled: true,
+								personalBotId: "bot-sage",
+								memoryProfileId: "scout",
+								role: "builder",
+								effort: "off",
+								tools: [],
+							},
+						],
+					},
+				}),
+			).toMatchObject({
+				success: true,
+				data: {
+					slots: {
+						agents: [{ personalBotId: "bot-sage", memoryProfileId: "sage" }],
+					},
+				},
+			});
+			expect(
+				await send({
+					id: "personal-bot-link-missing",
+					type: "set_coding_harness_slots",
+					slots: {
+						externalHarnessesEnabled: false,
+						agents: [
+							{
+								id: "agent1",
+								kind: "klerm",
+								enabled: true,
+								personalBotId: "missing-bot",
+								role: "builder",
+								effort: "off",
+								tools: [],
+							},
+						],
+					},
+				}),
+			).toMatchObject({ success: false, code: "PERSONAL_BOT_NOT_FOUND" });
+			expect(
+				await send({
 					id: "personal-bot-prompt-klerm",
 					type: "prompt_personal_bot",
 					botId: "bot-sage",
@@ -444,10 +492,9 @@ describe("Klerm desktop RPC contract", () => {
 					data: {
 						status: "idle",
 						sessionContextDigest: expect.any(String),
-						summary: expect.objectContaining({
-							text: "Decisions: use the Klerm model.\nNext action: continue the discussion.",
-							digest: expect.any(String),
-						}),
+						linkedSuccessfulPromptCount: 0,
+						pendingSummarySources: [],
+						summaries: [],
 						messages: [
 							{ role: "user", text: "Use the configured Klerm model" },
 							{ role: "assistant", text: "Independent Klerm reply." },
@@ -455,14 +502,7 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
-			expect(parseOutputLines()).toEqual(
-				expect.arrayContaining([
-					expect.objectContaining({
-						type: "personal_bot_summary_updated",
-						conversation: expect.objectContaining({ botId: "bot-sage" }),
-					}),
-				]),
-			);
+			expect(parseOutputLines().some((line) => line.type === "personal_bot_summary_updated")).toBe(false);
 			expect(harness.session.messages).toHaveLength(sharedMessageCount);
 			expect(
 				await send({
@@ -488,10 +528,7 @@ describe("Klerm desktop RPC contract", () => {
 					profiles: { profiles: expect.arrayContaining([expect.objectContaining({ id: "sage", level: 4 })]) },
 				},
 			});
-			harness.setResponses([
-				fauxAssistantMessage("Updated profile reply."),
-				fauxAssistantMessage("Decisions: profile updated.\nNext action: continue analysis."),
-			]);
+			harness.setResponses([fauxAssistantMessage("Updated profile reply.")]);
 			expect(
 				await send({
 					id: "personal-bot-prompt-updated-profile",
@@ -510,6 +547,9 @@ describe("Klerm desktop RPC contract", () => {
 					success: true,
 					data: {
 						status: "idle",
+						linkedSuccessfulPromptCount: 0,
+						pendingSummarySources: [],
+						summaries: [],
 						messages: [
 							{ role: "user", text: "Use the configured Klerm model" },
 							{ role: "assistant", text: "Independent Klerm reply." },
@@ -519,6 +559,72 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
+			expect(
+				await send({
+					id: "personal-bot-unlink-agent",
+					type: "set_coding_harness_slots",
+					slots: {
+						externalHarnessesEnabled: true,
+						agents: [
+							{
+								id: "agent1",
+								kind: "codex",
+								enabled: true,
+								model: "codex/test",
+								role: "builder",
+								effort: "off",
+								tools: [],
+							},
+						],
+					},
+				}),
+			).toMatchObject({ success: true });
+			const settledBeforeUnlinked = parseOutputLines().filter((line) => line.type === "agent_settled").length;
+			const unlinkedPrompt = await send({
+				id: "normal-unlinked-prompt",
+				type: "prompt",
+				targetAgentId: "agent1",
+				message: "Normal unlinked task",
+			});
+			expect(unlinkedPrompt, JSON.stringify(unlinkedPrompt)).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				expect(parseOutputLines().filter((line) => line.type === "agent_settled").length).toBeGreaterThan(
+					settledBeforeUnlinked,
+				);
+			});
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "normal-unlinked-conversation",
+					type: "get_personal_bot_conversation",
+					botId: "bot-sage",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: { linkedSuccessfulPromptCount: 0, pendingSummarySources: [], summaries: [] },
+				});
+			});
+			expect(
+				await send({
+					id: "personal-bot-relink-agent",
+					type: "set_coding_harness_slots",
+					slots: {
+						externalHarnessesEnabled: true,
+						agents: [
+							{
+								id: "agent1",
+								kind: "codex",
+								enabled: true,
+								model: "codex/test",
+								personalBotId: "bot-sage",
+								memoryProfileId: "sage",
+								role: "builder",
+								effort: "off",
+								tools: [],
+							},
+						],
+					},
+				}),
+			).toMatchObject({ success: true });
 			expect(
 				await send({
 					id: "personal-bot-model-settings-update",
@@ -537,10 +643,7 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				}),
 			).toMatchObject({ success: true });
-			harness.setResponses([
-				fauxAssistantMessage("Updated reasoning reply."),
-				fauxAssistantMessage("Decisions: reasoning updated.\nNext action: continue analysis."),
-			]);
+			harness.setResponses([fauxAssistantMessage("Updated reasoning reply.")]);
 			expect(
 				await send({
 					id: "personal-bot-prompt-updated-model-settings",
@@ -559,6 +662,9 @@ describe("Klerm desktop RPC contract", () => {
 					success: true,
 					data: {
 						status: "idle",
+						linkedSuccessfulPromptCount: 0,
+						pendingSummarySources: [],
+						summaries: [],
 						messages: expect.arrayContaining([
 							expect.objectContaining({ role: "user", text: "Continue with updated reasoning" }),
 							expect.objectContaining({ role: "assistant", text: "Updated reasoning reply." }),
@@ -566,6 +672,74 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
+			for (const taskNumber of [1, 2]) {
+				expect(
+					await send({
+						id: `normal-linked-prompt-${taskNumber}`,
+						type: "prompt",
+						targetAgentId: "agent1",
+						message: `Normal linked task ${taskNumber}`,
+					}),
+				).toMatchObject({ success: true });
+				await vi.waitFor(async () => {
+					const response = await send({
+						id: `normal-linked-conversation-${taskNumber}`,
+						type: "get_personal_bot_conversation",
+						botId: "bot-sage",
+					});
+					expect(response).toMatchObject({
+						success: true,
+						data: {
+							linkedSuccessfulPromptCount: taskNumber,
+							pendingSummarySources: expect.arrayContaining([expect.objectContaining({ agentId: "agent1" })]),
+							summaries: [],
+						},
+					});
+				});
+			}
+			harness.setResponses([
+				fauxAssistantMessage(
+					"**Decision:** keep the stable link.\n\n| Item | State |\n| --- | --- |\n| Link | active |",
+				),
+			]);
+			expect(
+				await send({
+					id: "normal-linked-prompt-3",
+					type: "prompt",
+					targetAgentId: "agent1",
+					message: "Normal linked task 3",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(async () => {
+				const response = await send({
+					id: "normal-linked-conversation-3",
+					type: "get_personal_bot_conversation",
+					botId: "bot-sage",
+				});
+				expect(response).toMatchObject({
+					success: true,
+					data: {
+						status: "idle",
+						linkedSuccessfulPromptCount: 3,
+						pendingSummarySources: [],
+						summaries: [
+							expect.objectContaining({
+								id: "bot-summary-3",
+								ordinal: 1,
+								linkedPromptRange: { start: 1, end: 3 },
+								text: expect.stringContaining("# Personal Bot Summary"),
+								sourceMessageCount: 3,
+							}),
+						],
+					},
+				});
+			});
+			const directMessagesAfterSummary = await send({
+				id: "normal-linked-hidden-summary",
+				type: "get_personal_bot_conversation",
+				botId: "bot-sage",
+			});
+			expect((directMessagesAfterSummary.data as { messages: unknown[] }).messages).toHaveLength(6);
 			expect(
 				await send({
 					id: "personal-bot-enable-peer",
@@ -584,10 +758,7 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				}),
 			).toMatchObject({ success: true });
-			harness.setResponses([
-				fauxAssistantMessage("Peer-aware reply."),
-				fauxAssistantMessage("Decisions: reviewed peer context.\nNext action: compare findings."),
-			]);
+			harness.setResponses([fauxAssistantMessage("Peer-aware reply.")]);
 			expect(
 				await send({
 					id: "personal-bot-prompt-peer-aware",
@@ -607,7 +778,8 @@ describe("Klerm desktop RPC contract", () => {
 					data: {
 						status: "idle",
 						peerSummaryDigest: expect.any(String),
-						summary: expect.objectContaining({ text: expect.stringContaining("reviewed peer context") }),
+						linkedSuccessfulPromptCount: 0,
+						summaries: [],
 						messages: [
 							{ role: "user", text: "Review what the other bot discussed" },
 							{ role: "assistant", text: "Peer-aware reply." },
@@ -615,6 +787,31 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
+			const sageConversation = await send({
+				id: "personal-bot-summary-before-delete",
+				type: "get_personal_bot_conversation",
+				botId: "bot-sage",
+			});
+			const summaryId = (
+				(sageConversation.data as { summaries: Array<{ id: string }> }).summaries[0] as {
+					id: string;
+				}
+			).id;
+			expect(
+				await send({
+					id: "personal-bot-summary-delete",
+					type: "delete_personal_bot_summary",
+					botId: "bot-sage",
+					summaryId,
+				}),
+			).toMatchObject({ success: true, data: { summaries: [], linkedSuccessfulPromptCount: 3 } });
+			const summaryDeletionEvent = readFileSync(join(harness.tempDir, ".klerm", "personal-bot-events.jsonl"), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as Record<string, unknown>)
+				.find((event) => event.event === "SUMMARY_DELETED");
+			expect(summaryDeletionEvent).toMatchObject({ botId: "bot-sage", summaryId });
+			expect(JSON.stringify(summaryDeletionEvent)).not.toContain("stable link");
 
 			const addedBot = await send({
 				id: "personal-bot-add",
@@ -635,12 +832,29 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: { bots: expect.arrayContaining([expect.objectContaining({ id: "bot-reviewer" })]) },
 			});
+			harness.settingsManager.setCodingHarnessSlots({
+				externalHarnessesEnabled: false,
+				agents: [
+					{
+						id: "agent1",
+						kind: "klerm",
+						enabled: true,
+						personalBotId: "bot-reviewer",
+						memoryProfileId: "sage",
+						role: "builder",
+						effort: "off",
+						tools: [],
+					},
+				],
+			});
 			expect(
 				await send({ id: "personal-bot-delete", type: "delete_personal_bot", botId: "bot-reviewer" }),
 			).toMatchObject({
 				success: true,
 				data: { bots: expect.not.arrayContaining([expect.objectContaining({ id: "bot-reviewer" })]) },
 			});
+			expect(harness.settingsManager.getCodingHarnessSlots().agents[0]).not.toHaveProperty("personalBotId");
+			expect(harness.settingsManager.getCodingHarnessSlots().agents[0]).not.toHaveProperty("memoryProfileId");
 
 			const providerStatus = await send({ id: "provider-status", type: "get_provider_status" });
 			expect(providerStatus).toMatchObject({
@@ -990,7 +1204,7 @@ describe("Klerm desktop RPC contract", () => {
 				data: {
 					version: 1,
 					defaultProjectId: "project-default",
-					projects: [{ id: "project-default", name: "My New Project", sessionCount: 0 }],
+					projects: [{ id: "project-default", name: "My New Project", sessionCount: 1 }],
 				},
 			});
 
@@ -1004,7 +1218,7 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: { projects: expect.arrayContaining([{ id: "legacy-project", name: "Imported", sessionCount: 1 }]) },
 			});
-			expect(harness.settingsManager.getProjectRegistry().sessionProjects).toEqual({
+			expect(harness.settingsManager.getProjectRegistry().sessionProjects).toMatchObject({
 				"session-1": "legacy-project",
 			});
 

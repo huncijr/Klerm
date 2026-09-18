@@ -8,6 +8,7 @@
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
 	import { profileIcon } from "../lib/profiles.ts";
+	import MarkdownLite from "./MarkdownLite.svelte";
 	import ModelSelect from "./ModelSelect.svelte";
 
 	let {
@@ -21,6 +22,7 @@
 		onsave,
 		onprofilesave,
 		ondelete,
+		onsummarydelete,
 		onprompt,
 		onabort,
 	}: {
@@ -34,6 +36,7 @@
 		onsave: (bot: PersonalBot) => Promise<boolean>;
 		onprofilesave: (profile: KlermProfile) => Promise<boolean>;
 		ondelete: (bot: PersonalBot) => Promise<void>;
+		onsummarydelete: (botId: string, summaryId: string) => Promise<void>;
 		onprompt: (botId: string, message: string) => Promise<boolean>;
 		onabort: (botId: string) => Promise<void>;
 	} = $props();
@@ -68,6 +71,12 @@
 		conversation?.status === "running" || conversation?.status === "summarizing",
 	);
 	const selectedProfile = $derived(profiles.find((profile) => profile.id === selected?.profileId));
+	const summaries = $derived([...(conversation?.summaries ?? [])].reverse());
+	const linkedPromptProgress = $derived(
+		conversation?.status === "summarizing" && (conversation.linkedSuccessfulPromptCount ?? 0) > 0
+			? 3
+			: (conversation?.linkedSuccessfulPromptCount ?? 0) % 3,
+	);
 	const configuredProfile = $derived(profiles.find((profile) => profile.id === profileId));
 	const harnesses = $derived(harnessSetup?.harnesses ?? []);
 	const klermHarness = $derived(harnesses.find((item) => item.kind === "klerm"));
@@ -303,7 +312,11 @@
 					<div class="mx-auto flex max-w-3xl flex-col gap-4">
 						{#each conversation.messages as message (message.id)}
 							<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-								<div class={`max-w-[82%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-[12px] leading-5 ${message.role === "user" ? "bg-[#24473e] text-[#effaf6]" : "border border-[#242c31] bg-[#11171a] text-[#cbd3d6]"}`}>{message.text}</div>
+								{#if message.role === "user"}
+									<div class="max-w-[82%] whitespace-pre-wrap rounded-xl bg-[#24473e] px-3.5 py-2.5 text-[12px] leading-5 text-[#effaf6]">{message.text}</div>
+								{:else}
+									<div class="max-w-[82%] rounded-xl border border-[#242c31] bg-[#11171a] px-3.5 py-2.5 text-[12px] leading-5 text-[#cbd3d6]"><MarkdownLite text={message.text} /></div>
+								{/if}
 							</div>
 						{/each}
 						{#if conversationBusy}
@@ -363,8 +376,26 @@
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Session</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.nativeSessionId ? "Persistent" : "Not started"}</span></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Previous sessions</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.sessionContextDigest ? "Context synchronized" : "Added on first discussion"}</span></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Other bots</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.peerSummaryDigest ? "Summary context synchronized" : "No new summaries"}</span></div>
-				{#if conversation?.summary}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Latest summary</span><p class="mt-1 max-h-28 overflow-hidden whitespace-pre-wrap text-[9px] leading-4 text-[#87939a]">{conversation.summary.text}</p></div>{/if}
+				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary cadence</span><span class="mt-1 block text-[#9ba6ab]">{linkedPromptProgress} / 3 linked agent tasks</span></div>
 			</div>
+			<section class="mt-5 border-t border-[#252e33] pt-4">
+				<div class="mb-2 flex items-center justify-between gap-2"><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#7f8b91]">Summary history</p><span class="text-[8px] text-[#536067]">{summaries.length}</span></div>
+				{#if summaries.length > 0}
+					<div class="space-y-2">
+						{#each summaries as summary (summary.id)}
+							<article class="rounded-lg border border-[#283238] bg-[#10171b] p-2.5">
+								<div class="mb-2 flex items-start justify-between gap-2">
+									<div><strong class="block text-[9px] text-[#b9c3c7]">Summary {summary.ordinal}</strong><span class="mt-0.5 block text-[8px] text-[#59656b]">{summary.source === "legacy-conversation" ? "Legacy conversation" : `Agent tasks ${summary.linkedPromptRange.start}-${summary.linkedPromptRange.end}`} · {new Date(summary.timestamp).toLocaleString()}</span></div>
+									<button type="button" class="shrink-0 rounded border border-[#4a3030] px-1.5 py-1 text-[8px] text-[#c9827b] hover:bg-[#241111] hover:text-[#efaaa3] disabled:opacity-40" disabled={busy} onclick={() => onsummarydelete(selected.id, summary.id)}>Delete</button>
+								</div>
+								<div class="text-[9px] leading-4 text-[#87939a]"><MarkdownLite text={summary.text} /></div>
+							</article>
+						{/each}
+					</div>
+				{:else}
+					<p class="m-0 text-[9px] leading-4 text-[#59656b]">A summary is added after every three successful tasks completed by an agent linked to this bot.</p>
+				{/if}
+			</section>
 			<div class="mt-5 grid gap-2">
 				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
 				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("model")}><span class="block">Model settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Klerm model selection</span></button>

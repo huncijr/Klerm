@@ -5,6 +5,8 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import {
 	appendPersonalBotConversationEvent,
 	createPersonalBotConversation,
+	createPersonalBotConversationSummary,
+	formatPersonalBotSummaryMarkdown,
 	loadPersonalBotConversation,
 	savePersonalBotConversation,
 } from "../src/klerm/personal-bot-conversations.ts";
@@ -107,6 +109,9 @@ describe("Personal Bot registry", () => {
 			botId: "bot-scout",
 			role: "planner",
 			status: "failed",
+			linkedSuccessfulPromptCount: 0,
+			pendingSummarySources: [],
+			summaries: [],
 			messages: [{ role: "user", text: "Map the repository." }],
 		});
 		for (const sequence of [1, 2]) {
@@ -127,5 +132,58 @@ describe("Personal Bot registry", () => {
 			.split("\n")
 			.map((line) => JSON.parse(line) as { sequence: number });
 		expect(events.map((event) => event.sequence)).toEqual([1, 2]);
+	});
+
+	test("migrates the legacy single summary into an immutable summary history", async () => {
+		mkdirSync(join(agentDir, "personal-bots", "bot-scout"), { recursive: true });
+		const bot = SettingsManager.create(cwd, agentDir).getPersonalBots().bots[0]!;
+		const conversation = createPersonalBotConversation(bot, cwd);
+		const legacy = {
+			...conversation,
+			summary: {
+				text: "## Decisions\n\nKeep the stable link.",
+				updatedAt: "2026-09-17T00:00:00.000Z",
+				sourceMessageCount: 6,
+				digest: "abcdef1234567890",
+			},
+		};
+		delete (legacy as { summaries?: unknown }).summaries;
+		delete (legacy as { linkedSuccessfulPromptCount?: unknown }).linkedSuccessfulPromptCount;
+		delete (legacy as { pendingSummarySources?: unknown }).pendingSummarySources;
+		await savePersonalBotConversation(
+			agentDir,
+			legacy as unknown as ReturnType<typeof createPersonalBotConversation>,
+		);
+
+		await expect(loadPersonalBotConversation(agentDir, bot, cwd)).resolves.toMatchObject({
+			linkedSuccessfulPromptCount: 0,
+			pendingSummarySources: [],
+			summaries: [
+				{
+					id: "summary-migrated-abcdef1234567890",
+					ordinal: 1,
+					source: "legacy-conversation",
+					linkedPromptRange: { start: 0, end: 0 },
+					text: expect.stringMatching(
+						/^# Personal Bot Summary\n\n## Linked Agent Task Range\n\n0-0\n\n## Summary\n\n## Decisions/,
+					),
+					timestamp: "2026-09-17T00:00:00.000Z",
+				},
+			],
+		});
+	});
+
+	test("formats bounded Markdown summaries while preserving useful Markdown", () => {
+		const markdown = formatPersonalBotSummaryMarkdown(
+			"**Decision:** keep it.\n\n| Item | State |\n| --- | --- |\n| Link | stable |",
+			{ start: 4, end: 6 },
+			120,
+		);
+		expect(markdown).toMatch(/^# Personal Bot Summary\n\n## Linked Agent Task Range\n\n4-6\n\n## Summary\n\n/);
+		expect(markdown).toContain("**Decision:**");
+		expect(markdown.length).toBeLessThanOrEqual(120);
+		const summary = createPersonalBotConversationSummary("## Decision\nKeep it.", 2, { start: 4, end: 6 }, 12, "now");
+		expect(summary).toMatchObject({ ordinal: 2, linkedPromptRange: { start: 4, end: 6 }, timestamp: "now" });
+		expect(summary.id).toBe("bot-summary-6");
 	});
 });

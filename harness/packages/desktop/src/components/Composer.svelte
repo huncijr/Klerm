@@ -10,7 +10,7 @@
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
 	import { imageDataUrl } from "../lib/helpers.ts";
-	import { canPromptTogether } from "../lib/coding-harnesses.ts";
+	import { canPromptTogether, codingHarnessModelOptions } from "../lib/coding-harnesses.ts";
 	import type {
 		ApprovalMode,
 		CodingHarnessKind,
@@ -20,6 +20,7 @@
 		KlermProfile,
 		McpColor,
 		McpServerStatus,
+		PersonalBot,
 		SelectOption,
 		ThinkingLevel,
 		WorkerRole,
@@ -37,6 +38,8 @@
 		emptyLayout,
 		localOptions,
 		frontierOptions,
+		klermLocalOptions,
+		klermFrontierOptions,
 		localValue,
 		frontierValue,
 		routingValue,
@@ -66,6 +69,7 @@
 		localProfileId,
 		frontierProfileId,
 		profileDisabled,
+		personalBots,
 		localRole,
 		frontierRole,
 		approvalMode,
@@ -90,7 +94,7 @@
 		onexternalharnesschange,
 		onexternalharnesskindchange,
 		onexternalmodelchange,
-		onexternalmemorychange,
+		onexternalpersonalitychange,
 		onaddexternalagent,
 		onremoveexternalagent,
 		ondisableallexternalagents,
@@ -108,6 +112,8 @@
 		emptyLayout: boolean;
 		localOptions: SelectOption[];
 		frontierOptions: SelectOption[];
+		klermLocalOptions: SelectOption[];
+		klermFrontierOptions: SelectOption[];
 		localValue: string;
 		frontierValue: string;
 		routingValue: string;
@@ -137,6 +143,7 @@
 		localProfileId: string;
 		frontierProfileId: string;
 		profileDisabled: boolean;
+		personalBots: PersonalBot[];
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
 		approvalMode: ApprovalMode;
@@ -161,7 +168,7 @@
 		onexternalharnesschange: (id: string, enabled: boolean) => void;
 		onexternalharnesskindchange: (id: string, kind: CodingHarnessKind) => void;
 		onexternalmodelchange: (id: string, model: string) => void;
-		onexternalmemorychange: (id: string, profileId: string) => void;
+		onexternalpersonalitychange: (id: string, botId: string) => void;
 		onaddexternalagent: () => void;
 		onremoveexternalagent: (id: string) => void;
 		ondisableallexternalagents: () => void;
@@ -202,11 +209,11 @@
 	const filteredMcpSuggestions = $derived(filterMcpSuggestions(mcpServers, mcpQuery));
 	const mentionSegments = $derived(splitMcpMentions(draft, mcpServers));
 	const hasMcpMentions = $derived(mentionSegments.some((segment) => segment.mention));
+	const configuredAgentSlots = $derived<Array<{ label: string; slot: CodingHarnessSlotSettings }>>(
+		externalHarnessSetup?.slots.agents.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot })) ?? [],
+	);
 	const externalAgentSlots = $derived<Array<{ label: string; slot: CodingHarnessSlotSettings }>>(
-		externalHarnessSetup?.slots.externalHarnessesEnabled
-			? externalHarnessSetup.slots.agents
-					.map((slot) => ({ label: `Agent ${slot.id.replace(/^agent/, "")}`, slot }))
-			: [],
+		externalHarnessSetup?.slots.externalHarnessesEnabled ? configuredAgentSlots : [],
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
 	const roleControlDisabled = $derived(externalMode ? externalHarnessBusy : roleDisabled);
@@ -226,17 +233,7 @@
 	}
 
 	function harnessModels(slot: CodingHarnessSlotSettings): SelectOption[] {
-		if (slot.kind === "klerm") {
-			const source = slot.id === "agent1" ? localOptions : slot.id === "agent2" ? frontierOptions : [...localOptions, ...frontierOptions];
-			return source.filter(
-				(option, index, options) => option.value && options.findIndex((candidate) => candidate.value === option.value) === index,
-			);
-		}
-		return (
-			externalHarnessSetup?.harnesses
-				.find((harness) => harness.kind === slot.kind)
-				?.models.map((model) => ({ value: model, label: model })) ?? []
-		);
+		return codingHarnessModelOptions(slot, externalHarnessSetup, klermLocalOptions, klermFrontierOptions);
 	}
 
 	function mentionStyle(color: McpColor = "base"): string {
@@ -590,6 +587,7 @@
 				{:else}
 				{#each externalAgentSlots as { label, slot }, index (slot.id)}
 					{@const models = harnessModels(slot)}
+					{@const personality = personalBots.find((bot) => bot.id === slot.personalBotId)}
 					{@const viewVisible = visibleAgentIds.includes(slot.id)}
 					<div class="group relative">
 						<div class={`flex h-11 min-w-[190px] items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
@@ -614,7 +612,7 @@
 								<ProviderLogo id={slot.kind ?? "klerm"} label={harnessDisplayName(slot.kind)} size={16} decorative />
 								<span class="min-w-0 flex-1">
 									<span class="block text-[8px] text-[#d5dfbe]">{label} · {harnessDisplayName(slot.kind)}</span>
-									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · thinking {slot.effort}</span>
+									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · {personality?.name ?? "No personality"} · thinking {slot.effort}</span>
 								</span>
 							</button>
 							<button
@@ -665,16 +663,16 @@
 							>
 								{#each codingHarnessOptions as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
 							</select>
-							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-memory-${slot.id}`}>Memory</label>
+							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-personality-${slot.id}`}>Personality</label>
 							<select
-								id={`composer-memory-${slot.id}`}
-								value={slot.memoryProfileId ?? (slot.id === "agent1" ? localProfileId : slot.id === "agent2" ? frontierProfileId : "")}
+								id={`composer-personality-${slot.id}`}
+								value={slot.personalBotId ?? ""}
 								disabled={externalHarnessBusy}
 								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
-								onchange={(event) => onexternalmemorychange(slot.id, event.currentTarget.value)}
+								onchange={(event) => onexternalpersonalitychange(slot.id, event.currentTarget.value)}
 							>
-								<option value="">Shared memory only</option>
-								{#each profiles as profile (profile.id)}<option value={profile.id}>{profile.name}</option>{/each}
+								<option value="">None</option>
+								{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}
 							</select>
 							{#if slot.id !== "agent1"}
 								<button type="button" class="mt-2 w-full rounded-md border border-[#4a3030] px-2 py-1.5 font-mono text-[8px] text-[#d9928b] hover:bg-[#241111]" onclick={() => { pinnedAgentId = ""; onremoveexternalagent(slot.id); }}>Remove agent</button>
@@ -876,6 +874,11 @@
 					onlocalprofilechange(profileId);
 				}}
 			/>
+			{#if !externalMode && configuredAgentSlots[0]}
+				{@const personalityAgent = configuredAgentSlots[0]}
+				<label class="mt-1 block font-mono text-[7px] tracking-[.1em] text-[#66747d] uppercase" for={`bottom-personality-${personalityAgent.slot.id}`}>Personality</label>
+				<select id={`bottom-personality-${personalityAgent.slot.id}`} value={personalityAgent.slot.personalBotId ?? ""} disabled={externalHarnessBusy} class="mt-1 h-7 w-full rounded-md border border-[#303a42] bg-[#0b1014] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45" onchange={(event) => onexternalpersonalitychange(personalityAgent.slot.id, event.currentTarget.value)}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
+			{/if}
 			{#if !externalMode && localThinkingLevels.length > 1}
 				<ThinkingSlider
 					label="Agent 1 effort"
@@ -907,6 +910,11 @@
 					onfrontierprofilechange(profileId);
 				}}
 			/>
+			{#if !externalMode && configuredAgentSlots[1]}
+				{@const personalityAgent = configuredAgentSlots[1]}
+				<label class="mt-1 block font-mono text-[7px] tracking-[.1em] text-[#66747d] uppercase" for={`bottom-personality-${personalityAgent.slot.id}`}>Personality</label>
+				<select id={`bottom-personality-${personalityAgent.slot.id}`} value={personalityAgent.slot.personalBotId ?? ""} disabled={externalHarnessBusy} class="mt-1 h-7 w-full rounded-md border border-[#303a42] bg-[#0b1014] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45" onchange={(event) => onexternalpersonalitychange(personalityAgent.slot.id, event.currentTarget.value)}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
+			{/if}
 			{#if !externalMode && frontierThinkingLevels.length > 1}
 				<ThinkingSlider
 					label="Agent 2 effort"

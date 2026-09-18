@@ -18,6 +18,7 @@ export interface CodingHarnessAgentSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	personalBotId?: string;
 	memoryProfileId?: string;
 	role: CodingHarnessRole;
 	effort: CodingHarnessEffort;
@@ -148,6 +149,8 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 	const id = typeof candidate.id === "string" && AGENT_ID_PATTERN.test(candidate.id) ? candidate.id : fallback.id;
 	const kind = candidate.kind === null ? fallback.kind : (normalizeCodingHarnessKind(candidate.kind) ?? fallback.kind);
 	const model = typeof candidate.model === "string" ? candidate.model.trim().slice(0, MAX_MODEL_LENGTH) : "";
+	const personalBotId =
+		typeof candidate.personalBotId === "string" ? candidate.personalBotId.trim().slice(0, 128) : "";
 	const memoryProfileId =
 		typeof candidate.memoryProfileId === "string" ? candidate.memoryProfileId.trim().slice(0, 128) : "";
 	const role = candidate.role === "planner" || candidate.role === "builder" ? candidate.role : fallback.role;
@@ -177,6 +180,7 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		kind,
 		enabled: kind !== null && (typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled),
 		...(model ? { model } : {}),
+		...(personalBotId ? { personalBotId } : {}),
 		...(memoryProfileId ? { memoryProfileId } : {}),
 		role,
 		effort,
@@ -225,9 +229,18 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (
 		Object.keys(agent).some(
 			(key) =>
-				!["id", "kind", "enabled", "model", "memoryProfileId", "role", "effort", "tools", "specialties"].includes(
-					key,
-				),
+				![
+					"id",
+					"kind",
+					"enabled",
+					"model",
+					"personalBotId",
+					"memoryProfileId",
+					"role",
+					"effort",
+					"tools",
+					"specialties",
+				].includes(key),
 		)
 	) {
 		return undefined;
@@ -238,6 +251,12 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (
 		agent.model !== undefined &&
 		(typeof agent.model !== "string" || !agent.model.trim() || agent.model.length > MAX_MODEL_LENGTH)
+	) {
+		return undefined;
+	}
+	if (
+		agent.personalBotId !== undefined &&
+		(typeof agent.personalBotId !== "string" || !agent.personalBotId.trim() || agent.personalBotId.length > 128)
 	) {
 		return undefined;
 	}
@@ -269,6 +288,7 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		kind: agent.kind as CodingHarnessSlot,
 		enabled: agent.enabled,
 		...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
+		...(typeof agent.personalBotId === "string" ? { personalBotId: agent.personalBotId.trim() } : {}),
 		...(typeof agent.memoryProfileId === "string" ? { memoryProfileId: agent.memoryProfileId.trim() } : {}),
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,

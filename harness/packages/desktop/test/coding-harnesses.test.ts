@@ -4,6 +4,7 @@ import {
 	assignWorkTogetherModels,
 	canEnableWorkTogether,
 	canPromptTogether,
+	codingHarnessModelOptions,
 	hasTwoEnabledCodingHarnessAgents,
 	removeCodingHarnessSlot,
 	setAllCodingHarnessAgentRoles,
@@ -119,6 +120,32 @@ describe("desktop coding harness slots", () => {
 			...slots.agents[0],
 			enabled: false,
 		});
+	});
+
+	test("resolves model options by stable slot id instead of array position", () => {
+		const setup: CodingHarnessSetup = {
+			slots: {
+				externalHarnessesEnabled: true,
+				agents: [slots.agents[0]!, { ...slots.agents[0]!, id: "agent5", model: "provider/five" }],
+			},
+			harnesses: [],
+			effectiveRouting: "auto",
+			externalPromptingAvailable: true,
+			workTogetherAvailable: true,
+			runnableAgents: [],
+			excludedAgents: [],
+		};
+		expect(
+			codingHarnessModelOptions(
+				setup.slots.agents[1]!,
+				setup,
+				[{ value: "provider/local", label: "Local" }],
+				[{ value: "provider/frontier", label: "Frontier" }],
+			),
+		).toEqual([
+			{ value: "provider/local", label: "Local" },
+			{ value: "provider/frontier", label: "Frontier" },
+		]);
 	});
 
 	test("applies a team role only to enabled agents", () => {

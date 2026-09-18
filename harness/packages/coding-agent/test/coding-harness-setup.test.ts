@@ -98,7 +98,12 @@ describe("coding harness setup", () => {
 
 	it("enables Work together for two enabled modeled agents and preserves memory assignments", () => {
 		const agents = [
-			{ ...agent("agent1", "klerm"), model: "provider/one", memoryProfileId: "planner" },
+			{
+				...agent("agent1", "klerm"),
+				model: "provider/one",
+				personalBotId: "bot-scout",
+				memoryProfileId: "planner",
+			},
 			{ ...agent("agent2", "klerm"), model: "provider/two" },
 			{ ...agent("agent3", "klerm"), model: "provider/three" },
 		];
@@ -128,6 +133,18 @@ describe("coding harness setup", () => {
 			workTogetherEnabled: true,
 			agents,
 		});
+		expect(
+			normalizeCodingHarnessSlots({
+				externalHarnessesEnabled: false,
+				agents: [{ ...agent("agent1", "klerm"), personalBotId: " bot-scout " }],
+			}),
+		).toMatchObject({ agents: [{ personalBotId: "bot-scout" }] });
+		expect(
+			parseCodingHarnessSlots({
+				externalHarnessesEnabled: false,
+				agents: [{ ...agent("agent1", "klerm"), personalBotId: "" }],
+			}),
+		).toBeUndefined();
 	});
 
 	it("discovers builtin Klerm and probes only fixed external version commands", async () => {

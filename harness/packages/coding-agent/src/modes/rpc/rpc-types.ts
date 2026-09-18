@@ -252,6 +252,7 @@ export type RpcCommand =
 	| { id?: string; type: "prompt_personal_bot"; botId: string; message: string }
 	| { id?: string; type: "abort_personal_bot"; botId: string }
 	| { id?: string; type: "reset_personal_bot_conversation"; botId: string }
+	| { id?: string; type: "delete_personal_bot_summary"; botId: string; summaryId: string }
 	| { id?: string; type: "create_project"; name: string }
 	| { id?: string; type: "rename_project"; projectId: string; name: string }
 	| { id?: string; type: "delete_project"; projectId: string }
@@ -456,6 +457,13 @@ export type RpcResponse =
 			id?: string;
 			type: "response";
 			command: "reset_personal_bot_conversation";
+			success: true;
+			data: PersonalBotConversation;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "delete_personal_bot_summary";
 			success: true;
 			data: PersonalBotConversation;
 	  }

@@ -1,4 +1,4 @@
-import type { CodingHarnessSetup, CodingHarnessSlotSettings, WorkerRole } from "./model.ts";
+import type { CodingHarnessSetup, CodingHarnessSlotSettings, SelectOption, WorkerRole } from "./model.ts";
 
 type CodingHarnessSlots = CodingHarnessSetup["slots"];
 
@@ -16,6 +16,31 @@ export function resolvedCodingHarnessModel(
 	if (agent.id === "agent1") return localModel;
 	if (agent.id === "agent2") return frontierModel;
 	return undefined;
+}
+
+export function codingHarnessModelOptions(
+	agent: CodingHarnessSlotSettings,
+	setup: CodingHarnessSetup | undefined,
+	localOptions: readonly SelectOption[],
+	frontierOptions: readonly SelectOption[],
+): SelectOption[] {
+	if (agent.kind === "klerm") {
+		const source =
+			agent.id === "agent1"
+				? localOptions
+				: agent.id === "agent2"
+					? frontierOptions
+					: [...localOptions, ...frontierOptions];
+		return source.filter(
+			(option, index, options) =>
+				option.value.length > 0 && options.findIndex((candidate) => candidate.value === option.value) === index,
+		);
+	}
+	return (
+		setup?.harnesses
+			.find((harness) => harness.kind === agent.kind)
+			?.models.map((model) => ({ value: model, label: model })) ?? []
+	);
 }
 
 export function canEnableWorkTogether(slots: CodingHarnessSlots): boolean {

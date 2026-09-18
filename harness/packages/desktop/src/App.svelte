@@ -21,7 +21,9 @@
 	import {
 		addCodingHarnessSlot,
 		assignWorkTogetherModels,
+		codingHarnessModelOptions,
 		removeCodingHarnessSlot,
+		resolvedCodingHarnessModel,
 		setAllCodingHarnessAgentsEnabled,
 		setExternalCodingHarnessesEnabled,
 		shouldShowAgentContext,
@@ -122,6 +124,9 @@
 	let selectedProjectId = $state<string | undefined>(undefined);
 	let projectBusy = $state(false);
 	let personalBotBusy = $state(false);
+	let notification = $state("");
+	let notificationTimer: number | undefined;
+	const notifiedPersonalBotMessages = new Set<string>();
 	let feed = $state<FeedItem[]>([]);
 	let localOptions = $state<SelectOption[]>([]);
 	let frontierOptions = $state<SelectOption[]>([]);
@@ -479,29 +484,27 @@
 		}
 	});
 	const composerLocalOptions = $derived(
-		externalHarnessesEnabled && firstHarnessAgent?.kind !== "klerm"
-			? (codingHarnessSetup?.harnesses
-					.find((harness) => harness.kind === firstHarnessAgent?.kind)
-					?.models.map((model) => ({ value: model, label: model })) ?? [])
+		externalHarnessesEnabled && firstHarnessAgent
+			? codingHarnessModelOptions(firstHarnessAgent, codingHarnessSetup, localOptions, frontierOptions)
 			: localOptions,
 	);
 	const composerFrontierOptions = $derived(
-		externalHarnessesEnabled && secondHarnessAgent?.kind !== "klerm"
-			? (codingHarnessSetup?.harnesses
-					.find((harness) => harness.kind === secondHarnessAgent?.kind)
-					?.models.map((model) => ({ value: model, label: model })) ?? [])
+		externalHarnessesEnabled && secondHarnessAgent
+			? codingHarnessModelOptions(secondHarnessAgent, codingHarnessSetup, localOptions, frontierOptions)
 			: frontierOptions,
 	);
 	const composerLocalValue = $derived(
 		externalHarnessesEnabled
-			? (firstHarnessAgent?.model ?? (firstHarnessAgent?.kind === "klerm" ? currentConfig?.localModel : undefined) ?? "")
+			? (firstHarnessAgent
+				? resolvedCodingHarnessModel(firstHarnessAgent, currentConfig?.localModel, currentConfig?.frontierModel) ?? ""
+				: "")
 			: (currentConfig?.localModel ?? ""),
 	);
 	const composerFrontierValue = $derived(
 		externalHarnessesEnabled
-			? (secondHarnessAgent?.model ??
-				(secondHarnessAgent?.kind === "klerm" ? currentConfig?.frontierModel : undefined) ??
-				"")
+			? (secondHarnessAgent
+				? resolvedCodingHarnessModel(secondHarnessAgent, currentConfig?.localModel, currentConfig?.frontierModel) ?? ""
+				: "")
 			: (currentConfig?.frontierModel ?? ""),
 	);
 	const composerLocalDisabled = $derived(
@@ -635,6 +638,15 @@
 
 	function clearError(): void {
 		errorBanner = "";
+	}
+
+	function showNotification(message: string): void {
+		notification = message;
+		if (notificationTimer !== undefined) window.clearTimeout(notificationTimer);
+		notificationTimer = window.setTimeout(() => {
+			notification = "";
+			notificationTimer = undefined;
+		}, 4_000);
 	}
 
 	function recordTaskError(message: string): void {
@@ -1083,9 +1095,25 @@
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
 			case "personal_bot_conversation_changed":
-			case "personal_bot_summary_updated": {
+			case "personal_bot_summary_updated":
+			case "personal_bot_summaries_changed": {
 				const conversation = event.conversation as PersonalBotConversation | undefined;
 				if (conversation && typeof conversation.botId === "string") {
+					const previous = personalBotConversations[conversation.botId];
+					const botName = personalBots.bots.find((bot) => bot.id === conversation.botId)?.name ?? "Personal Bot";
+					const summaryCreated = conversation.summaries.length > (previous?.summaries.length ?? 0);
+					const latestAssistant = [...conversation.messages].reverse().find((message) => message.role === "assistant");
+					if (summaryCreated && workspaceView !== "personal-bots") {
+						showNotification(`${botName} added a coding summary`);
+					} else if (
+						latestAssistant &&
+						!notifiedPersonalBotMessages.has(latestAssistant.id) &&
+						conversation.status === "idle" &&
+						workspaceView !== "personal-bots"
+					) {
+						notifiedPersonalBotMessages.add(latestAssistant.id);
+						showNotification(`${botName} completed a reply`);
+					}
 					personalBotConversations = { ...personalBotConversations, [conversation.botId]: conversation };
 				}
 				return;
@@ -1160,6 +1188,11 @@
 				return;
 			}
 			case "agent_settled": {
+				if (activeWorkspaceView !== "agents-routing") {
+					const agentId =
+						typeof event.agentId === "string" ? event.agentId : activeHarnessAgentId ?? activeAgent;
+					showNotification(`Agent ${agentId.replace(/^agent/, "")} settled`);
+				}
 				pendingApproval = undefined;
 				finalizeStreamingMessage();
 				const outcome = event.outcome as TaskOutcome | undefined;
@@ -1597,6 +1630,27 @@
 		}
 	}
 
+	async function deletePersonalBotSummary(botId: string, summaryId: string): Promise<void> {
+		if (
+			personalBotBusy ||
+			!supportsCommand("delete_personal_bot_summary") ||
+			!window.confirm("Delete this summary? This cannot be undone.")
+		)
+			return;
+		personalBotBusy = true;
+		try {
+			const conversation = await bridge.send<PersonalBotConversation>("delete_personal_bot_summary", {
+				botId,
+				summaryId,
+			});
+			personalBotConversations = { ...personalBotConversations, [botId]: conversation };
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			personalBotBusy = false;
+		}
+	}
+
 	async function loadPersonalBotConversation(botId: string): Promise<void> {
 		if (!supportsCommand("get_personal_bot_conversation")) return;
 		try {
@@ -1725,10 +1779,14 @@
 		await updateCodingHarnessAgent(id, { kind, model: undefined });
 	}
 
-	async function setCodingHarnessAgentMemory(id: string, profileId: string): Promise<void> {
-		if (!(await updateCodingHarnessAgent(id, { memoryProfileId: profileId || undefined }))) return;
-		if (id === "agent1") await assignProfile("local", profileId);
-		if (id === "agent2") await assignProfile("frontier", profileId);
+	async function setCodingHarnessAgentPersonality(id: string, botId: string): Promise<void> {
+		const bot = personalBots.bots.find((candidate) => candidate.id === botId);
+		await updateCodingHarnessAgent(
+			id,
+			bot
+				? { personalBotId: bot.id, memoryProfileId: bot.profileId }
+				: { personalBotId: undefined, memoryProfileId: undefined },
+		);
 	}
 
 	async function setCodingHarnessAgentEffort(id: string, effort: ThinkingLevel): Promise<boolean> {
@@ -2559,6 +2617,7 @@
 		document.addEventListener("keydown", onKeyDown);
 		void boot();
 		return () => {
+			if (notificationTimer !== undefined) window.clearTimeout(notificationTimer);
 			window.removeEventListener("resize", onResize);
 			document.removeEventListener("keydown", onKeyDown);
 		};
@@ -2566,6 +2625,10 @@
 </script>
 
 <Splash visible={splashVisible} />
+
+{#if notification}
+	<div class="pointer-events-none fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)]" role="status" aria-live="polite">{notification}</div>
+{/if}
 
 <svelte:window oncontextmenu={preventDesktopContextMenu} />
 
@@ -2669,6 +2732,7 @@
 				codingHarnessSetup={codingHarnessSetup}
 				codingHarnessLoading={codingHarnessSetupLoading}
 				codingHarnessError={codingHarnessSetupError}
+				personalBots={personalBots.bots}
 				providers={providerAccounts}
 				{providerBusy}
 				fullscreen={settingsFullscreen}
@@ -2712,6 +2776,7 @@
 				onsave={savePersonalBot}
 				onprofilesave={savePersonalBotProfile}
 				ondelete={deletePersonalBot}
+				onsummarydelete={deletePersonalBotSummary}
 				onprompt={promptPersonalBot}
 				onabort={abortPersonalBot}
 			/>
@@ -2823,6 +2888,8 @@
 			emptyLayout={!hasConversation}
 			localOptions={composerLocalOptions}
 			frontierOptions={composerFrontierOptions}
+			klermLocalOptions={localOptions}
+			klermFrontierOptions={frontierOptions}
 			localValue={composerLocalValue}
 			frontierValue={composerFrontierValue}
 			routingValue={routingControlValue}
@@ -2852,6 +2919,7 @@
 			localProfileId={desktopSettings?.profiles.localProfileId ?? ""}
 			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
 			profileDisabled={!backendReady || interactionActive}
+			personalBots={personalBots.bots}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
 			approvalMode={currentConfig?.localApprovalMode ?? "risky"}
@@ -2889,7 +2957,7 @@
 			onexternalharnesschange={(id, enabled) => void updateCodingHarnessAgent(id, { enabled })}
 			onexternalharnesskindchange={(id, kind) => void setCodingHarnessAgentKind(id, kind)}
 			onexternalmodelchange={(id, model) => void setCodingHarnessAgentModel(id, model)}
-			onexternalmemorychange={(id, profileId) => void setCodingHarnessAgentMemory(id, profileId)}
+			onexternalpersonalitychange={(id, botId) => void setCodingHarnessAgentPersonality(id, botId)}
 			onaddexternalagent={() => void addCodingHarnessAgent()}
 			onremoveexternalagent={(id) => void removeCodingHarnessAgent(id)}
 			ondisableallexternalagents={() => void setAllCodingHarnessAgents(false)}

@@ -15,6 +15,7 @@
 		McpServerStatus,
 		McpServerUpdate,
 		McpStatus,
+		PersonalBot,
 		ProviderAccount,
 		ProviderConnect,
 		ProviderOauthStep,
@@ -42,6 +43,7 @@
 		codingHarnessError,
 		providers,
 		providerBusy,
+		personalBots,
 		fullscreen,
 		ontogglefullscreen,
 		onclose,
@@ -74,6 +76,7 @@
 		codingHarnessError: string;
 		providers: ProviderAccount[];
 		providerBusy: boolean;
+		personalBots: PersonalBot[];
 		oauthStep: ProviderOauthStep | undefined;
 		onstartoauth: (provider: string) => Promise<boolean>;
 		oncanceloauth: () => void;
@@ -749,6 +752,7 @@
 				<div class="grid grid-cols-2 gap-3 narrow-720:grid-cols-1">
 					{#each draftHarnessSlots.agents as value (value.id)}
 						{@const models = harnessModels(value.kind)}
+						{@const personality = personalBots.find((bot) => bot.id === value.personalBotId)}
 						<section class="rounded-xl border border-[#232c34] bg-[#0a0f13] p-4">
 							<div class="mb-4 flex flex-wrap items-center gap-2">
 								<ProviderLogo id={value.kind ?? "custom"} label={value.kind ? codingHarnessLabel(value.kind) : `Agent ${agentNumber(value.id)}`} size={24} decorative />
@@ -779,6 +783,9 @@
 								{/each}
 							</select>
 							<p class={`m-0 mt-3 break-words font-mono text-[9px] ${value.kind !== null && !harnessAvailable(value.kind) ? "text-[#f3a49c]" : "text-[#7b868e]"}`}>{harnessStatus(value.kind)} · {value.enabled ? "On" : "Off"}</p>
+							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`personality-${value.id}`}>Personality</label>
+							<select id={`personality-${value.id}`} value={value.personalBotId ?? ""} class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => { const bot = personalBots.find((candidate) => candidate.id === event.currentTarget.value); updateAgent(value.id, bot ? { personalBotId: bot.id, memoryProfileId: bot.profileId } : { personalBotId: undefined, memoryProfileId: undefined }); }}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
+							{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Selected: {personality.name}</p>{/if}
 							{#if value.kind && codingHarnessSetup?.harnesses.find((item) => item.kind === value.kind)?.error}
 								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
 							{/if}

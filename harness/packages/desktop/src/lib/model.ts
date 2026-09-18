@@ -14,6 +14,7 @@ export interface CodingHarnessSlotSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	personalBotId?: string;
 	memoryProfileId?: string;
 	role: WorkerRole;
 	effort: ThinkingLevel;
@@ -363,6 +364,26 @@ export interface PersonalBotChatMessage {
 	timestamp: string;
 }
 
+export interface PersonalBotConversationSummary {
+	id: string;
+	ordinal: number;
+	source: "legacy-conversation" | "linked-agent-tasks";
+	linkedPromptRange: { start: number; end: number };
+	text: string;
+	timestamp: string;
+	sourceMessageCount: number;
+	digest: string;
+}
+
+export interface PersonalBotSummarySource {
+	id: string;
+	agentId: string;
+	linkedPromptOrdinal: number;
+	userPrompt: string;
+	finalResponse: string;
+	timestamp: string;
+}
+
 export interface PersonalBotConversation {
 	version: 1;
 	id: string;
@@ -374,12 +395,9 @@ export interface PersonalBotConversation {
 	nativeSessionId?: string;
 	sessionContextDigest?: string;
 	peerSummaryDigest?: string;
-	summary?: {
-		text: string;
-		updatedAt: string;
-		sourceMessageCount: number;
-		digest: string;
-	};
+	linkedSuccessfulPromptCount: number;
+	pendingSummarySources: PersonalBotSummarySource[];
+	summaries: PersonalBotConversationSummary[];
 	status: "idle" | "running" | "summarizing" | "failed";
 	eventSequence: number;
 	messages: PersonalBotChatMessage[];
