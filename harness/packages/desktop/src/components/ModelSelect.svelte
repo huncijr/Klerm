@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
-	import type { KlermProfile, SelectOption } from "../lib/model.ts";
+	import type { PersonalBot, SelectOption } from "../lib/model.ts";
 	import { profileIcon } from "../lib/profiles.ts";
 
 	let {
@@ -10,9 +10,9 @@
 		disabled,
 		placeholder,
 		onchange,
-		profiles = [],
-		selectedProfile,
-		onprofile,
+		memories = [],
+		selectedMemoryId,
+		onmemory,
 		flyout = "right",
 		direction = "up",
 		allowEmpty = false,
@@ -24,9 +24,9 @@
 		disabled: boolean;
 		placeholder: string;
 		onchange: (value: string) => void;
-		profiles?: KlermProfile[];
-		selectedProfile?: KlermProfile;
-		onprofile?: (model: string, profileId: string) => void;
+		memories?: PersonalBot[];
+		selectedMemoryId?: string;
+		onmemory?: (model: string, botId: string) => void;
 		flyout?: "left" | "right";
 		direction?: "up" | "down";
 		allowEmpty?: boolean;
@@ -42,6 +42,7 @@
 
 	const selected = $derived(options.find((option) => option.value === value));
 	const displayLabel = $derived(selected?.label ?? placeholder);
+	const selectedMemory = $derived(memories.find((memory) => memory.id === selectedMemoryId));
 	const filteredOptions = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
 		if (!needle) return options;
@@ -80,10 +81,10 @@
 		buttonEl?.focus();
 	}
 
-	function selectProfile(profileId: string): void {
-		if (!hovered || !onprofile) return;
+	function selectMemory(botId: string): void {
+		if (!hovered || !onmemory) return;
 		open = false;
-		onprofile(hovered, profileId);
+		onmemory(hovered, botId);
 		hovered = "";
 		buttonEl?.focus();
 	}
@@ -144,14 +145,14 @@
 			aria-label={label}
 			aria-haspopup="listbox"
 			aria-expanded={open}
-			class={`flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-[3px] text-left text-[10px] outline-0 focus-visible:text-[#f1f4f5] enabled:hover:text-[#f1f4f5] disabled:cursor-not-allowed disabled:text-[#59635c] ${
+			class={`flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-[3px] text-left text-[10px] outline-0 focus-visible:text-[#f1f4f5] enabled:hover:text-[#f1f4f5] enabled:active:opacity-60 disabled:cursor-not-allowed disabled:text-[#59635c] ${
 				disabled ? "" : "text-[#b7c0c6]"
 			}`}
 			onclick={toggle}
 			onkeydown={handleButtonKeydown}
 		>
 			<span class="flex min-w-0 items-center gap-1.5" title={selected?.label ?? ""}>
-				{#if selectedProfile}<span class="shrink-0 text-[12px]">{profileIcon(selectedProfile.face)}</span>{/if}
+				{#if selectedMemory}<span class="shrink-0 text-[12px]">{profileIcon(selectedMemory.face)}</span>{/if}
 				<span class="min-w-0 truncate">{displayLabel}</span>
 			</span>
 			<i
@@ -226,18 +227,18 @@
 							<p class="m-0 px-2.5 py-2 font-mono text-[9px] text-[#59636b]">No models match "{query.trim()}".</p>
 							{/if}
 				</div>
-				{#if profiles.length > 0 && hovered}
+				{#if memories.length > 0 && hovered}
 					<div class={`absolute top-0 w-[158px] rounded-lg border border-[#1b2228] bg-[#05080b] p-1 shadow-[0_18px_55px_rgba(0,0,0,.62)] ${flyout === "left" ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"}`}>
-						<p class="px-2 py-1 font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase">Profiles</p>
-						{#each profiles as profile (profile.id)}
+						<p class="px-2 py-1 font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase">Memories</p>
+						{#each memories as memory (memory.id)}
 							<button
 								type="button"
-								class={`flex w-full cursor-pointer items-center gap-2 rounded-md border-0 px-2 py-1.5 text-left font-mono text-[10px] hover:bg-[#141a1f] ${selectedProfile?.id === profile.id ? "bg-[#141a1f] text-white" : "text-[#d7dfe2]"}`}
+								class={`flex w-full cursor-pointer items-center gap-2 rounded-md border-0 px-2 py-1.5 text-left font-mono text-[10px] hover:bg-[#141a1f] ${selectedMemoryId === memory.id ? "bg-[#141a1f] text-white" : "text-[#d7dfe2]"}`}
 								onmousedown={(event) => event.preventDefault()}
-								onclick={() => selectProfile(profile.id)}
+								onclick={() => selectMemory(memory.id)}
 							>
-								<span>{profileIcon(profile.face)}</span>
-								<span class="truncate">{profile.name}</span>
+								<span>{profileIcon(memory.face)}</span>
+								<span class="truncate">{memory.name}</span>
 							</button>
 						{/each}
 					</div>

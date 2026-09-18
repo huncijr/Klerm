@@ -142,7 +142,22 @@
 				<h2 class="mb-3 text-[13px] font-semibold text-[#dce3e6]">Sessions</h2>
 				<div class="grid grid-cols-2 gap-3.5 narrow-720:grid-cols-1">
 					{#each sessions as session (session.sessionToken)}
-						<div class="rounded-[14px] border border-[#2b363e] bg-[linear-gradient(145deg,#0d1317,#090e12)] p-1.5 shadow-[0_12px_30px_rgba(0,0,0,.14)] transition-colors hover:border-[#4a5b65]">
+						<div
+							class="cursor-pointer rounded-[14px] border border-[#2b363e] bg-[linear-gradient(145deg,#0d1317,#090e12)] p-1.5 shadow-[0_12px_30px_rgba(0,0,0,.14)] transition-colors hover:border-[#4a5b65]"
+							role="button"
+							tabindex="0"
+							aria-label={`Open session ${session.name ?? session.firstMessage}`}
+							onclick={(event) => {
+								if ((event.target as HTMLElement | null)?.closest("button, input, a, select, textarea")) return;
+								onswitch(session);
+							}}
+							onkeydown={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								if ((event.target as HTMLElement | null)?.closest("button, input, a, select, textarea")) return;
+								event.preventDefault();
+								onswitch(session);
+							}}
+						>
 							<SessionRow {session} {projects} currentProjectId={project.id} active={session.sessionToken === activeSessionToken} onswitch={() => onswitch(session)} onrename={(name) => onrename(session, name)} ondelete={() => ondelete(session)} onmove={(projectId) => onmove(session, projectId)} onremove={() => onmove(session, undefined)} />
 						</div>
 					{:else}

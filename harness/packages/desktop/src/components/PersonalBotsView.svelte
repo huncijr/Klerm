@@ -435,6 +435,9 @@
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Pending tasks</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.pendingSummarySources.length ?? 0} queued{(conversation?.pendingSummarySources.length ?? 0) > 0 ? ` (${[...new Set((conversation?.pendingSummarySources ?? []).map((source) => source.agentId))].join(", ")})` : ""}</span></div>
 				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary state</span><span class="mt-1 block text-[#c9827b]">Last bot run failed. Successful linked agent tasks still count toward the next summary.</span></div>{/if}
 			</div>
+			<div class="mt-5 grid gap-2">
+				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
+			</div>
 			<section class="mt-5 border-t border-[#252e33] pt-4">
 				<div class="mb-2 flex items-center justify-between gap-2"><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#7f8b91]">Summary history</p><span class="text-[8px] text-[#536067]">{summaries.length}</span></div>
 				{#if summaries.length > 0}
@@ -453,9 +456,6 @@
 					<p class="m-0 text-[9px] leading-4 text-[#59656b]">A summary is added after every three successful tasks completed by an agent linked to this bot.</p>
 				{/if}
 			</section>
-			<div class="mt-5 grid gap-2">
-				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
-			</div>
 			{#if notice}<p class="mt-3 text-[10px] text-[#72cda8]">{notice}</p>{/if}
 		{/if}
 	</aside>

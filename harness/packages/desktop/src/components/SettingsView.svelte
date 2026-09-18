@@ -801,37 +801,40 @@
 							{#if value.kind && codingHarnessSetup?.harnesses.find((item) => item.kind === value.kind)?.error}
 								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
 							{/if}
-							<div class="mt-4 grid grid-cols-2 gap-2 narrow-720:grid-cols-1">
-								<div class="min-w-0">
-									<label class="block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`personality-${value.id}`}>Personality</label>
-									<select id={`personality-${value.id}`} value={value.personalBotId ?? ""} class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => { const bot = personalBots.find((candidate) => candidate.id === event.currentTarget.value); updateAgent(value.id, bot ? { personalBotId: bot.id, memoryProfileId: bot.profileId } : { personalBotId: undefined, memoryProfileId: undefined }); }}><option value="">None</option>{#each personalBots as bot (bot.id)}<option value={bot.id}>{bot.name}</option>{/each}</select>
-									{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Selected: {personality.name}</p>{/if}
-								</div>
-								<div class="min-w-0">
-									<label class="block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
-									<div class="mt-2" id={`harness-model-${value.id}`}>
-										<ModelSelect
-											label={`Agent ${agentNumber(value.id)} model`}
-											options={models.map((model) => ({ value: model, label: model }))}
-											value={value.model ?? ""}
-											disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
-											placeholder={
-												value.kind === "klerm"
-													? "Use current Klerm model"
-													: value.kind && loadingHarnessModels.includes(value.kind)
-														? "Loading models..."
-														: models.length > 0
-															? "Select harness model"
-															: "No models reported by this harness"
-											}
-											direction="down"
-											allowEmpty
-											emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
-											onchange={(next) => updateAgent(value.id, { model: next || undefined })}
-										/>
-									</div>
-								</div>
+							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
+							<div class="mt-2" id={`harness-model-${value.id}`}>
+								<ModelSelect
+									label={`Agent ${agentNumber(value.id)} model`}
+									options={models.map((model) => ({ value: model, label: model }))}
+									value={value.model ?? ""}
+									disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
+									placeholder={
+										value.kind === "klerm"
+											? "Use current Klerm model"
+											: value.kind && loadingHarnessModels.includes(value.kind)
+												? "Loading models..."
+												: models.length > 0
+													? "Select harness model"
+													: "No models reported by this harness"
+									}
+									direction="down"
+									allowEmpty
+									emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
+									memories={personalBots}
+									selectedMemoryId={value.personalBotId}
+									onchange={(next) => updateAgent(value.id, { model: next || undefined })}
+									onmemory={(model, botId) => {
+										const bot = personalBots.find((candidate) => candidate.id === botId);
+										updateAgent(value.id, {
+											...(model ? { model } : {}),
+											...(bot
+												? { personalBotId: bot.id, memoryProfileId: bot.profileId }
+												: { personalBotId: undefined, memoryProfileId: undefined }),
+										});
+									}}
+								/>
 							</div>
+							{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Memory: {personality.name}</p>{/if}
 							<div class="mt-4 grid grid-cols-2 gap-2">
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`role-${value.id}`}>Role</label>
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`effort-${value.id}`}>Effort</label>

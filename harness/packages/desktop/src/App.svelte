@@ -801,6 +801,7 @@
 
 	function renderCodingHarnessBridgeEvent(event: CodingHarnessBridgeEvent): void {
 		if (event.event === "NO_DELEGATION") return;
+		if (!event.parentTaskId && (event.status === "assigned" || event.status === "running")) return;
 		const card = bridgeEventCard(event);
 		const existingEntry = feed.find(
 			(item) => item.type === "activity" && item.activity.dedupeId === card.dedupeId,
@@ -2605,6 +2606,7 @@
 			text: displayText,
 			images: [...images],
 			streaming: false,
+			...(targetAgentId ? { agentId: targetAgentId } : {}),
 		});
 		try {
 			const preparedPrompt = prepareMcpPrompt(text, mcpServers);
@@ -2628,6 +2630,10 @@
 			showError(failure);
 			return false;
 		}
+	}
+
+	function sendAgentMessage(agentId: string, text: string, images: ImageAttachment[]): void {
+		void sendMessage(text, images, "prompt", text, agentId);
 	}
 
 	function rerunPrompt(text: string): void {
@@ -2915,6 +2921,8 @@
 							clearThrough={agentClearThrough}
 							activeAgentId={activeHarnessAgentId}
 							{taskActive}
+							sendDisabled={sendDisabled}
+							personalBots={personalBots.bots}
 							mcpServers={mcpServers}
 							connectedHarnessKinds={codingHarnessSetup?.harnesses.filter((harness) => harness.adapterConnected).map((harness) => harness.kind) ?? []}
 							onclose={closeAgentView}
@@ -2923,6 +2931,7 @@
 							onclear={clearAgentOutput}
 							onrerun={rerunPrompt}
 							ontoggle={toggleTimeline}
+							onsend={sendAgentMessage}
 						/>
 					</div>
 					<button
@@ -3001,10 +3010,8 @@
 			frontierThinkingValue={frontierThinking.level}
 			{frontierThinkingDisabled}
 			mcpServers={mcpServers}
-			profiles={desktopSettings?.profiles.profiles ?? []}
 			localProfileId={desktopSettings?.profiles.localProfileId ?? ""}
 			frontierProfileId={desktopSettings?.profiles.frontierProfileId ?? ""}
-			profileDisabled={!backendReady || interactionActive}
 			personalBots={personalBots.bots}
 			localRole={currentConfig?.localRole ?? "builder"}
 			frontierRole={currentConfig?.frontierRole ?? "builder"}
@@ -3044,6 +3051,7 @@
 			onexternalharnesskindchange={(id, kind) => void setCodingHarnessAgentKind(id, kind)}
 			onexternalmodelchange={(id, model) => void setCodingHarnessAgentModel(id, model)}
 			onexternalpersonalitychange={(id, botId) => void setCodingHarnessAgentPersonality(id, botId)}
+			onexternaleffortchange={(id, effort) => void setCodingHarnessAgentEffort(id, effort)}
 			onaddexternalagent={() => void addCodingHarnessAgent()}
 			onremoveexternalagent={(id) => void removeCodingHarnessAgent(id)}
 			ondisableallexternalagents={() => void setAllCodingHarnessAgents(false)}
