@@ -33,13 +33,15 @@ describe("desktop agent workspace state", () => {
 		expect(teamRoleChange("builder", false)).toEqual({ applyRole: "builder" });
 	});
 
-	test("uses stable task ids to update live and replayed bridge cards", () => {
+	test("keeps every bridge lifecycle event in append order", () => {
 		const started = bridgeEventCard(bridgeEvent());
 		const completed = bridgeEventCard(
 			bridgeEvent({ event: "TASK_COMPLETED", sequence: 2, status: "completed", reason: "done" }),
 		);
 		const peer = bridgeEventCard(bridgeEvent({ taskId: "task-1-peer-1", parentTaskId: "task-1", agentId: "agent7" }));
-		expect(started.dedupeId).toBe(completed.dedupeId);
+		expect(started.dedupeId).not.toBe(completed.dedupeId);
+		expect(started.dedupeId).toBe("bridge-task-1-1");
+		expect(completed.dedupeId).toBe("bridge-task-1-2");
 		expect(completed).toMatchObject({
 			title: "Root task · Completed",
 			tone: "green",
@@ -93,6 +95,39 @@ describe("desktop agent workspace state", () => {
 		expect(agentFeedItems(items, "agent6", 2).map((item) => item.id)).toEqual([3, 4]);
 		expect(agentFeedItems(items, "agent7", 0).map((item) => item.id)).toEqual([2]);
 		expect(items).toHaveLength(4);
+	});
+
+	test("shows directed user prompts and handoffs in every participating agent view", () => {
+		const items: FeedItem[] = [
+			{
+				id: 1,
+				type: "message",
+				message: {
+					id: 1,
+					role: "user",
+					text: "Please review this",
+					sender: "user",
+					recipient: "agent5",
+					streaming: false,
+				},
+			},
+			{
+				id: 2,
+				type: "message",
+				message: {
+					id: 2,
+					role: "user",
+					text: "Implement this plan",
+					sender: "agent5",
+					recipient: "agent6",
+					kind: "handoff",
+					streaming: false,
+				},
+			},
+		];
+
+		expect(agentFeedItems(items, "agent5", 0).map((item) => item.id)).toEqual([1, 2]);
+		expect(agentFeedItems(items, "agent6", 0).map((item) => item.id)).toEqual([2]);
 	});
 
 	test("retains independent file drafts until save or discard", () => {

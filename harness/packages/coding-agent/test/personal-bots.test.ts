@@ -6,6 +6,7 @@ import {
 	appendPersonalBotConversationEvent,
 	createPersonalBotConversation,
 	createPersonalBotConversationSummary,
+	createPersonalBotFallbackSummary,
 	formatPersonalBotSummaryMarkdown,
 	loadPersonalBotConversation,
 	savePersonalBotConversation,
@@ -185,5 +186,21 @@ describe("Personal Bot registry", () => {
 		const summary = createPersonalBotConversationSummary("## Decision\nKeep it.", 2, { start: 4, end: 6 }, 12, "now");
 		expect(summary).toMatchObject({ ordinal: 2, linkedPromptRange: { start: 4, end: 6 }, timestamp: "now" });
 		expect(summary.id).toBe("bot-summary-6");
+	});
+
+	test("creates a useful deterministic summary when model synthesis is unavailable", () => {
+		const text = createPersonalBotFallbackSummary([
+			{
+				id: "task-1",
+				agentId: "agent5",
+				linkedPromptOrdinal: 1,
+				userPrompt: "Plan the implementation",
+				finalResponse: "Prepared the implementation plan and delegated the build.",
+				timestamp: "2026-09-19T00:00:00.000Z",
+			},
+		]);
+		expect(text).toContain("**agent5** - Prepared the implementation plan");
+		expect(text).toContain("Request: Plan the implementation");
+		expect(text).toContain("model synthesis was unavailable");
 	});
 });

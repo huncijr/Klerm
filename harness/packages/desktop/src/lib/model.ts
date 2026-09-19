@@ -247,6 +247,19 @@ export interface CodingHarnessBridgeEvent {
 	artifact?: CodingHarnessBridgeArtifact;
 }
 
+export interface CodingHarnessBridgeChatEntry {
+	version: 1;
+	timestamp: string;
+	kind: "participant" | "handoff";
+	sender: string;
+	recipient: string;
+	role?: "user" | "assistant";
+	body?: string;
+	taskId?: string;
+	correlationId?: string;
+	sequence?: number;
+}
+
 export interface TaskOutcome {
 	status:
 		| "completed"
@@ -557,6 +570,9 @@ export interface ChatMessage {
 	role: "user" | "assistant";
 	text: string;
 	agentId?: string;
+	sender?: string;
+	recipient?: string;
+	kind?: "message" | "handoff";
 	images?: ImageAttachment[];
 	model?: string;
 	streaming: boolean;

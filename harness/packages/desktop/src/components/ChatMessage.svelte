@@ -18,6 +18,19 @@
 	let editing = $state(false);
 	let editValue = $state("");
 	const mentionSegments = $derived(splitMcpMentions(message.text, mcpServers));
+	const participantLabel = (participant: string): string => {
+		if (participant === "user") return "You";
+		if (participant === "klerm") return "Klerm";
+		if (participant.startsWith("agent")) return `Agent ${participant.slice(5)}`;
+		return participant;
+	};
+	const messageLabel = $derived(
+		message.sender && message.recipient
+			? `${participantLabel(message.sender)} → ${participantLabel(message.recipient)}`
+			: message.role === "user"
+				? "You"
+				: (message.model ?? "Klerm"),
+	);
 
 	onMount(() => {
 		rootEl?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -55,8 +68,10 @@
 	<div
 		class={`mb-2 flex items-center gap-2 font-mono text-[9px] tracking-[.06em] text-[#657079] ${message.role === "user" ? "pr-1" : ""}`}
 	>
-		<span>{message.role === "user" ? "You" : (message.model ?? "Klerm")}</span>
-		{#if message.role === "user" && !editing}
+		<span>{messageLabel}</span>
+		{#if message.kind === "handoff"}<span class="rounded border border-[#68582f] bg-[#2a2414] px-1.5 py-0.5 text-[7px] text-[#d5b96f] uppercase">Handoff</span>{/if}
+		{#if message.kind !== "handoff" && message.sender && message.model}<span class="text-[#4e5960]">{message.model}</span>{/if}
+		{#if message.role === "user" && message.kind !== "handoff" && !editing}
 			<button
 				type="button"
 				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[8px] text-[#657079] hover:text-[#cbd2d7]"
@@ -88,10 +103,12 @@
 		class={`whitespace-pre-wrap break-words text-[13px] leading-[1.75] narrow-900:text-[12px] ${
 			message.role === "user"
 				? "w-fit max-w-[78%] rounded-[10px] border border-[#293139] bg-[#151a1f] px-[15px] py-3 text-[#edf1f3] narrow-520:max-w-[88%] narrow-520:px-3 narrow-520:py-2.5 narrow-520:text-[12px] narrow-520:leading-[1.65]"
-				: "px-[2px] text-[#cbd2d7] narrow-520:text-[12px] narrow-520:leading-[1.65]"
+				: message.kind === "handoff"
+					? "rounded-[10px] border border-[#4d4328] bg-[#17150e] px-[15px] py-3 text-[#d8d0b8] narrow-520:text-[12px] narrow-520:leading-[1.65]"
+					: "px-[2px] text-[#cbd2d7] narrow-520:text-[12px] narrow-520:leading-[1.65]"
 		}`}
 	>
-		{#if message.role === "assistant"}
+		{#if message.role === "assistant" || message.kind === "handoff"}
 			<MarkdownLite text={message.text} />
 		{:else}
 			{#each mentionSegments as segment, index (`${index}-${segment.text}`)}

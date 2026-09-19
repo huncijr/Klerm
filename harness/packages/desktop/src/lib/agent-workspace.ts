@@ -16,7 +16,9 @@ export function agentFeedItems(items: readonly FeedItem[], agentId: string, clea
 	return items.filter(
 		(item) =>
 			item.id > clearThrough &&
-			(item.type === "message" ? item.message.agentId === agentId : item.activity.agentId === agentId),
+			(item.type === "message"
+				? item.message.agentId === agentId || item.message.sender === agentId || item.message.recipient === agentId
+				: item.activity.agentId === agentId),
 	);
 }
 
@@ -34,9 +36,7 @@ export function bridgeEventCard(event: CodingHarnessBridgeEvent): {
 	const taskLabel = noDelegation ? "No delegation" : event.parentTaskId ? "↳ Peer task" : "Root task";
 	const terminalError = event.status === "failed" || event.status === "cancelled";
 	return {
-		dedupeId: noDelegation
-			? `bridge-${event.correlationId}-no-delegation`
-			: `bridge-${event.correlationId}-${event.taskId}`,
+		dedupeId: `bridge-${event.correlationId}-${event.sequence}`,
 		title: `${taskLabel} · ${statusLabel}`,
 		detail: [
 			event.reason,

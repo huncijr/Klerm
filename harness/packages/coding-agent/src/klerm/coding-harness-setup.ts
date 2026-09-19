@@ -385,7 +385,7 @@ export function createCodingHarnessSetup(
 				prompt: true as const,
 				abort: true as const,
 				resumeSession: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
-				roleEnforcement: agent.kind === "klerm" || agent.kind === "codex",
+				roleEnforcement: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
 				childTaskEvents: false as const,
 			},
 		};

@@ -105,6 +105,7 @@ describe("coding harness adapters", () => {
 
 		expect(session.nativeSessionId).toBe("ses_native");
 		expect(fake.calls[0]).toMatchObject({ command: "opencode", input: "first" });
+		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "build", "--dir", "/repo"]));
 		expect(fake.calls[0]?.args).not.toContain("--session");
 		expect(fake.calls[1]?.args).toContain("ses_native");
 		expect(events).toEqual([
@@ -129,6 +130,15 @@ describe("coding harness adapters", () => {
 			line: JSON.stringify({ type: "text", sessionID: "ses_native", part: { text: "done" } }),
 		});
 		expect(debugEvents.filter((event) => event.type === "process-close")).toHaveLength(2);
+	});
+
+	test("OpenCode uses its native read-only plan agent for planner sessions", async () => {
+		const fake = processSpawner([[JSON.stringify({ type: "text", sessionID: "ses_plan", part: { text: "plan" } })]]);
+		const adapter = new OpenCodeAdapter(fake.spawnProcess);
+		const session = await adapter.startSession(agent("opencode", "planner"), "/repo");
+		await adapter.prompt(session, "plan this change");
+
+		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "plan", "--dir", "/repo"]));
 	});
 
 	test("Codex maps its structured lifecycle and gives planners a read-only sandbox", async () => {

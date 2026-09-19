@@ -240,6 +240,8 @@ export class OpenCodeAdapter extends JsonlCodingHarnessAdapter {
 			"json",
 			"--model",
 			state.ref.model,
+			"--agent",
+			state.role === "planner" ? "plan" : "build",
 			"--dir",
 			state.cwd,
 			...(state.ref.nativeSessionId ? ["--session", state.ref.nativeSessionId] : []),

@@ -5,6 +5,7 @@ import type { RunnableCodingHarnessAgent } from "./coding-harness-setup.ts";
 import type { KlermTaskIntent, KlermTaskOutcomeStatus } from "./router/types.ts";
 
 export const KLERM_BRIDGE_EVENT_CUSTOM_TYPE = "klerm-bridge-event";
+export const KLERM_BRIDGE_CHAT_CUSTOM_TYPE = "klerm-bridge-chat";
 export const KLERM_BRIDGE_LOG_DIRECTORY = ".klerm";
 export const KLERM_BRIDGE_LOG_FILE = "bridge-events.jsonl";
 
@@ -70,6 +71,19 @@ export interface CodingHarnessBridgeEvent {
 	taskIntent?: KlermTaskIntent;
 	changedFileCount?: number;
 	verificationCount?: number;
+}
+
+export interface CodingHarnessBridgeChatEntry {
+	version: 1;
+	timestamp: string;
+	kind: "participant" | "handoff";
+	sender: string;
+	recipient: string;
+	role?: "user" | "assistant";
+	body?: string;
+	taskId?: string;
+	correlationId?: string;
+	sequence?: number;
 }
 
 export function getCodingHarnessBridgeLogPath(cwd: string): string {

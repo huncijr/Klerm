@@ -231,6 +231,23 @@ export function createPersonalBotConversationSummary(
 	};
 }
 
+export function createPersonalBotFallbackSummary(sources: readonly PersonalBotSummarySource[]): string {
+	const compact = (text: string, maxCharacters: number): string => {
+		const normalized = text.replace(/\s+/g, " ").trim();
+		return normalized.length <= maxCharacters ? normalized : `${normalized.slice(0, maxCharacters - 3).trimEnd()}...`;
+	};
+	return [
+		"## Recorded Task Outcomes",
+		...sources.map(
+			(source, index) =>
+				`${index + 1}. **${source.agentId}** - ${compact(source.finalResponse, 220)}\n   Request: ${compact(source.userPrompt, 100)}`,
+		),
+		"",
+		"## Note",
+		"Generated directly from recorded task outputs because model synthesis was unavailable.",
+	].join("\n");
+}
+
 export async function savePersonalBotConversation(
 	agentDir: string,
 	conversation: PersonalBotConversation,

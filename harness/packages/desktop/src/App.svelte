@@ -33,6 +33,7 @@
 		AgentMessage,
 		BashResult,
 		ChatMessage,
+		CodingHarnessBridgeChatEntry,
 		CodingHarnessBridgeEvent,
 		CodingHarnessKind,
 		CodingHarnessSetup,
@@ -1024,7 +1025,12 @@
 		return configuredHarnessAgents.find((agent) => agent.model === model)?.id;
 	}
 
-	function appendAssistantMessage(message?: AgentMessage, agentId?: string): void {
+	function appendAssistantMessage(
+		message?: AgentMessage,
+		agentId?: string,
+		sender?: string,
+		recipient?: string,
+	): void {
 		const item: ChatMessage = {
 			id: ++messageSeq,
 			role: "assistant",
@@ -1032,6 +1038,8 @@
 			model: modelLabel(message),
 			streaming: true,
 			...(agentId ? { agentId } : {}),
+			...(sender ? { sender } : {}),
+			...(recipient ? { recipient } : {}),
 		};
 		pushMessage(item);
 		streamingMessageId = item.id;
@@ -1053,8 +1061,17 @@
 			cursor = cursor.parentId ? entryById.get(cursor.parentId) : undefined;
 		}
 		activeBranch.reverse();
+		const structuredHandoffTaskIds = new Set(
+			activeBranch.flatMap((entry) => {
+				if (entry.type !== "custom" || entry.customType !== "klerm-bridge-chat") return [];
+				const chat = entry.data as CodingHarnessBridgeChatEntry;
+				return chat.kind === "handoff" && chat.taskId ? [chat.taskId] : [];
+			}),
+		);
 		let displayPrompt: string | undefined;
 		let replayAgentId: string | undefined;
+		let participant: CodingHarnessBridgeChatEntry | undefined;
+		const latestAssistantByAgent = new Map<string, ChatMessage>();
 		for (const entry of activeBranch) {
 			if (entry.type === "custom" && entry.customType === "klerm-desktop-display-prompt") {
 				const data = entry.data as { text?: unknown } | undefined;
@@ -1071,28 +1088,102 @@
 			}
 			if (entry.type === "custom" && entry.customType === "klerm-bridge-event") {
 				const bridgeEvent = entry.data as CodingHarnessBridgeEvent;
+				if (bridgeEvent.event === "TASK_CREATED" && bridgeEvent.sender === "user") {
+					const latestUser = [...feed]
+						.reverse()
+						.find((item) => item.type === "message" && item.message.role === "user");
+					if (latestUser?.type === "message" && !latestUser.message.recipient) {
+						latestUser.message.sender = "user";
+						latestUser.message.recipient = bridgeEvent.recipient;
+						latestUser.message.agentId = bridgeEvent.recipient;
+					}
+				}
+				if (
+					!structuredHandoffTaskIds.has(bridgeEvent.taskId) &&
+					bridgeEvent.event === "TASK_ASSIGNED" &&
+					bridgeEvent.parentTaskId &&
+					bridgeEvent.sender.startsWith("agent") &&
+					bridgeEvent.recipient.startsWith("agent")
+				) {
+					pushMessage({
+						id: ++messageSeq,
+						role: "user",
+						text: latestAssistantByAgent.get(bridgeEvent.sender)?.text ?? bridgeEvent.reason,
+						agentId: bridgeEvent.sender,
+						sender: bridgeEvent.sender,
+						recipient: bridgeEvent.recipient,
+						kind: "handoff",
+						streaming: false,
+					});
+				}
+				if (
+					bridgeEvent.event === "TASK_RETURNED" &&
+					bridgeEvent.sender.startsWith("agent") &&
+					bridgeEvent.recipient.startsWith("agent")
+				) {
+					const returnedMessage = latestAssistantByAgent.get(bridgeEvent.sender);
+					if (returnedMessage && !returnedMessage.recipient) {
+						returnedMessage.sender = bridgeEvent.sender;
+						returnedMessage.recipient = bridgeEvent.recipient;
+						returnedMessage.agentId = bridgeEvent.sender;
+					}
+				}
 				renderCodingHarnessBridgeEvent(bridgeEvent);
 				replayAgentId = bridgeEvent.agentId ?? replayAgentId;
+				continue;
+			}
+			if (entry.type === "custom" && entry.customType === "klerm-bridge-chat") {
+				const chat = entry.data as CodingHarnessBridgeChatEntry;
+				if (chat.kind === "handoff" && chat.body?.trim()) {
+					pushMessage({
+						id: ++messageSeq,
+						role: "user",
+						text: chat.body,
+						agentId: chat.sender.startsWith("agent") ? chat.sender : undefined,
+						sender: chat.sender,
+						recipient: chat.recipient,
+						kind: "handoff",
+						streaming: false,
+					});
+				} else if (chat.kind === "participant") {
+					participant = chat;
+				}
 				continue;
 			}
 			if (entry.type !== "message" || !entry.message) continue;
 			const message = entry.message;
 			if (message.role === "user" || message.role === "assistant") {
 				if (message.role === "assistant") replayAgentId = agentIdForModel(modelLabel(message)) ?? replayAgentId;
-				const text = message.role === "user" && displayPrompt ? displayPrompt : messageText(message);
+				const rawText = messageText(message);
+				const text = message.role === "user" && displayPrompt ? displayPrompt : rawText;
 				const images = contentImages(message.content);
 				if (message.role === "user") displayPrompt = undefined;
 				if (text || images.length > 0) {
-					pushMessage({
+					const metadata =
+						participant?.role === message.role && (!participant.body || participant.body === rawText)
+							? participant
+							: undefined;
+					const rendered = pushMessage({
 						id: ++messageSeq,
 						role: message.role,
 						text,
 						images,
 						model: message.role === "assistant" ? modelLabel(message) : undefined,
-						agentId: message.role === "assistant" ? replayAgentId : undefined,
+						agentId:
+							message.role === "assistant"
+								? (metadata?.sender.startsWith("agent") ? metadata.sender : replayAgentId)
+								: metadata?.recipient.startsWith("agent")
+									? metadata.recipient
+									: undefined,
+						sender: metadata?.sender,
+						recipient: metadata?.recipient,
 						streaming: false,
 					});
+					if (message.role === "assistant" && rendered.agentId) {
+						latestAssistantByAgent.set(rendered.agentId, rendered);
+					}
 				}
+				participant = undefined;
 				if (message.role === "assistant" && Array.isArray(message.content)) {
 					for (const part of message.content) {
 						if (part.type === "toolCall" && part.id && part.name) {
@@ -1304,7 +1395,14 @@
 			}
 			case "message_start": {
 				const startedMessage = event.message as AgentMessage | undefined;
-				if (startedMessage?.role === "assistant") appendAssistantMessage(startedMessage, typeof event.agentId === "string" ? event.agentId : undefined);
+				if (startedMessage?.role === "assistant") {
+					appendAssistantMessage(
+						startedMessage,
+						typeof event.agentId === "string" ? event.agentId : undefined,
+						typeof event.sender === "string" ? event.sender : undefined,
+						typeof event.recipient === "string" ? event.recipient : undefined,
+					);
+				}
 				return;
 			}
 			case "message_update": {
@@ -1326,7 +1424,14 @@
 					if (item) item.status = "settled";
 				}
 				if (update?.type === "text_delta" && typeof update.delta === "string") {
-					if (streamingMessageId === undefined) appendAssistantMessage(undefined, typeof event.agentId === "string" ? event.agentId : undefined);
+					if (streamingMessageId === undefined) {
+						appendAssistantMessage(
+							undefined,
+							typeof event.agentId === "string" ? event.agentId : undefined,
+							typeof event.sender === "string" ? event.sender : undefined,
+							typeof event.recipient === "string" ? event.recipient : undefined,
+						);
+					}
 					const item = findMessage(streamingMessageId);
 					if (item) item.text += update.delta;
 				}
@@ -1350,6 +1455,8 @@
 					item.streaming = false;
 					if (completedMessage.model) item.model = modelLabel(completedMessage);
 					if (typeof event.agentId === "string") item.agentId = event.agentId;
+					if (typeof event.sender === "string") item.sender = event.sender;
+					if (typeof event.recipient === "string") item.recipient = event.recipient;
 					if (!item.text && images.length === 0) removeMessage(item.id);
 				} else if (finalText || images.length > 0) {
 					pushMessage({
@@ -1359,6 +1466,8 @@
 						images,
 						model: modelLabel(completedMessage),
 						agentId: typeof event.agentId === "string" ? event.agentId : undefined,
+						sender: typeof event.sender === "string" ? event.sender : undefined,
+						recipient: typeof event.recipient === "string" ? event.recipient : undefined,
 						streaming: false,
 					});
 				}
@@ -1401,7 +1510,7 @@
 						`harness-route-${state.routingSequence ?? activeTaskKey}`,
 					);
 				}
-				if (currentConfig && state) {
+				if (currentConfig && state && (!state.selectedHarness || state.selectedHarness === "klerm")) {
 					currentConfig = {
 						...currentConfig,
 						routing: state.mode,
@@ -1417,6 +1526,22 @@
 			}
 			case "bridge_event": {
 				renderCodingHarnessBridgeEvent(event.event as CodingHarnessBridgeEvent);
+				return;
+			}
+			case "bridge_chat_message": {
+				const chat = event.message as CodingHarnessBridgeChatEntry | undefined;
+				if (chat?.kind === "handoff" && chat.body?.trim()) {
+					pushMessage({
+						id: ++messageSeq,
+						role: "user",
+						text: chat.body,
+						agentId: chat.sender.startsWith("agent") ? chat.sender : undefined,
+						sender: chat.sender,
+						recipient: chat.recipient,
+						kind: "handoff",
+						streaming: false,
+					});
+				}
 				return;
 			}
 			case "thinking_level_changed": {
@@ -2606,6 +2731,8 @@
 			text: displayText,
 			images: [...images],
 			streaming: false,
+			sender: "user",
+			...(targetAgentId ? { recipient: targetAgentId } : {}),
 			...(targetAgentId ? { agentId: targetAgentId } : {}),
 		});
 		try {

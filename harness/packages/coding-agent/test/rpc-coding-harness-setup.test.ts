@@ -6,6 +6,7 @@ import type {
 	CodingHarnessAdapterListener,
 	CodingHarnessSessionRef,
 } from "../src/klerm/coding-harness-adapter.ts";
+import type { CodingHarnessBridgeChatEntry } from "../src/klerm/coding-harness-bridge.ts";
 import type { CodingHarnessKind } from "../src/klerm/coding-harness-setup.ts";
 import { readKlermRouteDecisionLog } from "../src/klerm/router/decision-log.ts";
 import { runRpcMode } from "../src/modes/index.ts";
@@ -368,6 +369,7 @@ describe("coding harness setup RPC", () => {
 
 		try {
 			void runRpcMode(createRuntimeHost(harness), {
+				personalBotStorageDir: harness.tempDir,
 				discoverCodingHarnesses: vi.fn(async () => [
 					{ kind: "klerm" as const, available: true, builtin: true, models: [] },
 					{ kind: "opencode" as const, available: true, builtin: false, models: [] },
@@ -393,9 +395,25 @@ describe("coding harness setup RPC", () => {
 					externalHarnessesEnabled: true,
 					workTogetherEnabled: true,
 					agents: [
-						{ ...agent("agent6", "opencode"), model: "openai/gpt-5.6-terra" },
-						{ ...agent("agent7", "codex"), model: "gpt-5-codex", role: "planner", memoryProfileId: "scout" },
-						{ ...agent("agent8", "codex"), model: "gpt-5.6-luna" },
+						{
+							...agent("agent6", "opencode"),
+							model: "openai/gpt-5.6-terra",
+							personalBotId: "bot-sage",
+							memoryProfileId: "sage",
+						},
+						{
+							...agent("agent7", "codex"),
+							model: "gpt-5-codex",
+							role: "planner",
+							personalBotId: "bot-scout",
+							memoryProfileId: "scout",
+						},
+						{
+							...agent("agent8", "codex"),
+							model: "gpt-5.6-luna",
+							personalBotId: "bot-builder",
+							memoryProfileId: "builder",
+						},
 					],
 				},
 			});
@@ -422,8 +440,15 @@ describe("coding harness setup RPC", () => {
 					entry.message.role === "user" &&
 					entry.message.content === "Review the frontend, backend, security, and tests for this architecture.",
 			);
+			const participantIndex = promptEntries.findIndex((entry) => {
+				if (entry.type !== "custom" || entry.customType !== "klerm-bridge-chat") return false;
+				const data = entry.data as CodingHarnessBridgeChatEntry;
+				return data.kind === "participant" && data.sender === "user" && data.recipient === "agent6";
+			});
 			expect(displayIndex).toBeGreaterThanOrEqual(0);
+			expect(participantIndex).toBeGreaterThan(displayIndex);
 			expect(promptIndex).toBeGreaterThan(displayIndex);
+			expect(promptIndex).toBeGreaterThan(participantIndex);
 			expect(harness.settingsManager.getProjectRegistry().sessionProjects[harness.session.sessionId]).toBe(
 				"project-default",
 			);
@@ -447,6 +472,12 @@ describe("coding harness setup RPC", () => {
 			listeners.get("opencode")?.({ type: "message", agentId: "agent6", text: "Coordinator pass" });
 			listeners.get("opencode")?.({ type: "settled", agentId: "agent6", status: "completed" });
 			await vi.waitFor(() => expect(promptCalls).toHaveLength(2));
+			const firstHandoff = harness.session.sessionManager.getEntries().find((entry) => {
+				if (entry.type !== "custom" || entry.customType !== "klerm-bridge-chat") return false;
+				const data = entry.data as CodingHarnessBridgeChatEntry;
+				return data.kind === "handoff" && data.sender === "agent6" && data.recipient === "agent7";
+			});
+			expect(firstHandoff).toMatchObject({ data: { body: "Coordinator pass" } });
 			expect(promptCalls[1]).toMatchObject({ session: { agentId: "agent7" } });
 			expect(promptCalls[1]?.text).toContain("Coordinator result:\nCoordinator pass");
 			expect(promptCalls[1]?.text).toContain("Use the shared repository conventions.");
@@ -478,6 +509,24 @@ describe("coding harness setup RPC", () => {
 			);
 
 			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(17));
+			for (const [botId, linkedAgentId] of [
+				["bot-sage", "agent6"],
+				["bot-scout", "agent7"],
+				["bot-builder", "agent8"],
+			] as const) {
+				const conversation = await send({
+					id: `linked-conversation-${botId}`,
+					type: "get_personal_bot_conversation",
+					botId,
+				});
+				expect(conversation).toMatchObject({
+					success: true,
+					data: {
+						linkedSuccessfulPromptCount: 1,
+						pendingSummarySources: [expect.objectContaining({ agentId: linkedAgentId })],
+					},
+				});
+			}
 			expect(bridgeRecords.map((record) => record.event)).toEqual([
 				"TASK_CREATED",
 				"TASK_ASSIGNED",
@@ -497,9 +546,9 @@ describe("coding harness setup RPC", () => {
 				"TASK_RETURNED",
 				"TASK_COMPLETED",
 			]);
-			expect(bridgeRecords.map((record) => record.sequence)).toEqual(
-				Array.from({ length: 17 }, (_, index) => index + 1),
-			);
+			const bridgeSequences = bridgeRecords.map((record) => Number(record.sequence));
+			expect(bridgeSequences).toEqual([...bridgeSequences].sort((left, right) => left - right));
+			expect(new Set(bridgeSequences)).toHaveLength(bridgeSequences.length);
 			expect([...new Set(bridgeRecords.map((record) => record.correlationId))]).toHaveLength(1);
 			const debugTypes = debugRecords.map((record) => record.type);
 			expect(debugTypes).toEqual(
