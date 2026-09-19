@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, RefreshCw, RotateCcw, Save, X } from "@lucide/svelte";
+	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, GitBranch, RefreshCw, RotateCcw, Save, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import {
 		resolveWorkspaceEditDraft,
@@ -7,7 +7,7 @@
 		type WorkspaceEditDraft,
 		workspaceEditDraftKey,
 	} from "../lib/agent-workspace.ts";
-	import type { EditorInfo, WorkspaceFileStatus, WorkspaceStatus } from "../lib/model.ts";
+	import type { EditorInfo, GitHubStatus, WorkspaceFileStatus, WorkspaceStatus } from "../lib/model.ts";
 
 	let {
 		workspace,
@@ -27,6 +27,10 @@
 		onsave,
 		onopeneditor,
 		onviewprojectfiles,
+		github,
+		gitBusy,
+		oninitializegit,
+		onlogingithub,
 	}: {
 		workspace: WorkspaceStatus | undefined;
 		editors: EditorInfo[];
@@ -45,6 +49,10 @@
 		onsave: (path: string, content: string) => Promise<boolean>;
 		onopeneditor: (editor: EditorInfo["id"]) => void;
 		onviewprojectfiles: () => void;
+		github: GitHubStatus | undefined;
+		gitBusy: boolean;
+		oninitializegit: () => void;
+		onlogingithub: () => void;
 	} = $props();
 
 	let tab = $state<"diff" | "edit">("diff");
@@ -201,7 +209,7 @@
 			<small class="block truncate font-mono text-[8px] text-[#59656d]" title={workspace?.projectRoot}>{workspace?.isGit ? `${workspace.files.length} changed / Git` : "No Git repository"}</small>
 		</div>
 		<div bind:this={editorRoot} class="relative">
-			<button type="button" aria-expanded={editorMenuOpen} class="flex h-8 items-center gap-1.5 rounded-md border border-[#2c353c] bg-[#10161b] px-2 text-[9px] text-[#b6c0c6] hover:border-[#4a565f]" onclick={() => (editorMenuOpen = !editorMenuOpen)}><ExternalLink size={11} /> Open <ChevronDown size={10} /></button>
+			<button type="button" disabled={!workspace?.trusted} aria-expanded={editorMenuOpen} class="flex h-8 items-center gap-1.5 rounded-md border border-[#2c353c] bg-[#10161b] px-2 text-[9px] text-[#b6c0c6] hover:border-[#4a565f] disabled:cursor-not-allowed disabled:opacity-45" onclick={() => (editorMenuOpen = !editorMenuOpen)}><ExternalLink size={11} /> Open <ChevronDown size={10} /></button>
 			{#if editorMenuOpen}
 				<div class="absolute top-[36px] right-0 z-30 w-[150px] rounded-md border border-[#303941] bg-[#0b0f13] p-1 shadow-[0_14px_36px_rgba(0,0,0,.55)]">
 					{#each editors as editor (editor.id)}
@@ -258,7 +266,20 @@
 				{/each}
 			{/if}
 		{:else if !workspace?.isGit}
-			<p class="px-2 py-3 text-[10px]/[1.5] text-[#68747c]">The selected root is not inside a Git repository. Klerm tool changes still appear in the activity feed.</p>
+			<div class="px-2 py-3 text-[10px]/[1.5] text-[#68747c]">
+				<p class="m-0">The selected root is not inside a Git repository. Klerm tool changes still appear in the activity feed.</p>
+				{#if workspace?.gitInitializationRecommendation}
+					<p class="mt-2 mb-0 rounded border border-[rgba(214,166,63,.28)] bg-[rgba(76,58,24,.2)] px-2 py-1.5 text-[#d8bd77]">{workspace.gitInitializationRecommendation}</p>
+				{/if}
+				<div class="mt-3 flex flex-wrap gap-2">
+					<button type="button" disabled={gitBusy || !workspace?.trusted} class="flex items-center gap-1.5 rounded border border-[rgba(91,145,210,.42)] bg-[rgba(35,77,119,.3)] px-2 py-1.5 font-mono text-[8px] text-[#bad8f2] hover:bg-[rgba(44,91,137,.45)] disabled:opacity-45" onclick={oninitializegit}><GitBranch size={11} /> Initialize Git</button>
+					{#if github?.available && !github.authenticated}
+						<button type="button" disabled={gitBusy} class="flex items-center gap-1.5 rounded border border-[#35404a] bg-[#10171d] px-2 py-1.5 font-mono text-[8px] text-[#bdc7ce] hover:bg-[#1b252c] disabled:opacity-45" onclick={onlogingithub}><GitBranch size={11} /> Connect GitHub</button>
+					{:else if github?.authenticated}
+						<span class="flex items-center gap-1.5 px-2 py-1.5 font-mono text-[8px] text-[#8ecaa0]"><GitBranch size={11} /> GitHub connected</span>
+					{/if}
+				</div>
+			</div>
 		{:else if workspace.files.length === 0}
 			<p class="px-2 py-3 text-[10px] text-[#68747c]">Working tree clean.</p>
 		{:else}
@@ -290,9 +311,9 @@
 					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] ${tab === "diff" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
 					onclick={() => (tab = "diff")}
 				><Braces size={11} /> Diff</button>
-				<button
-					type="button"
-					disabled={content === undefined}
+						<button
+							type="button"
+							disabled={content === undefined || !workspace?.trusted}
 					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] disabled:cursor-not-allowed disabled:opacity-35 ${tab === "edit" ? "border border-[rgba(65,159,96,.35)] bg-[rgba(34,101,55,.28)] text-[#a8d9b5]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
 					onclick={() => (tab = "edit")}
 				><FileCode2 size={11} /> Edit</button>

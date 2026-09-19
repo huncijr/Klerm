@@ -98,7 +98,13 @@ export interface RpcWorkspaceStatus {
 	projectRoot: string;
 	gitRoot?: string;
 	isGit: boolean;
+	trusted?: boolean;
 	files: RpcWorkspaceFileStatus[];
+	gitInitializationRecommendation?: string;
+}
+
+export interface RpcProjectTrustStatus {
+	decision: boolean | null;
 }
 
 export interface RpcEditorInfo {
@@ -280,6 +286,11 @@ export type RpcCommand =
 	| { id?: string; type: "rename_session"; sessionToken: string; name: string }
 	| { id?: string; type: "delete_session"; sessionToken: string }
 	| { id?: string; type: "get_workspace_status" }
+	| { id?: string; type: "initialize_git_repository" }
+	| { id?: string; type: "get_github_status" }
+	| { id?: string; type: "login_github" }
+	| { id?: string; type: "get_project_trust" }
+	| { id?: string; type: "set_project_trust"; trusted: boolean }
 	| { id?: string; type: "list_workspace_files" }
 	| { id?: string; type: "get_workspace_diff"; path: string }
 	| { id?: string; type: "read_workspace_file"; path: string }
@@ -526,6 +537,21 @@ export type RpcResponse =
 			data: { sessionId: string };
 	  }
 	| { id?: string; type: "response"; command: "get_workspace_status"; success: true; data: RpcWorkspaceStatus }
+	| { id?: string; type: "response"; command: "initialize_git_repository"; success: true; data: RpcWorkspaceStatus }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_github_status" | "login_github";
+			success: true;
+			data: { available: boolean; authenticated: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_project_trust" | "set_project_trust";
+			success: true;
+			data: RpcProjectTrustStatus;
+	  }
 	| {
 			id?: string;
 			type: "response";

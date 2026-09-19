@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, readlink, stat, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, readlink, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnProcess } from "../../utils/child-process.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
@@ -35,6 +35,7 @@ const SKIPPED_DIRECTORY_NAMES = new Set([
 interface CommandResult {
 	stdout: string;
 	stderr: string;
+	succeeded: boolean;
 }
 
 interface DockerComposePublisher {
@@ -54,7 +55,7 @@ function runCommand(command: string, args: string[], cwd: string, allowFailure =
 				rejectCommand(new Error(stderr.trim() || error.message));
 				return;
 			}
-			resolveCommand({ stdout, stderr });
+			resolveCommand({ stdout, stderr, succeeded: !error });
 		});
 	});
 }
@@ -109,7 +110,16 @@ export async function getWorkspaceStatus(
 	attributions: ReadonlyMap<string, RpcWorkspaceAttribution> = new Map(),
 ): Promise<RpcWorkspaceStatus> {
 	const root = await gitRoot(cwd);
-	if (!root) return { workspaceRoot: cwd, projectRoot: cwd, isGit: false, files: [] };
+	if (!root) {
+		const recommendation = await gitInitializationRecommendation(cwd);
+		return {
+			workspaceRoot: cwd,
+			projectRoot: cwd,
+			isGit: false,
+			files: [],
+			...(recommendation ? { gitInitializationRecommendation: recommendation } : {}),
+		};
+	}
 	const status = await runCommand("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], root);
 	return {
 		workspaceRoot: cwd,
@@ -118,6 +128,67 @@ export async function getWorkspaceStatus(
 		isGit: true,
 		files: parseStatus(status.stdout, attributions),
 	};
+}
+
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function gitInitializationRecommendation(cwd: string): Promise<string | undefined> {
+	const manifestNames = ["package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Gemfile"];
+	const lockfileNames = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "Cargo.lock", "poetry.lock", "go.sum"];
+	const [hasManifest, hasLockfile] = await Promise.all([
+		Promise.all(manifestNames.map((name) => pathExists(join(cwd, name)))).then((matches) => matches.some(Boolean)),
+		Promise.all(lockfileNames.map((name) => pathExists(join(cwd, name)))).then((matches) => matches.some(Boolean)),
+	]);
+	if (!hasManifest) return undefined;
+	const runtimeDirectories = ["node_modules", "target", ".venv", "venv", ".next", "dist", "build"];
+	const hasRunArtifacts = (await Promise.all(runtimeDirectories.map((name) => pathExists(join(cwd, name))))).some(
+		Boolean,
+	);
+	if (hasLockfile || hasRunArtifacts) {
+		return "This project has a dependency lockfile or build artifacts. Initialize Git before more work accumulates.";
+	}
+	let sourceFiles = 0;
+	const walk = async (directory: string): Promise<void> => {
+		if (sourceFiles >= 12) return;
+		for (const entry of await readdir(directory, { withFileTypes: true })) {
+			if (sourceFiles >= 12 || SKIPPED_DIRECTORY_NAMES.has(entry.name)) continue;
+			const absolute = join(directory, entry.name);
+			if (entry.isDirectory()) await walk(absolute);
+			else if (entry.isFile() && /\.(?:ts|tsx|js|jsx|py|go|rs|java|kt|rb|php|cs|cpp|c|h)$/i.test(entry.name))
+				sourceFiles++;
+		}
+	};
+	await walk(cwd);
+	return sourceFiles >= 12
+		? "This project already has a substantial source tree. Initialize Git before more work accumulates."
+		: undefined;
+}
+
+export async function initializeGitRepository(cwd: string): Promise<RpcWorkspaceStatus> {
+	const existing = await gitRoot(cwd);
+	if (existing) throw new Error("The selected workspace is already inside a Git repository.");
+	await runCommand("git", ["init"], cwd);
+	return getWorkspaceStatus(cwd);
+}
+
+export async function getGitHubStatus(cwd: string): Promise<{ available: boolean; authenticated: boolean }> {
+	const available = await executableAvailable("gh");
+	if (!available) return { available: false, authenticated: false };
+	const result = await runCommand("gh", ["auth", "status", "--hostname", "github.com"], cwd, true);
+	return { available: true, authenticated: result.succeeded };
+}
+
+export async function loginGitHub(cwd: string): Promise<{ authenticated: boolean }> {
+	if (!(await executableAvailable("gh"))) throw new Error("GitHub CLI (gh) is not installed.");
+	await runCommand("gh", ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"], cwd);
+	return getGitHubStatus(cwd);
 }
 
 export async function listWorkspaceFiles(

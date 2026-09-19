@@ -3,5 +3,5 @@
 	"identifier": "default",
 	"description": "Default capability for the Klerm desktop window",
 	"windows": ["main"],
-	"permissions": ["core:default", "dialog:allow-open"]
+	"permissions": ["core:default", "dialog:allow-open", "dialog:allow-confirm"]
 }

@@ -454,7 +454,14 @@ export interface WorkspaceStatus {
 	projectRoot: string;
 	gitRoot?: string;
 	isGit: boolean;
+	trusted?: boolean;
 	files: WorkspaceFileStatus[];
+	gitInitializationRecommendation?: string;
+}
+
+export interface GitHubStatus {
+	available: boolean;
+	authenticated: boolean;
 }
 
 export interface EditorInfo {

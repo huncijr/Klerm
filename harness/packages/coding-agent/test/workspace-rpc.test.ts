@@ -7,6 +7,7 @@ import {
 	getRunningServices,
 	getWorkspaceDiff,
 	getWorkspaceStatus,
+	initializeGitRepository,
 	openLocalUrl,
 	readWorkspaceTextFile,
 	writeWorkspaceTextFile,
@@ -82,6 +83,22 @@ describe("desktop workspace RPC helpers", () => {
 				.filter((process) => process.kind === "listener")
 				.every((process) => process.cwd.startsWith(tempDir!)),
 		).toBe(true);
+	});
+
+	test("recommends and explicitly initializes Git for an established project", async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "klerm-workspace-rpc-"));
+		writeFileSync(join(tempDir, "package.json"), '{"name":"example"}\n', "utf8");
+		writeFileSync(join(tempDir, "package-lock.json"), '{"lockfileVersion":3}\n', "utf8");
+
+		await expect(getWorkspaceStatus(tempDir)).resolves.toMatchObject({
+			isGit: false,
+			gitInitializationRecommendation: expect.stringContaining("Initialize Git"),
+		});
+		await expect(initializeGitRepository(tempDir)).resolves.toMatchObject({
+			isGit: true,
+			gitRoot: tempDir,
+			files: expect.arrayContaining([expect.objectContaining({ path: "package.json", status: "untracked" })]),
+		});
 	});
 
 	test.runIf(process.platform === "linux")(

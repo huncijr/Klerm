@@ -43,6 +43,7 @@ import {
 	SettingsManager,
 	type SettingsScope,
 } from "../../core/settings-manager.ts";
+import { ProjectTrustStore } from "../../core/trust-manager.ts";
 import {
 	type AiDebugTraceEventType,
 	type AiDebugTraceWriter,
@@ -141,6 +142,7 @@ import type {
 	RpcMcpStatus,
 	RpcMcpToolStatus,
 	RpcProjects,
+	RpcProjectTrustStatus,
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
@@ -149,10 +151,13 @@ import type {
 import { KLERM_DESKTOP_RPC_PROTOCOL_VERSION } from "./rpc-types.ts";
 import {
 	getAvailableEditors,
+	getGitHubStatus,
 	getRunningServices,
 	getWorkspaceDiff,
 	getWorkspaceStatus,
+	initializeGitRepository,
 	listWorkspaceFiles,
+	loginGitHub,
 	openLocalUrl,
 	openWorkspaceEditor,
 	readWorkspaceTextFile,
@@ -255,6 +260,11 @@ const DESKTOP_COMMANDS = [
 	"rename_session",
 	"delete_session",
 	"get_workspace_status",
+	"initialize_git_repository",
+	"get_github_status",
+	"login_github",
+	"get_project_trust",
+	"set_project_trust",
 	"list_workspace_files",
 	"get_workspace_diff",
 	"read_workspace_file",
@@ -411,6 +421,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	let workspaceProjectRoot = session.sessionManager.getCwd();
 	const codingHarnessAdapters = options.codingHarnessAdapters ?? createCodingHarnessAdapters();
 	const personalBotStorageDir = options.personalBotStorageDir ?? session.settingsManager.getAgentDir();
+	const projectTrustStore = new ProjectTrustStore(session.settingsManager.getAgentDir());
 	const codingHarnessSessions = new Map<string, CodingHarnessSessionRef>();
 	const personalBotSessions = new Map<string, CodingHarnessSessionRef>();
 	const personalBotKlermSessions = new Map<
@@ -3026,12 +3037,45 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 
 			case "get_workspace_status": {
 				const workspace = await getWorkspaceStatus(session.sessionManager.getCwd());
+				workspace.trusted = session.settingsManager.isProjectTrusted();
 				workspaceProjectRoot = workspace.projectRoot;
 				for (const file of workspace.files) {
 					file.attribution =
 						fileAttributions.get(canonicalizePath(resolve(workspace.projectRoot, file.path))) ?? file.attribution;
 				}
 				return success(id, "get_workspace_status", workspace);
+			}
+
+			case "initialize_git_repository": {
+				if (!session.settingsManager.isProjectTrusted()) {
+					return error(
+						id,
+						"initialize_git_repository",
+						"Trust this folder before initializing Git.",
+						"PROJECT_UNTRUSTED",
+					);
+				}
+				const workspace = await initializeGitRepository(session.sessionManager.getCwd());
+				workspace.trusted = true;
+				workspaceProjectRoot = workspace.projectRoot;
+				return success(id, "initialize_git_repository", workspace);
+			}
+
+			case "get_github_status":
+				return success(id, "get_github_status", await getGitHubStatus(session.sessionManager.getCwd()));
+
+			case "login_github":
+				return success(id, "login_github", await loginGitHub(session.sessionManager.getCwd()));
+
+			case "get_project_trust": {
+				const status: RpcProjectTrustStatus = { decision: projectTrustStore.get(session.sessionManager.getCwd()) };
+				return success(id, "get_project_trust", status);
+			}
+
+			case "set_project_trust": {
+				projectTrustStore.set(session.sessionManager.getCwd(), command.trusted);
+				const status: RpcProjectTrustStatus = { decision: command.trusted };
+				return success(id, "set_project_trust", status);
 			}
 
 			case "list_workspace_files": {
@@ -3061,6 +3105,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "write_workspace_file": {
+				if (!session.settingsManager.isProjectTrusted()) {
+					return error(
+						id,
+						"write_workspace_file",
+						"Trust this folder before editing workspace files.",
+						"PROJECT_UNTRUSTED",
+					);
+				}
 				if (typeof command.path !== "string" || typeof command.content !== "string") {
 					return error(id, "write_workspace_file", "A file path and text content are required.", "INVALID_FILE");
 				}
@@ -3083,6 +3135,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 
 			case "open_workspace_editor": {
+				if (!session.settingsManager.isProjectTrusted()) {
+					return error(
+						id,
+						"open_workspace_editor",
+						"Trust this folder before opening it in an editor.",
+						"PROJECT_UNTRUSTED",
+					);
+				}
 				if (command.editor !== "zed" && command.editor !== "vscode" && command.editor !== "vim") {
 					return error(id, "open_workspace_editor", "Unsupported editor.", "INVALID_EDITOR");
 				}
@@ -4543,6 +4603,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			// =================================================================
 
 			case "bash": {
+				if (!session.settingsManager.isProjectTrusted()) {
+					return error(id, "bash", "Trust this folder before running workspace commands.", "PROJECT_UNTRUSTED");
+				}
 				const eventResult = await session.extensionRunner.emitUserBash({
 					type: "user_bash",
 					command: command.command,

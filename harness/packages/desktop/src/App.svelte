@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
-	import { open as openDialog } from "@tauri-apps/plugin-dialog";
+	import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 	import { onMount, untrack } from "svelte";
 	import {
 		bridgeEventCard,
@@ -47,6 +47,7 @@
 		DesktopSession,
 		EditorInfo,
 		FeedItem,
+		GitHubStatus,
 		ImageAttachment,
 		JsonObject,
 		KlermConfig,
@@ -157,6 +158,8 @@
 	let frontierThinking = $state<ThinkingSetting>({ level: "off", levels: ["off"] });
 	let thinkingBusy = $state<"local" | "frontier" | undefined>(undefined);
 	let workspace = $state<WorkspaceStatus | undefined>(undefined);
+	let github = $state<GitHubStatus | undefined>(undefined);
+	let gitBusy = $state(false);
 	let editors = $state<EditorInfo[]>([]);
 	let runningServices = $state<RunningService[]>([]);
 	let runningServicesBusy = false;
@@ -1624,6 +1627,7 @@
 		try {
 			const next = await bridge.send<WorkspaceStatus>("get_workspace_status");
 			workspace = next;
+			github = await bridge.send<GitHubStatus>("get_github_status");
 			if (selectedFilePath && !next.files.some((file) => file.path === selectedFilePath)) {
 				selectedFilePath = undefined;
 				selectedFileDiff = "";
@@ -1633,6 +1637,34 @@
 		} catch (error) {
 			workspace = undefined;
 			showError(toError(error).message);
+		}
+	}
+
+	async function initializeGit(): Promise<void> {
+		if (gitBusy || taskActive || !backendReady) return;
+		if (!(await confirmDialog("Initialize a Git repository in the selected workspace? This only runs git init.")))
+			return;
+		gitBusy = true;
+		try {
+			workspace = await bridge.send<WorkspaceStatus>("initialize_git_repository");
+			showNotification("Git repository initialized");
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			gitBusy = false;
+		}
+	}
+
+	async function loginGitHub(): Promise<void> {
+		if (gitBusy || !backendReady) return;
+		gitBusy = true;
+		try {
+			github = await bridge.send<GitHubStatus>("login_github", {}, 300_000);
+			showNotification("GitHub connected");
+		} catch (error) {
+			showError(toError(error).message);
+		} finally {
+			gitBusy = false;
 		}
 	}
 
@@ -1814,7 +1846,12 @@
 	}
 
 	async function deletePersonalBot(bot: PersonalBot): Promise<void> {
-		if (personalBotBusy || !supportsCommand("delete_personal_bot") || !window.confirm(`Delete ${bot.name}?`)) return;
+		if (
+			personalBotBusy ||
+			!supportsCommand("delete_personal_bot") ||
+			!(await confirmDialog(`Delete ${bot.name}?`))
+		)
+			return;
 		personalBotBusy = true;
 		try {
 			personalBots = await bridge.send<PersonalBotRegistry>("delete_personal_bot", { botId: bot.id });
@@ -1831,7 +1868,7 @@
 		if (
 			personalBotBusy ||
 			!supportsCommand("delete_personal_bot_summary") ||
-			!window.confirm("Delete this summary? This cannot be undone.")
+			!(await confirmDialog("Delete this summary? This cannot be undone."))
 		)
 			return;
 		personalBotBusy = true;
@@ -2674,15 +2711,13 @@
 			return;
 		}
 		if (typeof selected !== "string" || selected.length === 0) return;
-		if (!window.confirm(`Trust ${selected}?\n\nKlerm will load project-local settings, extensions, and skills only after you confirm.`)) {
-			return;
-		}
 		sessionTransitionActive = true;
 		backendRestarting = true;
 		clearError();
 		try {
 			await invoke("stop_backend");
-			await invoke("start_backend", { cwd: selected, trusted: true });
+			await invoke("start_backend", { cwd: selected });
+			await prepareBackendTrust();
 			await connectBackend();
 			await refreshSessions();
 			sidebarOpen = false;
@@ -2695,6 +2730,24 @@
 			sessionTransitionActive = false;
 			backendRestarting = false;
 		}
+	}
+
+	async function prepareBackendTrust(): Promise<void> {
+		const handshake = await bridge.send<DesktopHandshake>("desktop_handshake");
+		if (handshake.protocolVersion !== 1) {
+			throw new Error(`Unsupported Klerm RPC protocol ${handshake.protocolVersion}. Expected 1.`);
+		}
+		const workspaceStatus = await bridge.send<WorkspaceStatus>("get_workspace_status");
+		const trust = await bridge.send<{ decision: boolean | null }>("get_project_trust");
+		const trusted =
+			trust.decision ??
+			(await confirmDialog(
+				`Trust ${handshake.state.cwd}?\n\nTrusted folders may load project-local settings, extensions, and skills. Other folders remain unavailable without separate approval.`,
+			));
+		if (trust.decision === null) await bridge.send("set_project_trust", { trusted });
+		if (workspaceStatus.trusted === trusted) return;
+		await invoke("stop_backend");
+		await invoke("start_backend", { cwd: handshake.state.cwd, trusted });
 	}
 
 	async function sendMessage(
@@ -2788,9 +2841,13 @@
 		bridge.onEvent(handleRpcEvent);
 		try {
 			await bridge.start();
+			backendRestarting = true;
+			await prepareBackendTrust();
 			await connectBackend();
+			backendRestarting = false;
 			await refreshSessions();
 		} catch (error) {
+			backendRestarting = false;
 			backendReady = false;
 			setStatus("error", "Backend unavailable", "Check the development console");
 			runtimeStatus = { state: "error", title: "Klerm could not start", detail: toError(error).message };
@@ -3237,6 +3294,10 @@
 			onsave={saveWorkspaceFile}
 			onopeneditor={(editor) => void openWorkspaceEditor(editor)}
 			onviewprojectfiles={openProjectFiles}
+			{github}
+			{gitBusy}
+			oninitializegit={() => void initializeGit()}
+			onlogingithub={() => void loginGitHub()}
 		/>
 	{/if}
 </div>
