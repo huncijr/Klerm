@@ -265,6 +265,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_projects" }
 	| { id?: string; type: "get_kanban_registry" }
 	| { id?: string; type: "set_kanban_registry"; registry: RpcKanbanRegistry }
+	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
+	| { id?: string; type: "stop_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "get_personal_bots" }
 	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
 	| { id?: string; type: "generate_personal_bot_profile"; botId: string; brief: string; style?: string }
@@ -465,7 +467,7 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
-			command: "get_kanban_registry" | "set_kanban_registry";
+			command: "get_kanban_registry" | "set_kanban_registry" | "run_kanban_task" | "stop_kanban_task";
 			success: true;
 			data: RpcKanbanRegistry;
 	  }

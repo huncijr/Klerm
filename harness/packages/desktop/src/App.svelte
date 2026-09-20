@@ -51,6 +51,7 @@
 		ImageAttachment,
 		JsonObject,
 		KlermConfig,
+		KanbanActivityEvent,
 		KanbanRegistry,
 		KlermProfile,
 		LocalRuntime,
@@ -124,6 +125,7 @@
 	let sessions = $state<DesktopSession[]>([]);
 	let projects = $state<DesktopProject[]>([]);
 	let kanbanRegistry = $state<KanbanRegistry>({ version: 1, boards: [] });
+	let kanbanActivity = $state<KanbanActivityEvent[]>([]);
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
 	let defaultProjectId = $state("");
@@ -374,6 +376,46 @@
 	async function saveKanban(registry: KanbanRegistry): Promise<void> {
 		try { kanbanRegistry = await bridge.send<KanbanRegistry>("set_kanban_registry", { registry }); }
 		catch (error) { showError(toError(error).message); }
+	}
+
+	async function runKanbanTask(boardId: string, taskId: string): Promise<void> {
+		if (!supportsCommand("run_kanban_task")) {
+			showError("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
+			return;
+		}
+		try {
+			kanbanRegistry = await bridge.send<KanbanRegistry>("run_kanban_task", { boardId, taskId }, 60_000);
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function stopKanbanTask(boardId: string, taskId: string): Promise<void> {
+		if (!supportsCommand("stop_kanban_task")) {
+			showError("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
+			return;
+		}
+		try {
+			kanbanRegistry = await bridge.send<KanbanRegistry>("stop_kanban_task", { boardId, taskId }, 60_000);
+		} catch (error) {
+			showError(toError(error).message);
+		}
+	}
+
+	async function pickKanbanFolder(initial?: string): Promise<string | undefined> {
+		let selected: unknown;
+		try {
+			selected = await openDialog({
+				directory: true,
+				multiple: false,
+				title: "Choose a task folder",
+				...(initial ? { defaultPath: initial } : {}),
+			});
+		} catch (error) {
+			showError(toError(error).message);
+			return undefined;
+		}
+		return typeof selected === "string" && selected.length > 0 ? selected : undefined;
 	}
 
 	async function initializeProjects(): Promise<void> {
@@ -1261,6 +1303,30 @@
 			}
 			case "personal_bot_tool":
 				return;
+			case "kanban_event": {
+				if (
+					typeof event.boardId === "string" &&
+					typeof event.taskId === "string" &&
+					typeof event.text === "string"
+				) {
+					kanbanActivity = [
+						...kanbanActivity.slice(-299),
+						{
+							kind: typeof event.kind === "string" ? event.kind : "info",
+							boardId: event.boardId,
+							taskId: event.taskId,
+							timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
+							text: event.text,
+						},
+					];
+				}
+				return;
+			}
+			case "kanban_registry_changed": {
+				const registry = event.registry as KanbanRegistry | undefined;
+				if (registry && Array.isArray(registry.boards)) kanbanRegistry = registry;
+				return;
+			}
 			case "extension_ui_request": {
 				if (
 					event.method === "confirm" &&
@@ -3072,7 +3138,17 @@
 				onabort={abortPersonalBot}
 			/>
 		{:else if workspaceView === "kanban"}
-			<WorkspacePlannedView registry={kanbanRegistry} workspaceRoot={workspace?.projectRoot ?? sessionCwd} onclose={() => (workspaceView = undefined)} onsave={saveKanban} />
+			<WorkspacePlannedView
+				registry={kanbanRegistry}
+				workspaceRoot={workspace?.projectRoot ?? sessionCwd}
+				models={modelCatalog}
+				activity={kanbanActivity}
+				onclose={() => (workspaceView = undefined)}
+				onsave={saveKanban}
+				onpickfolder={pickKanbanFolder}
+				onrun={(boardId, taskId) => void runKanbanTask(boardId, taskId)}
+				onstop={(boardId, taskId) => void stopKanbanTask(boardId, taskId)}
+			/>
 		{:else if workspaceView === "browser"}
 			<BrowserWorkspace setup={codingHarnessSetup} onclose={() => (workspaceView = undefined)} />
 		{:else if selectedProject}

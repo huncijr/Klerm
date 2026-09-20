@@ -10,6 +10,7 @@ export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
 export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban" | "browser";
 export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
 export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintenance";
+export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
 export interface KanbanTask {
 	id: string;
 	title: string;
@@ -23,11 +24,21 @@ export interface KanbanTask {
 	repeatMinutes?: number;
 	scheduledAt?: string;
 	runStartedAt?: string;
+	runStatus?: KanbanRunStatus;
+	runCount?: number;
+	runError?: string;
 	lastRunAt?: string;
 	lastResult?: string;
 	createdAt: string;
 	updatedAt: string;
 	createdSequence: number;
+}
+export interface KanbanActivityEvent {
+	kind: string;
+	boardId: string;
+	taskId: string;
+	timestamp: string;
+	text: string;
 }
 export interface KanbanBoard {
 	id: string;

@@ -3,6 +3,10 @@ export const KANBAN_REGISTRY_VERSION = 1;
 export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintenance";
 export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
 
+export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
+
+const runStatuses: Set<string> = new Set(["idle", "running", "succeeded", "failed", "stopped"]);
+
 export interface KanbanTask {
 	id: string;
 	title: string;
@@ -16,6 +20,9 @@ export interface KanbanTask {
 	repeatMinutes?: number;
 	scheduledAt?: string;
 	runStartedAt?: string;
+	runStatus?: KanbanRunStatus;
+	runCount?: number;
+	runError?: string;
 	lastRunAt?: string;
 	lastResult?: string;
 	createdAt: string;
@@ -85,6 +92,13 @@ export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 					...(typeof task.repeatMinutes === "number" ? { repeatMinutes: task.repeatMinutes } : {}),
 					...(typeof task.scheduledAt === "string" ? { scheduledAt: task.scheduledAt } : {}),
 					...(typeof task.runStartedAt === "string" ? { runStartedAt: task.runStartedAt } : {}),
+					...(typeof task.runStatus === "string" && runStatuses.has(task.runStatus)
+						? { runStatus: task.runStatus as KanbanRunStatus }
+						: {}),
+					...(typeof task.runCount === "number" && Number.isFinite(task.runCount)
+						? { runCount: Math.max(0, Math.floor(task.runCount)) }
+						: {}),
+					...(typeof task.runError === "string" ? { runError: task.runError.slice(0, 500) } : {}),
 					...(typeof task.lastRunAt === "string" ? { lastRunAt: task.lastRunAt } : {}),
 					...(typeof task.lastResult === "string" ? { lastResult: task.lastResult.slice(0, 2000) } : {}),
 					createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
