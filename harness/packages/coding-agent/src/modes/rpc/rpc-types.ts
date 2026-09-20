@@ -32,6 +32,7 @@ import type {
 	KlermWorkerRole,
 } from "../../klerm/config.ts";
 import type { CustomModelEntry } from "../../klerm/custom-models.ts";
+import type { KanbanRegistry } from "../../klerm/kanban.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { McpErrorKind, McpPromptMention, McpServerState, McpToolCapability } from "../../klerm/mcp/runtime.ts";
 import type { PersonalBotConversation } from "../../klerm/personal-bot-conversations.ts";
@@ -245,6 +246,7 @@ export interface RpcProviderConnect {
 
 export type RpcCodingHarnessSetup = CodingHarnessSetup;
 export type RpcCodingHarnessSlots = CodingHarnessSlots;
+export type RpcKanbanRegistry = KanbanRegistry;
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -261,6 +263,8 @@ export type RpcCommand =
 	| { id?: string; type: "set_klerm_config"; update: RpcKlermConfigUpdate }
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "get_projects" }
+	| { id?: string; type: "get_kanban_registry" }
+	| { id?: string; type: "set_kanban_registry"; registry: RpcKanbanRegistry }
 	| { id?: string; type: "get_personal_bots" }
 	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
 	| { id?: string; type: "generate_personal_bot_profile"; botId: string; brief: string; style?: string }
@@ -458,6 +462,13 @@ export type RpcResponse =
 			data: { sessions: RpcDesktopSessionInfo[] };
 	  }
 	| { id?: string; type: "response"; command: "get_projects"; success: true; data: RpcProjects }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_kanban_registry" | "set_kanban_registry";
+			success: true;
+			data: RpcKanbanRegistry;
+	  }
 	| { id?: string; type: "response"; command: "get_personal_bots"; success: true; data: PersonalBotRegistry }
 	| { id?: string; type: "response"; command: "upsert_personal_bot"; success: true; data: PersonalBotRegistry }
 	| {

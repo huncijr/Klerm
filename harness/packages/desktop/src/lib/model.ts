@@ -7,7 +7,41 @@ export type DesktopAppearance = "dark" | "light" | "system";
 export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline";
 export type CodingHarnessSlot = CodingHarnessKind | null;
 export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
-export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban";
+export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban" | "browser";
+export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
+export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintenance";
+export interface KanbanTask {
+	id: string;
+	title: string;
+	prompt: string;
+	workspaceRoot: string;
+	kind: KanbanTaskKind;
+	model?: string;
+	reasoning: string;
+	status: KanbanTaskStatus;
+	targetMinutes?: number;
+	repeatMinutes?: number;
+	scheduledAt?: string;
+	runStartedAt?: string;
+	lastRunAt?: string;
+	lastResult?: string;
+	createdAt: string;
+	updatedAt: string;
+	createdSequence: number;
+}
+export interface KanbanBoard {
+	id: string;
+	name: string;
+	workspaceRoot: string;
+	createdAt: string;
+	updatedAt: string;
+	createdSequence: number;
+	tasks: KanbanTask[];
+}
+export interface KanbanRegistry {
+	version: 1;
+	boards: KanbanBoard[];
+}
 
 export interface CodingHarnessSlotSettings {
 	id: string;

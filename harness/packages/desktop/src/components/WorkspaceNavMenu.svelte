@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Bot, Boxes, ChevronRight, Network, PanelsTopLeft } from "@lucide/svelte";
+	import { Bot, Boxes, ChevronRight, MonitorUp, Network, PanelsTopLeft } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type { WorkspaceView } from "../lib/model.ts";
 
@@ -19,6 +19,7 @@
 		{ id: "agents-routing", label: "Agents & Routing", detail: "Shared prompt and agent workspace", icon: Network },
 		{ id: "personal-bots", label: "Personal Bots", detail: "Personalities and private chats", icon: Bot },
 		{ id: "kanban", label: "Kanban", detail: "Assigned and scheduled tasks", icon: Boxes },
+		{ id: "browser", label: "Browser Agent", detail: "Visible Chromium workspace", icon: MonitorUp },
 	];
 
 	onMount(() => {

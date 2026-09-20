@@ -240,6 +240,8 @@ const DESKTOP_COMMANDS = [
 	"set_klerm_config",
 	"list_sessions",
 	"get_projects",
+	"get_kanban_registry",
+	"set_kanban_registry",
 	"get_personal_bots",
 	"upsert_personal_bot",
 	"generate_personal_bot_profile",
@@ -2815,6 +2817,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				const registry = session.settingsManager.getProjectRegistry();
 				await session.settingsManager.flush();
 				return success(id, "get_projects", getProjectsPayload(registry));
+			}
+
+			case "get_kanban_registry": {
+				const registry = session.settingsManager.getKanbanRegistry();
+				await session.settingsManager.flush();
+				return success(id, "get_kanban_registry", registry);
+			}
+
+			case "set_kanban_registry": {
+				const registry = session.settingsManager.setKanbanRegistry(command.registry);
+				await session.settingsManager.flush();
+				return success(id, "set_kanban_registry", registry);
 			}
 
 			case "create_project": {

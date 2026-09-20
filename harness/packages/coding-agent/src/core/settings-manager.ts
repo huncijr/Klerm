@@ -7,6 +7,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { type CodingHarnessSlots, normalizeCodingHarnessSlots } from "../klerm/coding-harness-setup.ts";
+import { type KanbanRegistry, normalizeKanbanRegistry } from "../klerm/kanban.ts";
 import {
 	normalizePersonalBotRegistry,
 	type PersonalBot,
@@ -181,6 +182,7 @@ export interface Settings {
 	codingHarnessSlots?: CodingHarnessSlots;
 	projectRegistry?: KlermProjectRegistry;
 	personalBots?: PersonalBotRegistry;
+	kanbanRegistry?: KanbanRegistry;
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -919,6 +921,23 @@ export class SettingsManager {
 
 	getPersonalBots(): PersonalBotRegistry {
 		return normalizePersonalBotRegistry(this.globalSettings.personalBots);
+	}
+
+	getKanbanRegistry(): KanbanRegistry {
+		const registry = normalizeKanbanRegistry(this.globalSettings.kanbanRegistry);
+		if (JSON.stringify(registry) !== JSON.stringify(this.globalSettings.kanbanRegistry)) {
+			this.globalSettings.kanbanRegistry = registry;
+			this.markModified("kanbanRegistry");
+			this.save();
+		}
+		return structuredClone(registry);
+	}
+
+	setKanbanRegistry(registry: KanbanRegistry): KanbanRegistry {
+		this.globalSettings.kanbanRegistry = normalizeKanbanRegistry(registry);
+		this.markModified("kanbanRegistry");
+		this.save();
+		return this.getKanbanRegistry();
 	}
 
 	setPersonalBots(registry: PersonalBotRegistry): PersonalBotRegistry {

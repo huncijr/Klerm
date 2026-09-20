@@ -51,6 +51,7 @@
 		ImageAttachment,
 		JsonObject,
 		KlermConfig,
+		KanbanRegistry,
 		KlermProfile,
 		LocalRuntime,
 		McpServerUpdate,
@@ -88,6 +89,7 @@
 	import EmptyState from "./components/EmptyState.svelte";
 	import Feed from "./components/Feed.svelte";
 	import PersonalBotsView from "./components/PersonalBotsView.svelte";
+	import BrowserWorkspace from "./components/BrowserWorkspace.svelte";
 	import ProjectWorkspace from "./components/ProjectWorkspace.svelte";
 	import SettingsView from "./components/SettingsView.svelte";
 	import Sidebar from "./components/Sidebar.svelte";
@@ -121,6 +123,7 @@
 	let lastState = $state<SessionState | undefined>(undefined);
 	let sessions = $state<DesktopSession[]>([]);
 	let projects = $state<DesktopProject[]>([]);
+	let kanbanRegistry = $state<KanbanRegistry>({ version: 1, boards: [] });
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
 	let defaultProjectId = $state("");
@@ -362,6 +365,17 @@
 		}
 	}
 
+	async function refreshKanban(): Promise<void> {
+		if (!backendReady || !supportsCommand("get_kanban_registry")) return;
+		try { kanbanRegistry = await bridge.send<KanbanRegistry>("get_kanban_registry"); }
+		catch (error) { showError(toError(error).message); }
+	}
+
+	async function saveKanban(registry: KanbanRegistry): Promise<void> {
+		try { kanbanRegistry = await bridge.send<KanbanRegistry>("set_kanban_registry", { registry }); }
+		catch (error) { showError(toError(error).message); }
+	}
+
 	async function initializeProjects(): Promise<void> {
 		if (!supportsCommand("get_projects")) return;
 		const hasLegacyProjects = localStorage.getItem("klerm-projects") !== null;
@@ -557,7 +571,7 @@
 	const sessionColPx = $derived(sessionsExpanded ? sessionWidth : SESSION_RAIL);
 	const filesColPx = $derived(!settingsOpen && !selectedProject && !workspaceView && workspacePanelOpen ? filesWidth : 0);
 	const shellColumns = $derived(
-		settingsOpen && settingsFullscreen
+		(settingsOpen && settingsFullscreen) || workspaceView === "browser"
 			? "grid-cols-[minmax(0,1fr)]"
 			: "grid-cols-[var(--session-col)_minmax(0,1fr)_var(--files-col)] narrow-900:grid-cols-[var(--session-col)_minmax(0,1fr)] narrow-720:grid-cols-1",
 	);
@@ -2910,7 +2924,7 @@
 	class:opacity-0={splashVisible}
 	style={`--session-col: ${sessionColPx}px; --files-col: ${filesColPx}px;`}
 >
-	{#if !(settingsOpen && settingsFullscreen)}
+	{#if !(settingsOpen && settingsFullscreen) && workspaceView !== "browser"}
 	<Sidebar
 		{sessions}
 		{projects}
@@ -2945,6 +2959,7 @@
 		workspaceView={activeWorkspaceView}
 		onworkspaceview={(view) => {
 			workspaceView = view === "agents-routing" ? undefined : view;
+			if (view === "kanban") void refreshKanban();
 			selectedProjectId = undefined;
 			settingsOpen = false;
 			settingsFullscreen = false;
@@ -2959,7 +2974,7 @@
 		}}
 	/>
 	{/if}
-	{#if !(settingsOpen && settingsFullscreen)}
+	{#if !(settingsOpen && settingsFullscreen) && workspaceView !== "browser"}
 	<button
 		type="button"
 		aria-label="Resize sessions"
@@ -3057,7 +3072,9 @@
 				onabort={abortPersonalBot}
 			/>
 		{:else if workspaceView === "kanban"}
-			<WorkspacePlannedView onclose={() => (workspaceView = undefined)} />
+			<WorkspacePlannedView registry={kanbanRegistry} workspaceRoot={workspace?.projectRoot ?? sessionCwd} onclose={() => (workspaceView = undefined)} onsave={saveKanban} />
+		{:else if workspaceView === "browser"}
+			<BrowserWorkspace setup={codingHarnessSetup} onclose={() => (workspaceView = undefined)} />
 		{:else if selectedProject}
 			<ProjectWorkspace
 				project={selectedProject}
