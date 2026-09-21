@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { KanbanRegistry } from "./kanban.ts";
+import type { KanbanAttemptStatus, KanbanRegistry, KanbanRunAttempt, KanbanTask } from "./kanban.ts";
 
 export const KANBAN_RUN_LOG_DIRECTORY = ".klerm";
 export const KANBAN_RUN_LOG_FILE = "kanban-runs.jsonl";
@@ -73,6 +73,76 @@ export function nextRepeatAt(fromMs: number, repeatMinutes: number): string {
 	return new Date(fromMs + Math.max(1, Math.round(repeatMinutes)) * 60_000).toISOString();
 }
 
+export function effectiveKanbanTaskPrompt(task: Pick<KanbanTask, "prompt" | "title">): string {
+	return task.prompt.trim();
+}
+
+export function validateRunnableKanbanTask(task: Pick<KanbanTask, "title" | "prompt" | "workspaceRoot">): string[] {
+	const missing: string[] = [];
+	if (!task.title.trim()) missing.push("title");
+	if (!task.prompt.trim()) missing.push("task brief");
+	if (!task.workspaceRoot.trim()) missing.push("task folder");
+	return missing;
+}
+
+export function createKanbanRunAttempt(
+	task: Pick<KanbanTask, "runCount" | "workspaceRoot" | "reasoning">,
+	id: string,
+	model: string,
+	startedAt: string,
+): KanbanRunAttempt {
+	return {
+		id,
+		sequence: (task.runCount ?? 0) + 1,
+		status: "running",
+		startedAt,
+		model,
+		reasoning: task.reasoning,
+		workspaceRoot: task.workspaceRoot,
+		steps: [
+			{ id: "brief", label: "Read the task brief", status: "completed" },
+			{ id: "inspect", label: "Inspect the selected folder", status: "active" },
+			{ id: "execute", label: "Execute the task", status: "pending" },
+			{ id: "report", label: "Verify and report the result", status: "pending" },
+		],
+	};
+}
+
+export function advanceKanbanRunAttempt(
+	attempt: KanbanRunAttempt,
+	stepId: "inspect" | "execute" | "report",
+): KanbanRunAttempt {
+	const activeIndex = attempt.steps.findIndex((step) => step.id === stepId);
+	if (attempt.status !== "running" || activeIndex < 0) return attempt;
+	return {
+		...attempt,
+		steps: attempt.steps.map((step, index) => ({
+			...step,
+			status: index < activeIndex ? "completed" : index === activeIndex ? "active" : "pending",
+		})),
+	};
+}
+
+export function finishKanbanRunAttempt(
+	attempt: KanbanRunAttempt,
+	status: KanbanAttemptStatus,
+	finishedAt: string,
+	detail: { error?: string; result?: string; stopReason?: string },
+): KanbanRunAttempt {
+	return {
+		...attempt,
+		status,
+		finishedAt,
+		...(detail.error ? { error: detail.error } : {}),
+		...(detail.result ? { result: detail.result } : {}),
+		...(detail.stopReason ? { stopReason: detail.stopReason } : {}),
+		steps: attempt.steps.map((step) => ({
+			...step,
+			status: status === "succeeded" ? "completed" : step.status === "active" ? "failed" : step.status,
+		})),
+	};
+}
+
 export interface InterruptedKanbanTask {
 	boardId: string;
 	taskId: string;
@@ -93,6 +163,11 @@ export function markInterruptedKanbanTasks(
 		tasks: board.tasks.map((task) => {
 			if (task.runStatus !== "running") return task;
 			interrupted.push({ boardId: board.id, taskId: task.id });
+			const attempts = task.attempts?.map((attempt) =>
+				attempt.status === "running"
+					? finishKanbanRunAttempt(attempt, "interrupted", timestamp, { error: reason })
+					: attempt,
+			);
 			return {
 				...task,
 				status: task.status === "running" ? ("waiting" as const) : task.status,
@@ -100,6 +175,7 @@ export function markInterruptedKanbanTasks(
 				runError: reason,
 				lastRunAt: timestamp,
 				updatedAt: timestamp,
+				...(attempts ? { attempts } : {}),
 			};
 		}),
 	}));

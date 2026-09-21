@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { ArrowLeft, Check, CircleDot, FolderGit2, FolderOpen, Play, Plus, RotateCcw, Square } from "@lucide/svelte";
+	import { ArrowLeft, Check, CircleDot, FolderGit2, FolderOpen, Play, Plus, RotateCcw, Square, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type {
 		KanbanActivityEvent,
 		KanbanBoard,
 		KanbanRegistry,
+		KanbanRunAttempt,
 		KanbanTask,
 		KanbanTaskKind,
 		KanbanTaskStatus,
@@ -29,8 +30,8 @@
 		onclose: () => void;
 		onsave: (registry: KanbanRegistry) => Promise<void>;
 		onpickfolder: (initial?: string) => Promise<string | undefined>;
-		onrun: (boardId: string, taskId: string) => void;
-		onstop: (boardId: string, taskId: string) => void;
+		onrun: (boardId: string, taskId: string) => Promise<void>;
+		onstop: (boardId: string, taskId: string) => Promise<void>;
 	} = $props();
 
 	const columns: Array<{ id: KanbanTaskStatus; label: string; accent: string }> = [
@@ -48,19 +49,24 @@
 	let selectedBoardId = $state("");
 	let selectedTaskId = $state("");
 	let boardName = $state("");
-	let taskTitle = $state("");
 	let draftPrompt = $state("");
 	let draftTaskId = $state("");
 	let draftTaskTitle = $state("");
 	let draftTaskKind = $state<KanbanTaskKind>("build");
 	let draftTaskWorkspaceRoot = $state("");
 	let draftTaskModel = $state("");
-	let draftTaskReasoning = $state("medium");
+	let draftTaskReasoning = $state("");
 	let draftTaskTargetMinutes = $state("");
+	let draftTargetMode = $state<"auto" | "custom">("auto");
 	let draftTaskScheduledAt = $state("");
 	let draftTaskRepeatMinutes = $state("");
+	let draftScheduleEnabled = $state(false);
 	let draggedTaskId = $state("");
 	let nowMs = $state(Date.now());
+	let operationBusy = $state(false);
+	let pageError = $state("");
+	let drawerMessage = $state("");
+	let drawerError = $state("");
 
 	const board = $derived(registry.boards.find((item) => item.id === selectedBoardId) ?? registry.boards[0]);
 	const selectedTask = $derived(board?.tasks.find((task) => task.id === selectedTaskId));
@@ -70,29 +76,21 @@
 			: [],
 	);
 
-	function sampleTask(
-		title: string,
-		status: KanbanTaskStatus,
-		kind: KanbanTaskKind,
-		sequence: number,
-		now: string,
-		root: string,
-	): KanbanTask {
+	function blankTask(status: KanbanTaskStatus, sequence: number, now: string): KanbanTask {
 		return {
 			id: `task-${crypto.randomUUID()}`,
-			title,
+			title: "",
 			prompt: "",
-			workspaceRoot: root,
-			kind,
-			reasoning: "medium",
+			workspaceRoot: "",
+			kind: "build",
+			reasoning: "",
 			status,
-			targetMinutes: status === "ready" ? 25 : undefined,
 			createdAt: now,
 			updatedAt: now,
 			createdSequence: sequence,
 		};
 	}
-	function starterBoard(name: string, root: string): KanbanBoard {
+	function emptyBoard(name: string, root: string): KanbanBoard {
 		const now = new Date().toISOString();
 		return {
 			id: `board-${crypto.randomUUID()}`,
@@ -101,20 +99,13 @@
 			createdAt: now,
 			updatedAt: now,
 			createdSequence: registry.boards.length + 1,
-			tasks: [
-				sampleTask("Capture the next improvement", "ideas", "research", 1, now, root),
-				sampleTask("Define acceptance criteria", "planned", "review", 2, now, root),
-				sampleTask("Inspect workspace health", "ready", "maintenance", 3, now, root),
-				sampleTask("Choose a review checklist", "review", "review", 4, now, root),
-				sampleTask("Open the Kanban board", "done", "build", 5, now, root),
-			],
+			tasks: [],
 		};
 	}
 	async function persist(next: KanbanRegistry): Promise<void> {
 		await onsave(next);
 	}
 	onMount(() => {
-		if (registry.boards.length === 0) void persist({ version: 1, boards: [starterBoard("Klerm Workspace", workspaceRoot)] });
 		const timer = window.setInterval(() => (nowMs = Date.now()), 1000);
 		return () => window.clearInterval(timer);
 	});
@@ -129,49 +120,77 @@
 		draftTaskKind = selectedTask.kind;
 		draftTaskWorkspaceRoot = selectedTask.workspaceRoot;
 		draftTaskModel = selectedTask.model ?? "";
-		draftTaskReasoning = selectedTask.reasoning;
+		draftTaskReasoning = selectedTask.reasoning || (selectedTask.model ? "medium" : "");
 		draftTaskTargetMinutes = selectedTask.targetMinutes?.toString() ?? "";
+		draftTargetMode = selectedTask.targetMinutes ? "custom" : "auto";
 		draftTaskScheduledAt = selectedTask.scheduledAt ? toLocalInput(selectedTask.scheduledAt) : "";
 		draftTaskRepeatMinutes = selectedTask.repeatMinutes?.toString() ?? "";
+		draftScheduleEnabled = Boolean(selectedTask.scheduledAt || selectedTask.repeatMinutes);
+		drawerMessage = "";
+		drawerError = "";
+	});
+	$effect(() => {
+		if (draftTaskModel && !draftTaskReasoning) draftTaskReasoning = "medium";
 	});
 	async function createBoard(): Promise<void> {
-		const name = boardName.trim();
-		if (!name) return;
-		const next = starterBoard(name, workspaceRoot);
-		await persist({ ...registry, boards: [...registry.boards, next] });
-		selectedBoardId = next.id;
-		boardName = "";
+		if (operationBusy) return;
+		const name = boardName.trim() || `New Kanban ${registry.boards.length + 1}`;
+		const next = emptyBoard(name, workspaceRoot);
+		operationBusy = true;
+		pageError = "";
+		try {
+			await persist({ ...registry, boards: [...registry.boards, next] });
+			selectedBoardId = next.id;
+			boardName = "";
+		} catch (error) {
+			pageError = error instanceof Error ? error.message : String(error);
+		} finally {
+			operationBusy = false;
+		}
 	}
 	async function addTask(status: KanbanTaskStatus = "ideas"): Promise<void> {
-		const title = taskTitle.trim();
-		if (!title || !board) return;
+		if (!board || operationBusy) return;
 		const now = new Date().toISOString();
-		const task = sampleTask(title, status, "build", board.tasks.length + 1, now, board.workspaceRoot);
-		task.prompt = draftPrompt.trim();
-		await persist({
-			...registry,
-			boards: registry.boards.map((item) =>
-				item.id === board.id ? { ...item, updatedAt: now, tasks: [...item.tasks, task] } : item,
-			),
-		});
-		taskTitle = "";
-		draftPrompt = "";
+		const task = blankTask(status, board.tasks.length + 1, now);
+		operationBusy = true;
+		pageError = "";
+		try {
+			await persist({
+				...registry,
+				boards: registry.boards.map((item) =>
+					item.id === board.id ? { ...item, updatedAt: now, tasks: [...item.tasks, task] } : item,
+				),
+			});
+			selectedTaskId = task.id;
+			draftTaskId = "";
+		} catch (error) {
+			pageError = error instanceof Error ? error.message : String(error);
+		} finally {
+			operationBusy = false;
+		}
 	}
 	async function moveTask(taskId: string, status: KanbanTaskStatus): Promise<void> {
 		if (!board) return;
 		const now = new Date().toISOString();
-		await persist({
-			...registry,
-			boards: registry.boards.map((item) =>
-				item.id !== board.id
-					? item
-					: {
-							...item,
-							updatedAt: now,
-							tasks: item.tasks.map((task) => (task.id === taskId ? { ...task, status, updatedAt: now } : task)),
-						},
-			),
-		});
+		pageError = "";
+		try {
+			await persist({
+				...registry,
+				boards: registry.boards.map((item) =>
+					item.id !== board.id
+						? item
+						: {
+								...item,
+								updatedAt: now,
+								tasks: item.tasks.map((task) =>
+									task.id === taskId ? { ...task, status, updatedAt: now } : task,
+								),
+							},
+				),
+			});
+		} catch (error) {
+			pageError = error instanceof Error ? error.message : String(error);
+		}
 	}
 	function toLocalInput(iso: string): string {
 		const ms = Date.parse(iso);
@@ -185,46 +204,110 @@
 		const ms = Date.parse(value);
 		return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 	}
-	async function saveTask(): Promise<void> {
-		if (!board || !selectedTask) return;
+	function missingRunFields(): string[] {
+		const missing: string[] = [];
+		if (!draftTaskTitle.trim()) missing.push("title");
+		if (!draftPrompt.trim()) missing.push("task brief");
+		if (!draftTaskWorkspaceRoot.trim()) missing.push("task folder");
+		return missing;
+	}
+	async function saveTask(closeAfter = false, requireRunnable = false): Promise<boolean> {
+		if (!board || !selectedTask || operationBusy || selectedTask.runStatus === "running") return false;
 		const title = draftTaskTitle.trim();
 		const root = draftTaskWorkspaceRoot.trim();
-		if (!title || !root) return;
+		const missing = missingRunFields();
+		if ((requireRunnable || draftScheduleEnabled) && missing.length > 0) {
+			drawerError = `Complete these required fields before ${draftScheduleEnabled && !requireRunnable ? "scheduling" : "running"}: ${missing.join(", ")}.`;
+			return false;
+		}
 		const now = new Date().toISOString();
 		const targetMinutes = Number(draftTaskTargetMinutes);
 		const repeatMinutes = Number(draftTaskRepeatMinutes);
-		await persist({
-			...registry,
-			boards: registry.boards.map((item) =>
-				item.id !== board.id
-					? item
-					: {
-							...item,
-							updatedAt: now,
-							tasks: item.tasks.map((task) =>
-								task.id !== selectedTask.id
-									? task
-									: {
-											...task,
-											title,
-											prompt: draftPrompt.trim(),
-											kind: draftTaskKind,
-											workspaceRoot: root,
-											reasoning: draftTaskReasoning,
-											model: draftTaskModel.trim() || undefined,
-											targetMinutes:
-												Number.isFinite(targetMinutes) && targetMinutes > 0 ? Math.round(targetMinutes) : undefined,
-											repeatMinutes:
-												Number.isFinite(repeatMinutes) && repeatMinutes > 0 ? Math.round(repeatMinutes) : undefined,
-											scheduledAt: parseLocalInput(draftTaskScheduledAt),
-											updatedAt: now,
-										},
-							),
-						},
-			),
-		});
+		drawerMessage = "";
+		drawerError = "";
+		operationBusy = true;
+		try {
+			await persist({
+				...registry,
+				boards: registry.boards.map((item) =>
+					item.id !== board.id
+						? item
+						: {
+								...item,
+								updatedAt: now,
+								tasks: item.tasks.map((task) =>
+									task.id !== selectedTask.id
+										? task
+										: {
+												...task,
+												title,
+												prompt: draftPrompt.trim(),
+												kind: draftTaskKind,
+												workspaceRoot: root,
+												reasoning: draftTaskModel ? draftTaskReasoning : "",
+												model: draftTaskModel || undefined,
+												targetMinutes:
+													draftTargetMode === "custom" && Number.isFinite(targetMinutes) && targetMinutes > 0
+														? Math.round(targetMinutes)
+														: undefined,
+												repeatMinutes:
+													draftScheduleEnabled && Number.isFinite(repeatMinutes) && repeatMinutes > 0
+														? Math.round(repeatMinutes)
+														: undefined,
+												scheduledAt: draftScheduleEnabled ? parseLocalInput(draftTaskScheduledAt) : undefined,
+												updatedAt: now,
+											},
+								),
+							},
+				),
+			});
+			drawerMessage = "Saved";
+			if (closeAfter) closeDrawer();
+			return true;
+		} catch (error) {
+			drawerError = error instanceof Error ? error.message : String(error);
+			return false;
+		} finally {
+			operationBusy = false;
+		}
+	}
+	function closeDrawer(): void {
+		if (operationBusy) return;
 		selectedTaskId = "";
 		draftTaskId = "";
+		drawerMessage = "";
+		drawerError = "";
+	}
+	async function runTask(): Promise<void> {
+		if (!board || !selectedTask || operationBusy) return;
+		if (!(await saveTask(false, true))) return;
+		operationBusy = true;
+		drawerMessage = "Starting...";
+		drawerError = "";
+		try {
+			await onrun(board.id, selectedTask.id);
+			drawerMessage = "Run started";
+		} catch (error) {
+			drawerMessage = "";
+			drawerError = error instanceof Error ? error.message : String(error);
+		} finally {
+			operationBusy = false;
+		}
+	}
+	async function stopTask(): Promise<void> {
+		if (!board || !selectedTask || operationBusy) return;
+		operationBusy = true;
+		drawerMessage = "Stopping...";
+		drawerError = "";
+		try {
+			await onstop(board.id, selectedTask.id);
+			drawerMessage = "Stop requested";
+		} catch (error) {
+			drawerMessage = "";
+			drawerError = error instanceof Error ? error.message : String(error);
+		} finally {
+			operationBusy = false;
+		}
 	}
 	async function browseFolder(): Promise<void> {
 		const picked = await onpickfolder(draftTaskWorkspaceRoot.trim() || workspaceRoot);
@@ -234,9 +317,21 @@
 		return kind === "maintenance" ? "Maintain" : kind[0]!.toUpperCase() + kind.slice(1);
 	}
 	function providerOf(model?: string): string {
-		if (!model) return "Default model";
+		if (!model) return "Auto model";
 		const separator = model.indexOf("/");
 		return separator > 0 ? model.slice(0, separator) : model;
+	}
+	function latestAttempt(task: KanbanTask): KanbanRunAttempt | undefined {
+		return task.attempts?.length ? task.attempts[task.attempts.length - 1] : undefined;
+	}
+	function stepMarker(status: string): string {
+		if (status === "completed") return "x";
+		if (status === "active") return ">";
+		if (status === "failed") return "!";
+		return "o";
+	}
+	function displayTitle(task: KanbanTask): string {
+		return task.title.trim() || "Untitled task";
 	}
 	function elapsedText(startedAt?: string): string {
 		if (!startedAt) return "";
@@ -271,6 +366,8 @@
 		return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
 	}
 </script>
+
+<svelte:window onkeydown={(event) => { if (event.key === "Escape" && selectedTask) closeDrawer(); }} />
 
 <div
 	class="flex min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_45%_-20%,rgba(161,205,94,.11),transparent_36%),#080d11]"
@@ -315,8 +412,10 @@
 				/>
 				<button
 					type="submit"
+					disabled={operationBusy}
 					aria-label="Create Kanban"
-					class="grid h-9 w-9 place-items-center rounded-xl border border-[rgba(190,241,117,.43)] bg-[#3d5b2b] text-[#efffd9] transition hover:brightness-110"
+					title={boardName.trim() ? "Create Kanban" : "Create a new Kanban with an automatic name"}
+					class="grid h-9 w-9 place-items-center rounded-xl border border-[rgba(190,241,117,.43)] bg-[#3d5b2b] text-[#efffd9] transition hover:brightness-110 disabled:cursor-wait disabled:opacity-50"
 					><Plus size={14} /></button
 				>
 			</form>
@@ -340,6 +439,11 @@
 			</div>
 		</aside>
 		<section class="min-h-0 overflow-auto p-4 sm:p-5">
+			{#if pageError}
+				<p class="mx-auto mb-3 max-w-[1680px] rounded-xl border border-[#71453c] bg-[#2b1713] p-2.5 text-[9px] text-[#efb2a3]">
+					{pageError}
+				</p>
+			{/if}
 			{#if board}
 				<div class="mx-auto flex min-w-[980px] max-w-[1680px] flex-col gap-4">
 					<div class="flex items-end justify-between gap-4">
@@ -349,25 +453,14 @@
 								<FolderGit2 size={10} /> {board.workspaceRoot}
 							</p>
 						</div>
-						<form
-							class="flex items-center gap-2"
-							onsubmit={(event) => {
-								event.preventDefault();
-								void addTask();
-							}}
+						<button
+							type="button"
+							disabled={operationBusy}
+							title="Add a blank task and open its details"
+							class="flex h-10 items-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] px-3.5 font-mono text-[9px] font-semibold text-[#f0ffdf] shadow-[0_10px_24px_rgba(93,139,54,.18)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-50"
+							onclick={() => void addTask()}
+							><Plus size={12} /> Add task</button
 						>
-							<input
-								bind:value={taskTitle}
-								maxlength="160"
-								placeholder="Capture a task..."
-								class="h-10 w-60 rounded-xl border border-[#34444c] bg-[#0b1217] px-3 text-[10px] text-white outline-none placeholder:text-[#5e7077] focus:border-[#839d66]"
-							/>
-							<button
-								type="submit"
-								class="flex h-10 items-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] px-3.5 font-mono text-[9px] font-semibold text-[#f0ffdf] shadow-[0_10px_24px_rgba(93,139,54,.18)] transition hover:-translate-y-0.5"
-								><Plus size={12} /> Add task</button
-							>
-						</form>
 					</div>
 					<div class="grid grid-cols-7 gap-2.5">
 						{#each columns as column (column.id)}
@@ -398,7 +491,7 @@
 											onclick={() => (selectedTaskId = task.id)}
 											class={`group relative w-full rounded-xl border p-2.5 text-left transition ${task.runStatus === "running" ? "border-[rgba(134,213,138,.55)] bg-[rgba(24,44,28,.55)]" : "border-[#31424a] bg-[#0e161b] hover:border-[#5c747d]"}`}
 										>
-											<span class="block text-[10px] leading-snug font-semibold text-[#e6eeee]">{task.title}</span>
+											<span class="block text-[10px] leading-snug font-semibold text-[#e6eeee]">{displayTitle(task)}</span>
 											<span class="mt-1.5 flex flex-wrap items-center gap-1">
 												<span
 													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
@@ -408,12 +501,17 @@
 													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
 													>{providerOf(task.model)}</span
 												>
-												{#if task.targetMinutes}
-													<span
-														class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
-														>Target {task.targetMinutes}m</span
-													>
-												{/if}
+											{#if task.targetMinutes}
+												<span
+													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
+													>Target {task.targetMinutes}m</span
+												>
+											{:else}
+												<span
+													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
+													>Auto time</span
+												>
+											{/if}
 												{#if task.repeatMinutes}
 													<span
 														class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#9bbc79]"
@@ -434,18 +532,51 @@
 													>{task.runError}</span
 												>
 											{/if}
+											{#if latestAttempt(task)}
+												{@const attempt = latestAttempt(task)!}
+												<span class="mt-1.5 block font-mono text-[7px] text-[#8fb6c4]">
+													{attempt.status === "running" ? displayTitle(task) : `Attempt ${attempt.sequence}`} · {attempt.status} · {attempt.model}
+													{#if attempt.status === "running" && task.runStartedAt} · {elapsedText(task.runStartedAt)}{/if}
+												</span>
+												<span class="mt-1 block space-y-0.5">
+													{#each attempt.steps as step (step.id)}
+														<span
+															class={`block font-mono text-[7px] leading-snug ${step.status === "completed" ? "text-[#6f8577] line-through" : step.status === "active" ? "text-[#b9ea78]" : step.status === "failed" ? "text-[#d99a8c]" : "text-[#74868c]"}`}
+															>[{stepMarker(step.status)}] {step.label}</span
+														>
+													{/each}
+												</span>
+												{#if attempt.error && attempt.status !== "running"}
+													<span class="mt-1 line-clamp-2 block text-[7px] leading-snug text-[#d99a8c]">{attempt.error}</span>
+												{/if}
+											{/if}
 										</button>
 									{/each}
 								</div>
 							</div>
 						{/each}
 					</div>
+					{#if board.tasks.length === 0}
+						<p class="rounded-2xl border border-dashed border-[#31424a] bg-[#0b1217] p-4 text-center text-[10px] text-[#74868c]">
+							This board is empty. Use Add task to create a blank card, then fill in title, brief, and folder before running.
+						</p>
+					{/if}
+				</div>
+			{:else}
+				<div class="mx-auto max-w-[1680px]">
+					<p class="rounded-2xl border border-dashed border-[#31424a] bg-[#0b1217] p-4 text-center text-[10px] text-[#74868c]">
+						No Kanban boards yet. Create one from the sidebar.
+					</p>
 				</div>
 			{/if}
 		</section>
 	</div>
 	{#if selectedTask && board}
-		<div class="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px]">
+		<div
+			class="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px]"
+			role="presentation"
+			onclick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
+		>
 			<div
 				class="h-full w-[min(520px,94vw)] overflow-y-auto border-l border-[#34444b] bg-[#0c1419] p-5 shadow-[-24px_0_70px_rgba(0,0,0,.42)]"
 				role="dialog"
@@ -455,15 +586,17 @@
 				<form
 					onsubmit={(event) => {
 						event.preventDefault();
-						void saveTask();
+						void saveTask(false);
 					}}
 				>
 					<div class="flex items-center gap-2">
 						<p class="m-0 font-mono text-[8px] tracking-[.14em] text-[#89ad71] uppercase">Task card</p>
 						<button
 							type="button"
-							class="ml-auto rounded-lg border border-[#34444b] px-2 py-1 font-mono text-[8px] text-[#a8b7ba] hover:text-white"
-							onclick={() => (selectedTaskId = "")}>Close</button
+							aria-label="Close task"
+							title="Close task (Escape)"
+							class="ml-auto grid h-9 w-9 place-items-center rounded-xl border border-[#34444b] bg-[#11191e] text-[#a8b7ba] transition hover:border-[#71838d] hover:text-white"
+							onclick={closeDrawer}><X size={15} /></button
 						>
 					</div>
 					<label class="mt-4 block">
@@ -483,30 +616,18 @@
 							class="w-full rounded-xl border border-[#34444b] bg-[#080e12] p-3 text-[10px] leading-[1.55] text-[#dce6e8] outline-none focus:border-[#73905d]"
 						></textarea>
 					</label>
-					<div class="mt-3 grid grid-cols-2 gap-2">
-						<label>
-							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Task type</span>
-							<select
-								bind:value={draftTaskKind}
-								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-							>
-								{#each kindOptions as kind (kind)}
-									<option value={kind}>{kindLabel(kind)}</option>
-								{/each}
-							</select>
-						</label>
-						<label>
-							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Reasoning</span>
-							<select
-								bind:value={draftTaskReasoning}
-								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-							>
-								{#each reasoningOptions as level (level)}
-									<option value={level}>{level}</option>
-								{/each}
-							</select>
-						</label>
-					</div>
+					<label class="mt-3 block">
+						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Task type</span>
+						<select
+							bind:value={draftTaskKind}
+							disabled={selectedTask.runStatus === "running"}
+							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
+						>
+							{#each kindOptions as kind (kind)}
+								<option value={kind}>{kindLabel(kind)}</option>
+							{/each}
+						</select>
+					</label>
 					<div class="mt-3">
 						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Task folder</span>
 						<div class="flex gap-1.5">
@@ -525,63 +646,106 @@
 						</div>
 					</div>
 					<label class="mt-3 block">
-						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase"
-							>AI model (provider/id, empty = default)</span
-						>
-						<input
+						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">AI model</span>
+						<select
 							bind:value={draftTaskModel}
-							maxlength="200"
-							list="kanban-model-options"
-							placeholder="Default model"
-							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-						/>
-						<datalist id="kanban-model-options">
+							disabled={selectedTask.runStatus === "running"}
+							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
+						>
+							<option value="">Auto / current workspace model</option>
+							{#if draftTaskModel && !models.some((model) => model.value === draftTaskModel)}
+								<option value={draftTaskModel}>{draftTaskModel} (saved)</option>
+							{/if}
 							{#each models as model (model.value)}
 								<option value={model.value}>{model.label}</option>
 							{/each}
-						</datalist>
+						</select>
 					</label>
+					{#if draftTaskModel}
+						<label class="mt-3 block">
+							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Reasoning</span>
+							<select
+								bind:value={draftTaskReasoning}
+								disabled={selectedTask.runStatus === "running"}
+								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] capitalize text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
+							>
+								{#each reasoningOptions as level (level)}
+									<option value={level}>{level}</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
 					<div class="mt-3 grid grid-cols-2 gap-2">
 						<label>
-							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Target minutes</span>
-							<input
-								bind:value={draftTaskTargetMinutes}
-								min="1"
-								type="number"
-								placeholder="25"
-								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-							/>
+							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Task time</span>
+							<select
+								bind:value={draftTargetMode}
+								disabled={selectedTask.runStatus === "running"}
+								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
+							>
+								<option value="auto">Auto (elapsed only)</option>
+								<option value="custom">Custom target</option>
+							</select>
 						</label>
-						<label>
-							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Repeat minutes</span>
-							<input
-								bind:value={draftTaskRepeatMinutes}
-								min="1"
-								type="number"
-								placeholder="Off"
-								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-							/>
-						</label>
+						{#if draftTargetMode === "custom"}
+							<label>
+								<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Target minutes</span>
+								<input
+									bind:value={draftTaskTargetMinutes}
+									min="1"
+									type="number"
+									placeholder="25"
+									class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
+								/>
+							</label>
+						{/if}
 					</div>
-					<label class="mt-3 block">
-						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">First run</span>
-						<input
-							bind:value={draftTaskScheduledAt}
-							type="datetime-local"
-							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
-						/>
+					<label class="mt-3 flex items-center gap-2 rounded-xl border border-[#34444b] bg-[#080e12] px-3 py-2.5">
+						<input bind:checked={draftScheduleEnabled} type="checkbox" disabled={selectedTask.runStatus === "running"} />
+						<span class="font-mono text-[8px] text-[#a9b8bb] uppercase">Schedule this task</span>
 					</label>
+					{#if draftScheduleEnabled}
+						<div class="mt-3 grid grid-cols-2 gap-2">
+							<label>
+								<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">First run</span>
+								<input
+									bind:value={draftTaskScheduledAt}
+									type="datetime-local"
+									class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
+								/>
+							</label>
+							<label>
+								<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Repeat minutes</span>
+								<input
+									bind:value={draftTaskRepeatMinutes}
+									min="1"
+									type="number"
+									placeholder="One time"
+									class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-3 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d]"
+								/>
+							</label>
+						</div>
+					{/if}
 					<p
 						class="mt-3 mb-0 rounded-xl border border-[#344737] bg-[#10190f] p-3 text-[9px] leading-[1.6] text-[#b9cd9d]"
 					>
-						Target time tracks the expected duration. It does not mark the card complete. A set first run
-						starts once through the backend scheduler; a repeat interval reschedules the task after every
-						finished run and survives app restarts.
+						Auto time has no deadline and only tracks elapsed time. A custom target is advisory and never
+						marks the card complete. Scheduled and repeating runs are backend-owned and survive app restarts.
 					</p>
+					{#if drawerError}
+						<p class="mt-3 mb-0 rounded-xl border border-[#71453c] bg-[#2b1713] p-2.5 text-[9px] text-[#efb2a3]">
+							{drawerError}
+						</p>
+					{:else if drawerMessage}
+						<p class="mt-3 mb-0 rounded-xl border border-[#405b38] bg-[#142113] p-2.5 text-[9px] text-[#bfe2a4]">
+							{drawerMessage}
+						</p>
+					{/if}
 					<button
 						type="submit"
-						class="mt-4 flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf]"
-						><Check size={12} /> Save task card</button
+						disabled={operationBusy || selectedTask.runStatus === "running"}
+						class="mt-4 flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf] disabled:cursor-not-allowed disabled:opacity-50"
+						><Check size={12} /> {operationBusy ? "Working..." : selectedTask.runStatus === "running" ? "Locked while running" : "Save task card"}</button
 					>
 				</form>
 				<div class="mt-4 rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
@@ -602,26 +766,59 @@
 							<p class="mt-1 mb-0 text-[9px] leading-snug text-[#d99a8c]">{selectedTask.runError}</p>
 						{/if}
 					{:else}
-						<p class="mt-1.5 mb-0 text-[9px] text-[#8ca0a3]">Never run. Save a task brief first.</p>
+						<p class="mt-1.5 mb-0 text-[9px] text-[#8ca0a3]">Never run. Fill in title, brief, and folder first.</p>
+					{/if}
+					{#if selectedTask.runStatus !== "running" && missingRunFields().length > 0}
+						<p class="mt-2 mb-0 rounded-xl border border-[#5a4a2f] bg-[#1d160c] p-2 text-[8px] leading-snug text-[#d8bd8a]">
+							Required before running: {missingRunFields().join(", ")}.
+						</p>
+					{/if}
+					{#if selectedTask.attempts?.length}
+						<ul class="mt-2 mb-0 list-none space-y-1.5 p-0">
+							{#each [...selectedTask.attempts].reverse() as attempt (attempt.id)}
+								<li class="rounded-xl bg-[#0c1419] p-2">
+									<span class="block font-mono text-[8px] text-[#9fb0b4]">
+										Attempt {attempt.sequence} · {attempt.status} · {attempt.model}
+									</span>
+									<span class="mt-1 block">
+										{#each attempt.steps as step (step.id)}
+											<span
+												class={`block font-mono text-[8px] leading-snug ${step.status === "completed" ? "text-[#6f8577] line-through" : step.status === "active" ? "text-[#b9ea78]" : step.status === "failed" ? "text-[#d99a8c]" : "text-[#74868c]"}`}
+												>[{stepMarker(step.status)}] {step.label}</span
+											>
+										{/each}
+									</span>
+									{#if attempt.error}
+										<span class="mt-1 block text-[8px] leading-snug text-[#d99a8c]">{attempt.error}</span>
+									{/if}
+									{#if attempt.result}
+										<span class="mt-1 line-clamp-3 block text-[8px] leading-snug whitespace-pre-wrap text-[#c4d2d5]">{attempt.result}</span>
+									{/if}
+								</li>
+							{/each}
+						</ul>
 					{/if}
 					<div class="mt-2.5 flex gap-1.5">
 						{#if selectedTask.runStatus === "running"}
 							<button
 								type="button"
+								disabled={operationBusy}
 								class="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[rgba(217,154,140,.5)] bg-[#3a2119] font-mono text-[9px] font-semibold text-[#f3c9bd]"
-								onclick={() => onstop(board.id, selectedTask.id)}><Square size={12} /> Stop</button
+								onclick={() => void stopTask()}><Square size={12} /> {operationBusy ? "Stopping..." : "Stop"}</button
 							>
 						{:else if (selectedTask.runCount ?? 0) > 0}
 							<button
 								type="button"
-								class="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf]"
-								onclick={() => onrun(board.id, selectedTask.id)}><RotateCcw size={12} /> Retry</button
+								disabled={operationBusy}
+								class="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf] disabled:cursor-wait disabled:opacity-50"
+								onclick={() => void runTask()}><RotateCcw size={12} /> {operationBusy ? "Starting..." : "Retry"}</button
 							>
 						{:else}
 							<button
 								type="button"
-								class="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf]"
-								onclick={() => onrun(board.id, selectedTask.id)}><Play size={12} /> Run</button
+								disabled={operationBusy}
+								class="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] font-mono text-[9px] font-semibold text-[#f0ffdf] disabled:cursor-wait disabled:opacity-50"
+								onclick={() => void runTask()}><Play size={12} /> {operationBusy ? "Starting..." : "Run"}</button
 							>
 						{/if}
 					</div>

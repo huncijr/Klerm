@@ -11,6 +11,27 @@ export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban" | "bro
 export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
 export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintenance";
 export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
+export type KanbanAttemptStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
+export type KanbanAttemptStepStatus = "pending" | "active" | "completed" | "failed";
+export interface KanbanAttemptStep {
+	id: string;
+	label: string;
+	status: KanbanAttemptStepStatus;
+}
+export interface KanbanRunAttempt {
+	id: string;
+	sequence: number;
+	status: KanbanAttemptStatus;
+	startedAt: string;
+	finishedAt?: string;
+	model: string;
+	reasoning: string;
+	workspaceRoot: string;
+	stopReason?: string;
+	error?: string;
+	result?: string;
+	steps: KanbanAttemptStep[];
+}
 export interface KanbanTask {
 	id: string;
 	title: string;
@@ -29,6 +50,7 @@ export interface KanbanTask {
 	runError?: string;
 	lastRunAt?: string;
 	lastResult?: string;
+	attempts?: KanbanRunAttempt[];
 	createdAt: string;
 	updatedAt: string;
 	createdSequence: number;

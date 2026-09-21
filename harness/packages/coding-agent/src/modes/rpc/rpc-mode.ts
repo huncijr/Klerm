@@ -88,11 +88,16 @@ import {
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
 import type { KanbanRegistry, KanbanTask } from "../../klerm/kanban.ts";
 import {
+	advanceKanbanRunAttempt,
 	appendKanbanRunEvent,
+	createKanbanRunAttempt,
+	effectiveKanbanTaskPrompt,
 	findDueKanbanTasks,
+	finishKanbanRunAttempt,
 	type KanbanRunEvent,
 	markInterruptedKanbanTasks,
 	nextRepeatAt,
+	validateRunnableKanbanTask,
 } from "../../klerm/kanban-runs.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
@@ -467,6 +472,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			session: AgentSession;
 			boardId: string;
 			taskId: string;
+			attemptId: string;
+			phase: "inspect" | "execute" | "report";
 			stopped: boolean;
 			unsubscribe: () => void;
 		}
@@ -691,11 +698,28 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		};
 		return session.settingsManager.setKanbanRegistry(next);
 	};
+	const advanceKanbanAttemptPhase = (
+		boardId: string,
+		taskId: string,
+		attemptId: string,
+		phase: "inspect" | "execute" | "report",
+	): void => {
+		const run = kanbanSessions.get(kanbanRunKey(boardId, taskId));
+		if (!run || run.attemptId !== attemptId || run.phase === phase) return;
+		run.phase = phase;
+		const updated = updateKanbanTask(boardId, taskId, (task) => ({
+			...task,
+			attempts: task.attempts?.map((attempt) =>
+				attempt.id === attemptId ? advanceKanbanRunAttempt(attempt, phase) : attempt,
+			),
+		}));
+		emitKanbanRegistry(updated);
+	};
 	const settleKanbanRun = async (
 		boardId: string,
 		taskId: string,
 		outcome: "succeeded" | "failed" | "stopped",
-		detail: string,
+		detail: { error?: string; result?: string; stopReason?: string },
 	): Promise<void> => {
 		const key = kanbanRunKey(boardId, taskId);
 		const run = kanbanSessions.get(key);
@@ -711,20 +735,34 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			.find((board) => board.id === boardId)
 			?.tasks.find((candidate) => candidate.id === taskId);
 		const runCount = task?.runCount ?? 1;
+		const attemptId =
+			run?.attemptId ?? [...(task?.attempts ?? [])].reverse().find((attempt) => attempt.status === "running")?.id;
+		const error = effectiveOutcome === "stopped" ? "Task stopped by the user." : detail.error;
+		const eventReason = effectiveOutcome === "succeeded" ? "Run completed successfully." : (error ?? "Run failed.");
 		updateKanbanTask(boardId, taskId, (candidate) => ({
 			...candidate,
 			status: effectiveOutcome === "succeeded" ? "review" : "waiting",
 			runStatus: effectiveOutcome,
-			...(effectiveOutcome === "failed" ? { runError: detail.slice(0, 500) } : { runError: undefined }),
-			...(effectiveOutcome === "succeeded" ? { lastResult: detail.slice(0, 2000) } : {}),
+			...(effectiveOutcome === "failed" || effectiveOutcome === "stopped"
+				? { runError: error?.slice(0, 500), lastResult: undefined }
+				: { runError: undefined, lastResult: detail.result?.slice(0, 2000) }),
 			lastRunAt: now,
+			attempts: candidate.attempts?.map((attempt) =>
+				attempt.id === attemptId
+					? finishKanbanRunAttempt(attempt, effectiveOutcome, now, {
+							error,
+							result: detail.result,
+							stopReason: detail.stopReason,
+						})
+					: attempt,
+			),
 			...(candidate.repeatMinutes && candidate.repeatMinutes > 0 && effectiveOutcome !== "stopped"
 				? { scheduledAt: nextRepeatAt(Date.parse(now), candidate.repeatMinutes) }
 				: {}),
 		}));
 		await session.settingsManager.flush();
 		emitKanbanRegistry(session.settingsManager.getKanbanRegistry());
-		emitKanbanActivity(boardId, taskId, "settled", `Run ${effectiveOutcome}: ${detail.slice(0, 300)}`);
+		emitKanbanActivity(boardId, taskId, "settled", `Run ${effectiveOutcome}: ${eventReason.slice(0, 300)}`);
 		void queueKanbanRunEvent({
 			version: 1,
 			timestamp: now,
@@ -740,8 +778,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			sender: "user",
 			recipient: "kanban-task",
 			status: effectiveOutcome,
-			reason: detail.slice(0, 500),
-			resultDigest: crypto.createHash("sha256").update(detail).digest("hex"),
+			reason: eventReason.slice(0, 500),
+			...(detail.result ? { resultDigest: crypto.createHash("sha256").update(detail.result).digest("hex") } : {}),
 		});
 	};
 	const startKanbanRun = async (
@@ -756,22 +794,29 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const board = registry.boards.find((candidate) => candidate.id === boardId);
 		const task = board?.tasks.find((candidate) => candidate.id === taskId);
 		if (!board || !task) throw new Error("Kanban task not found.");
-		const brief = task.prompt.trim();
-		if (!brief) throw new Error("Add a task brief before running.");
-		const cwd = task.workspaceRoot || session.sessionManager.getCwd();
+		const missing = validateRunnableKanbanTask(task);
+		if (missing.length > 0) throw new Error(`Complete these required fields before running: ${missing.join(", ")}.`);
+		const brief = effectiveKanbanTaskPrompt(task);
+		const cwd = task.workspaceRoot.trim();
 		const snapshot = [...session.modelRuntime.getAvailableSnapshot()];
 		const modelRef = task.model?.trim();
 		const model = modelRef ? findExactModelReferenceMatch(modelRef, snapshot) : (session.model ?? snapshot[0]);
 		if (!model) throw new Error("No configured model is available for this Kanban task.");
 		const now = new Date().toISOString();
 		const runCount = (task.runCount ?? 0) + 1;
+		const attemptId = crypto.randomUUID();
+		const modelLabel = task.model ?? `${model.provider}/${model.id}`;
+		const attempt = createKanbanRunAttempt(task, attemptId, modelLabel, now);
 		updateKanbanTask(boardId, taskId, (candidate) => ({
 			...candidate,
 			status: "running",
 			runStatus: "running",
 			runCount,
 			runError: undefined,
+			lastResult: undefined,
 			runStartedAt: now,
+			scheduledAt: undefined,
+			attempts: [...(candidate.attempts ?? []), attempt].slice(-20),
 		}));
 		await session.settingsManager.flush();
 		const runningRegistry = session.settingsManager.getKanbanRegistry();
@@ -787,16 +832,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			recipient: "kanban-task",
 			status: "running",
 			reason,
-			model: task.model ?? `${model.provider}/${model.id}`,
+			model: modelLabel,
 		});
-		emitKanbanActivity(
-			boardId,
-			taskId,
-			"started",
-			`Run #${runCount} started (${task.model ?? `${model.provider}/${model.id}`}). ${reason}`,
-		);
+		emitKanbanActivity(boardId, taskId, "started", `Run #${runCount} started (${modelLabel}). ${reason}`);
 		try {
-			const sessionDir = join(personalBotStorageDir, "kanban", task.id, "sessions");
+			const sessionDir = join(personalBotStorageDir, "kanban", board.id, task.id, "sessions");
 			const taskSessionManager = SessionManager.create(cwd, sessionDir);
 			const taskSettings = SettingsManager.inMemory();
 			const targetNote =
@@ -821,7 +861,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				agentDir: personalBotStorageDir,
 				modelRuntime: session.modelRuntime,
 				model,
-				thinkingLevel: resolveKanbanThinkingLevel(task.reasoning),
+				thinkingLevel: modelRef ? resolveKanbanThinkingLevel(task.reasoning) : session.thinkingLevel,
 				settingsManager: taskSettings,
 				resourceLoader,
 				sessionManager: taskSessionManager,
@@ -830,46 +870,79 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			const unsubscribe = created.session.subscribe((event) => {
 				if (event.type === "tool_execution_start") {
 					const toolName = "toolName" in event && typeof event.toolName === "string" ? event.toolName : "tool";
+					advanceKanbanAttemptPhase(boardId, taskId, attemptId, "execute");
 					emitKanbanActivity(boardId, taskId, "tool", `Tool started: ${toolName}`);
 				} else if (event.type === "tool_execution_end") {
 					const failed = "isError" in event && event.isError === true;
-					emitKanbanActivity(boardId, taskId, "tool", failed ? "Tool finished with an error." : "Tool finished.");
-				} else if (event.type === "message_end") {
+					const toolName = "toolName" in event && typeof event.toolName === "string" ? event.toolName : "tool";
+					emitKanbanActivity(
+						boardId,
+						taskId,
+						"tool",
+						failed ? `Tool failed: ${toolName}` : `Tool finished: ${toolName}`,
+					);
+				} else if (event.type === "message_end" && event.message.role === "assistant") {
 					emitKanbanActivity(boardId, taskId, "message", "Assistant message completed.");
 				}
 			});
-			kanbanSessions.set(key, { session: created.session, boardId, taskId, stopped: false, unsubscribe });
+			kanbanSessions.set(key, {
+				session: created.session,
+				boardId,
+				taskId,
+				attemptId,
+				phase: "inspect",
+				stopped: false,
+				unsubscribe,
+			});
 			const messageStartIndex = created.session.messages.length;
 			void created.session
 				.prompt(brief, { expandPromptTemplates: false, source: "rpc" })
 				.then(() => {
+					advanceKanbanAttemptPhase(boardId, taskId, attemptId, "report");
 					const assistant = [...created.session.messages.slice(messageStartIndex)]
 						.reverse()
 						.find((message): message is AssistantMessage => message.role === "assistant");
 					const text = assistantMessageText(assistant);
-					if (!text || assistant?.stopReason === "error" || assistant?.stopReason === "aborted") {
-						void settleKanbanRun(boardId, taskId, "failed", text || "The model returned no result.");
+					if (!assistant) {
+						void settleKanbanRun(boardId, taskId, "failed", {
+							error: created.session.state.errorMessage ?? "Run settled without an assistant response.",
+						});
 						return;
 					}
-					void settleKanbanRun(boardId, taskId, "succeeded", text);
+					if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
+						void settleKanbanRun(boardId, taskId, "failed", {
+							error:
+								assistant.errorMessage ??
+								created.session.state.errorMessage ??
+								(assistant.stopReason === "aborted" ? "Model run was aborted." : "Provider returned an error."),
+							...(text ? { result: text } : {}),
+							stopReason: assistant.stopReason,
+						});
+						return;
+					}
+					if (!text) {
+						void settleKanbanRun(boardId, taskId, "failed", {
+							error: "Assistant completed without final text.",
+							stopReason: assistant.stopReason,
+						});
+						return;
+					}
+					void settleKanbanRun(boardId, taskId, "succeeded", {
+						result: text,
+						stopReason: assistant.stopReason,
+					});
 				})
 				.catch((promptError) => {
-					void settleKanbanRun(
-						boardId,
-						taskId,
-						"failed",
-						promptError instanceof Error ? promptError.message : String(promptError),
-					);
+					void settleKanbanRun(boardId, taskId, "failed", {
+						error: promptError instanceof Error ? promptError.message : String(promptError),
+					});
 				});
 		} catch (setupError) {
-			await settleKanbanRun(
-				boardId,
-				taskId,
-				"failed",
-				setupError instanceof Error ? setupError.message : String(setupError),
-			);
+			await settleKanbanRun(boardId, taskId, "failed", {
+				error: setupError instanceof Error ? setupError.message : String(setupError),
+			});
 		}
-		return runningRegistry;
+		return session.settingsManager.getKanbanRegistry();
 	};
 	const stopKanbanRun = async (boardId: string, taskId: string): Promise<KanbanRegistry> => {
 		const run = kanbanSessions.get(kanbanRunKey(boardId, taskId));
@@ -880,11 +953,22 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				?.tasks.find((candidate) => candidate.id === taskId);
 			if (!task) throw new Error("Kanban task not found.");
 			if (task.runStatus !== "running") throw new Error("This Kanban task is not running.");
+			const stoppedAt = new Date().toISOString();
+			const activeAttemptId = [...(task.attempts ?? [])]
+				.reverse()
+				.find((attempt) => attempt.status === "running")?.id;
 			updateKanbanTask(boardId, taskId, (candidate) => ({
 				...candidate,
 				status: "waiting",
 				runStatus: "stopped",
-				lastRunAt: new Date().toISOString(),
+				runError: "Task stopped by the user.",
+				lastResult: undefined,
+				lastRunAt: stoppedAt,
+				attempts: candidate.attempts?.map((attempt) =>
+					attempt.id === activeAttemptId
+						? finishKanbanRunAttempt(attempt, "stopped", stoppedAt, { error: "Task stopped by the user." })
+						: attempt,
+				),
 			}));
 			await session.settingsManager.flush();
 			const flushed = session.settingsManager.getKanbanRegistry();
@@ -2835,13 +2919,16 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			await session.settingsManager.flush();
 			emitKanbanRegistry(session.settingsManager.getKanbanRegistry());
 			for (const item of interrupted) {
+				const interruptedTask = recovered.boards
+					.find((board) => board.id === item.boardId)
+					?.tasks.find((task) => task.id === item.taskId);
 				void queueKanbanRunEvent({
 					version: 1,
 					timestamp: now,
 					event: "RUN_INTERRUPTED",
 					boardId: item.boardId,
 					taskId: item.taskId,
-					sequence: 0,
+					sequence: interruptedTask?.runCount ?? 0,
 					sender: "klerm-scheduler",
 					recipient: "kanban-task",
 					status: "interrupted",

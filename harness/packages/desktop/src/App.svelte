@@ -212,7 +212,7 @@
 	let mcpNeedsReload = false;
 
 	let currentLocalRuntimes = $state<LocalRuntime[]>([]);
-	let modelCatalog: SelectOption[] = [];
+	let modelCatalog = $state<SelectOption[]>([]);
 	let lastFallbackReason = "";
 	let feedSeq = 0;
 	let taskSeq = 0;
@@ -374,31 +374,41 @@
 	}
 
 	async function saveKanban(registry: KanbanRegistry): Promise<void> {
-		try { kanbanRegistry = await bridge.send<KanbanRegistry>("set_kanban_registry", { registry }); }
-		catch (error) { showError(toError(error).message); }
+		try {
+			kanbanRegistry = await bridge.send<KanbanRegistry>("set_kanban_registry", { registry });
+		} catch (error) {
+			showError(toError(error).message);
+			throw error;
+		}
 	}
 
 	async function runKanbanTask(boardId: string, taskId: string): Promise<void> {
 		if (!supportsCommand("run_kanban_task")) {
-			showError("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
-			return;
+			const error = new Error("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
+			showError(error.message);
+			throw error;
 		}
 		try {
-			kanbanRegistry = await bridge.send<KanbanRegistry>("run_kanban_task", { boardId, taskId }, 60_000);
+			await bridge.send<KanbanRegistry>("run_kanban_task", { boardId, taskId }, 60_000);
+			await refreshKanban();
 		} catch (error) {
 			showError(toError(error).message);
+			throw error;
 		}
 	}
 
 	async function stopKanbanTask(boardId: string, taskId: string): Promise<void> {
 		if (!supportsCommand("stop_kanban_task")) {
-			showError("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
-			return;
+			const error = new Error("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
+			showError(error.message);
+			throw error;
 		}
 		try {
-			kanbanRegistry = await bridge.send<KanbanRegistry>("stop_kanban_task", { boardId, taskId }, 60_000);
+			await bridge.send<KanbanRegistry>("stop_kanban_task", { boardId, taskId }, 60_000);
+			await refreshKanban();
 		} catch (error) {
 			showError(toError(error).message);
+			throw error;
 		}
 	}
 
@@ -3146,8 +3156,8 @@
 				onclose={() => (workspaceView = undefined)}
 				onsave={saveKanban}
 				onpickfolder={pickKanbanFolder}
-				onrun={(boardId, taskId) => void runKanbanTask(boardId, taskId)}
-				onstop={(boardId, taskId) => void stopKanbanTask(boardId, taskId)}
+				onrun={runKanbanTask}
+				onstop={stopKanbanTask}
 			/>
 		{:else if workspaceView === "browser"}
 			<BrowserWorkspace setup={codingHarnessSetup} onclose={() => (workspaceView = undefined)} />

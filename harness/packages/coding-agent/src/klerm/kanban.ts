@@ -4,8 +4,33 @@ export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintena
 export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
 
 export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
+export type KanbanAttemptStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
+export type KanbanAttemptStepStatus = "pending" | "active" | "completed" | "failed";
 
 const runStatuses: Set<string> = new Set(["idle", "running", "succeeded", "failed", "stopped"]);
+const attemptStatuses: Set<string> = new Set(["running", "succeeded", "failed", "stopped", "interrupted"]);
+const attemptStepStatuses: Set<string> = new Set(["pending", "active", "completed", "failed"]);
+
+export interface KanbanAttemptStep {
+	id: string;
+	label: string;
+	status: KanbanAttemptStepStatus;
+}
+
+export interface KanbanRunAttempt {
+	id: string;
+	sequence: number;
+	status: KanbanAttemptStatus;
+	startedAt: string;
+	finishedAt?: string;
+	model: string;
+	reasoning: string;
+	workspaceRoot: string;
+	stopReason?: string;
+	error?: string;
+	result?: string;
+	steps: KanbanAttemptStep[];
+}
 
 export interface KanbanTask {
 	id: string;
@@ -25,6 +50,7 @@ export interface KanbanTask {
 	runError?: string;
 	lastRunAt?: string;
 	lastResult?: string;
+	attempts?: KanbanRunAttempt[];
 	createdAt: string;
 	updatedAt: string;
 	createdSequence: number;
@@ -79,6 +105,56 @@ export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 					typeof task.kind === "string" && kinds.has(task.kind as KanbanTaskKind)
 						? (task.kind as KanbanTaskKind)
 						: "build";
+				const attempts: KanbanRunAttempt[] = [];
+				if (Array.isArray(task.attempts))
+					for (const attemptValue of task.attempts.slice(-20)) {
+						if (!attemptValue || typeof attemptValue !== "object" || Array.isArray(attemptValue)) continue;
+						const attempt = attemptValue as Record<string, unknown>;
+						if (
+							typeof attempt.id !== "string" ||
+							typeof attempt.sequence !== "number" ||
+							typeof attempt.status !== "string" ||
+							!attemptStatuses.has(attempt.status) ||
+							typeof attempt.startedAt !== "string" ||
+							typeof attempt.model !== "string" ||
+							typeof attempt.reasoning !== "string" ||
+							typeof attempt.workspaceRoot !== "string"
+						)
+							continue;
+						const steps: KanbanAttemptStep[] = [];
+						if (Array.isArray(attempt.steps))
+							for (const stepValue of attempt.steps.slice(0, 12)) {
+								if (!stepValue || typeof stepValue !== "object" || Array.isArray(stepValue)) continue;
+								const step = stepValue as Record<string, unknown>;
+								if (
+									typeof step.id === "string" &&
+									typeof step.label === "string" &&
+									typeof step.status === "string" &&
+									attemptStepStatuses.has(step.status)
+								)
+									steps.push({
+										id: step.id.slice(0, 100),
+										label: step.label.slice(0, 160),
+										status: step.status as KanbanAttemptStepStatus,
+									});
+							}
+						attempts.push({
+							id: attempt.id.slice(0, 100),
+							sequence: Math.max(1, Math.floor(attempt.sequence)),
+							status: attempt.status as KanbanAttemptStatus,
+							startedAt: attempt.startedAt,
+							model: attempt.model.slice(0, 200),
+							reasoning: attempt.reasoning.slice(0, 30),
+							workspaceRoot: attempt.workspaceRoot,
+							...(typeof attempt.finishedAt === "string" ? { finishedAt: attempt.finishedAt } : {}),
+							...(typeof attempt.stopReason === "string"
+								? { stopReason: attempt.stopReason.slice(0, 100) }
+								: {}),
+							...(typeof attempt.error === "string" ? { error: attempt.error.slice(0, 1000) } : {}),
+							...(typeof attempt.result === "string" ? { result: attempt.result.slice(0, 4000) } : {}),
+							steps,
+						});
+					}
 				tasks.push({
 					id: task.id,
 					title: task.title.slice(0, 160),
@@ -101,6 +177,7 @@ export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 					...(typeof task.runError === "string" ? { runError: task.runError.slice(0, 500) } : {}),
 					...(typeof task.lastRunAt === "string" ? { lastRunAt: task.lastRunAt } : {}),
 					...(typeof task.lastResult === "string" ? { lastResult: task.lastResult.slice(0, 2000) } : {}),
+					...(attempts.length > 0 ? { attempts } : {}),
 					createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
 					updatedAt: typeof task.updatedAt === "string" ? task.updatedAt : new Date(0).toISOString(),
 					createdSequence: typeof task.createdSequence === "number" ? task.createdSequence : tasks.length + 1,

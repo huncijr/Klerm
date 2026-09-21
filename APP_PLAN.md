@@ -1576,8 +1576,24 @@ personality. Non-contiguous agent ids use slot-specific model catalogs, and
 top-right notifications report completed bot replies outside Personal Bots and
 settled agent work outside Agents & Routing.
 
-Next slice: **persistent Kanban CRUD and manual Run now**. Automatic due-time
-dispatch remains later; unavailable models and harnesses never fall back.
+Kanban persistence and foreground execution are now implemented. New boards
+and new cards are blank: no starter cards, empty title/brief/folder, Auto
+model and Auto time, scheduling off. Run and scheduling require title, brief,
+and folder, and the drawer names the missing fields. The desktop supports
+per-card folders, an explicit model or the current workspace model,
+model-specific reasoning, automatic or custom target time, optional
+first-run/repeat scheduling, drag/drop status, manual Run/Stop/Retry, elapsed
+time, per-attempt history, and a live bounded activity view. Each run appends
+a persistent attempt with model snapshot, provider error or result, and a
+short execution checklist rendered under its own card. The backend preserves
+the real provider error instead of reporting a generic empty result, runs
+cards in isolated sessions outside the normal session list, persists ordered
+lifecycle records in `.klerm/kanban-runs.jsonl`, dispatches due work while the
+sidecar is open, reschedules repeats, and marks stale running work
+interrupted after restart. Tauri development and package builds rebuild the
+coding-agent sidecar before launch so the typed Kanban RPC cannot silently lag
+behind the frontend. True app-independent/background scheduling and a durable
+workspace-wide writer lock remain later milestones.
 
 ### App Milestone 3b - Browser Agent workspace
 
