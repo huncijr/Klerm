@@ -7,10 +7,8 @@
 		FeedItem,
 		ImageAttachment,
 		McpServerStatus,
-		PersonalBot,
 		ThinkingLevel,
 	} from "../lib/model.ts";
-	import { profileIcon } from "../lib/profiles.ts";
 	import Feed from "./Feed.svelte";
 
 	let {
@@ -20,7 +18,6 @@
 		activeAgentId,
 		taskActive,
 		sendDisabled,
-		personalBots,
 		mcpServers,
 		connectedHarnessKinds,
 		clearThrough,
@@ -38,7 +35,6 @@
 		activeAgentId?: string;
 		taskActive: boolean;
 		sendDisabled: boolean;
-		personalBots: PersonalBot[];
 		mcpServers: McpServerStatus[];
 		connectedHarnessKinds: CodingHarnessSlotSettings["kind"][];
 		clearThrough: Record<string, number>;
@@ -147,16 +143,12 @@
 			{@const draft = draftFor(agent.id)}
 			{@const attachable = canAttach(agent)}
 			{@const unavailable = adapterUnavailable(agent)}
-			{@const personality = personalBots.find((bot) => bot.id === agent.personalBotId)}
 			<article class="flex min-h-[280px] min-w-0 flex-col overflow-hidden rounded-xl border border-[#303a42] bg-[#090e12] shadow-[0_14px_36px_rgba(0,0,0,.22)] min-[760px]:min-h-0">
 				<header class="flex items-start gap-3 border-b border-[#273139] bg-[#0d1419] px-3 py-2.5">
-					{#if personality}
-						<span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#252f35] text-[14px] text-[#d6e0e4]" title={personality.name}>{profileIcon(personality.face)}</span>
-					{/if}
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center gap-2">
 							<span class={`h-1.5 w-1.5 rounded-full ${taskActive && activeAgentId === agent.id ? "animate-pulse bg-[#a9ca55]" : "bg-[#58656d]"}`}></span>
-							<strong class="font-mono text-[10px] text-[#e7ecef]">Agent {agent.id.slice(5)}{personality ? ` · ${personality.name}` : ""}</strong>
+							<strong class="font-mono text-[10px] text-[#e7ecef]">Agent {agent.id.slice(5)}</strong>
 							<span class="font-mono text-[8px] text-[#75828a]">{status(agent, scopedItems)}</span>
 						</div>
 						<p class="mt-1 truncate font-mono text-[8px] text-[#8e9aa2]" title={agent.model ?? "Default model"}>{agent.model ?? "Default model"}</p>

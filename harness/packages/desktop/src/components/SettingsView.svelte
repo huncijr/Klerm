@@ -3,7 +3,14 @@
 	import { slide } from "svelte/transition";
 	import { untrack } from "svelte";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
-	import { addCodingHarnessSlot, codingHarnessSlotsEqual, removeCodingHarnessSlot, updateCodingHarnessSlot } from "../lib/coding-harnesses.ts";
+	import {
+		addCodingHarnessSlot,
+		codingHarnessDisplayName,
+		codingHarnessReadiness,
+		codingHarnessSlotsEqual,
+		removeCodingHarnessSlot,
+		updateCodingHarnessSlot,
+	} from "../lib/coding-harnesses.ts";
 	import type {
 		CodingHarnessKind,
 		CodingHarnessSetup,
@@ -15,7 +22,6 @@
 		McpServerStatus,
 		McpServerUpdate,
 		McpStatus,
-		PersonalBot,
 		ProviderAccount,
 		ProviderConnect,
 		ProviderOauthStep,
@@ -43,7 +49,6 @@
 		codingHarnessError,
 		providers,
 		providerBusy,
-		personalBots,
 		fullscreen,
 		ontogglefullscreen,
 		onclose,
@@ -76,7 +81,6 @@
 		codingHarnessError: string;
 		providers: ProviderAccount[];
 		providerBusy: boolean;
-		personalBots: PersonalBot[];
 		oauthStep: ProviderOauthStep | undefined;
 		onstartoauth: (provider: string) => Promise<boolean>;
 		oncanceloauth: () => void;
@@ -178,7 +182,7 @@
 	const harnessOptions = $derived.by<Array<{ kind: CodingHarnessKind; label: string }>>(() => [
 		...(codingHarnessSetup?.harnesses
 			.filter((harness) => harness.available)
-			.map((harness) => ({ kind: harness.kind, label: codingHarnessLabel(harness.kind) })) ?? []),
+			.map((harness) => ({ kind: harness.kind, label: codingHarnessDisplayName(harness.kind) })) ?? []),
 	]);
 
 	function formFor(id: string): { key: string; url: string; error: string; confirmDiscard: boolean } {
@@ -251,15 +255,6 @@
 			? `ACP${harness.acp.agentName ? ` · ${harness.acp.agentName}` : ""}`
 			: harness.version;
 		return detail ? `${state} · ${detail}` : state;
-	}
-
-	function codingHarnessLabel(kind: CodingHarnessKind): string {
-		if (kind === "claude-code") return "Claude Code";
-		if (kind === "opencode") return "OpenCode";
-		if (kind === "cline") return "Cline";
-		if (kind === "codex") return "Codex";
-		if (kind === "pi") return "Pi";
-		return "Klerm";
 	}
 
 	function harnessAvailable(kind: CodingHarnessKind | null): boolean {
@@ -435,6 +430,7 @@
 	const harnessDirty = $derived(
 		codingHarnessSetup !== undefined && !codingHarnessSlotsEqual(draftHarnessSlots, codingHarnessSetup.slots),
 	);
+	const harnessReadiness = $derived(codingHarnessReadiness(codingHarnessSetup));
 
 	let autoScanDone = $state(false);
 	$effect(() => {
@@ -542,7 +538,7 @@
 		try {
 			if (!(await onsaveharnesses(structuredClone(next)))) {
 				draftHarnessSlots = previous;
-				saveError = "Could not save external harness settings.";
+				saveError = codingHarnessError || "Could not save external harness settings.";
 				return;
 			}
 			draftHarnessSlots = structuredClone(next);
@@ -568,7 +564,7 @@
 		try {
 			if (!(await onsaveharnesses(structuredClone(next)))) {
 				draftHarnessSlots = previous;
-				saveError = "Could not save external agent settings.";
+				saveError = codingHarnessError || "Could not save external agent settings.";
 				return;
 			}
 			draftHarnessSlots = structuredClone(next);
@@ -668,7 +664,25 @@
 						<span>{draftHarnessSlots.externalHarnessesEnabled ? "On" : "Off"}</span>
 						<span class={`relative h-4 w-7 rounded-full transition-colors ${draftHarnessSlots.externalHarnessesEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${draftHarnessSlots.externalHarnessesEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
 					</button>
-			</div>
+				</div>
+				<p
+					class={`m-0 w-full rounded-lg border px-3 py-2 font-mono text-[8px] leading-relaxed ${
+						harnessReadiness.state === "ready"
+							? "border-[#2c4a34] bg-[#0d1510] text-[#81c995]"
+							: harnessReadiness.state === "setup-required"
+								? "border-[#5a4a2f] bg-[#1d160c] text-[#d8bd8a]"
+								: "border-[#303a42] bg-[#0a0f13] text-[#74818a]"
+					}`}
+				>
+					{draftHarnessSlots.externalHarnessesEnabled
+						? harnessReadiness.detail
+						: "External harnesses are disabled. Normal Klerm chat remains available."}
+				</p>
+				{#if codingHarnessError}
+					<p class="m-0 w-full rounded-lg border border-[#5a3434] bg-[#170d0d] px-3 py-2 font-mono text-[8px] leading-relaxed text-[#f3a49c]">
+						{codingHarnessError}
+					</p>
+				{/if}
 			{#if draftHarnessSlots.externalHarnessesEnabled}
 				<div transition:slide={{ duration: 260 }} class="w-full pl-1">
 					{#if codingHarnessLoading}
@@ -696,7 +710,7 @@
 									onclick={() => void addExternalHarnessAgent(harness.kind)}
 								>
 									<span class="grid h-4 w-4 shrink-0 place-items-center rounded-full border border-[#3d4a54] font-mono text-[9px] leading-none text-[#81c995] transition-colors group-hover:border-[#81c995]">+</span>
-									<span class="font-mono text-[10px] text-[#d7e7ff] group-hover:text-white">Add {codingHarnessLabel(harness.kind)} agent</span>
+									<span class="font-mono text-[10px] text-[#d7e7ff] group-hover:text-white">Add {codingHarnessDisplayName(harness.kind)} agent</span>
 									<span class="font-mono text-[7px] tracking-[.1em] text-[#7b868e] uppercase">{harness.acp ? `ACP · ${harness.acp.agentName ?? harness.kind}` : harness.version ? harness.version : ""}</span>
 								</button>
 							{/each}
@@ -767,11 +781,10 @@
 				<div class="grid grid-cols-2 gap-3 narrow-720:grid-cols-1">
 					{#each draftHarnessSlots.agents as value (value.id)}
 						{@const models = harnessModels(value.kind)}
-						{@const personality = personalBots.find((bot) => bot.id === value.personalBotId)}
 						<section class="rounded-xl border border-[#232c34] bg-[#0a0f13] p-4">
 							<div class="mb-4 flex flex-wrap items-center gap-2">
-								<ProviderLogo id={value.kind ?? "custom"} label={value.kind ? codingHarnessLabel(value.kind) : `Agent ${agentNumber(value.id)}`} size={24} decorative />
-								<strong class="mr-auto text-[12px] text-white">Agent {agentNumber(value.id)}{value.kind ? ` · ${codingHarnessLabel(value.kind)}` : ""}</strong>
+								<ProviderLogo id={value.kind ?? "custom"} label={value.kind ? codingHarnessDisplayName(value.kind) : `Agent ${agentNumber(value.id)}`} size={24} decorative />
+								<strong class="mr-auto text-[12px] text-white">Agent {agentNumber(value.id)}{value.kind ? ` · ${codingHarnessDisplayName(value.kind)}` : ""}</strong>
 								<div class="flex items-center gap-1.5">
 								{#if value.id !== "agent1" || draftHarnessSlots.agents.length >= 3}
 										<button type="button" class="font-mono text-[8px] text-[#8b969e] hover:text-[#f3a49c]" onclick={() => (draftHarnessSlots = removeCodingHarnessSlot(draftHarnessSlots, value.id))}>Remove</button>
@@ -791,7 +804,7 @@
 								onchange={(event) => void selectHarness(value.id, event.currentTarget.value as CodingHarnessKind)}
 							>
 								{#if value.kind !== null && !harnessAvailable(value.kind)}
-									<option value={value.kind} disabled>{codingHarnessLabel(value.kind)} · Not installed</option>
+									<option value={value.kind} disabled>{codingHarnessDisplayName(value.kind)} · Not installed</option>
 								{/if}
 								{#each harnessOptions as option}
 									<option value={option.kind}>{harnessOptionLabel(option)}</option>
@@ -820,21 +833,9 @@
 									direction="down"
 									allowEmpty
 									emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
-									memories={personalBots}
-									selectedMemoryId={value.personalBotId}
 									onchange={(next) => updateAgent(value.id, { model: next || undefined })}
-									onmemory={(model, botId) => {
-										const bot = personalBots.find((candidate) => candidate.id === botId);
-										updateAgent(value.id, {
-											...(model ? { model } : {}),
-											...(bot
-												? { personalBotId: bot.id, memoryProfileId: bot.profileId }
-												: { personalBotId: undefined, memoryProfileId: undefined }),
-										});
-									}}
 								/>
 							</div>
-							{#if personality}<p class="m-0 mt-1 font-mono text-[8px] text-[#81c995]">Memory: {personality.name}</p>{/if}
 							<div class="mt-4 grid grid-cols-2 gap-2">
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`role-${value.id}`}>Role</label>
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`effort-${value.id}`}>Effort</label>

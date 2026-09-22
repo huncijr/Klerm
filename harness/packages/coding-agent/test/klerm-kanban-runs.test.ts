@@ -6,6 +6,7 @@ import {
 	effectiveKanbanTaskPrompt,
 	findDueKanbanTasks,
 	finishKanbanRunAttempt,
+	kanbanTaskSystemGuidance,
 	markInterruptedKanbanTasks,
 	nextRepeatAt,
 	validateRunnableKanbanTask,
@@ -69,6 +70,29 @@ describe("effectiveKanbanTaskPrompt", () => {
 		expect(effectiveKanbanTaskPrompt({ title: "Fallback", prompt: "Run the focused check" })).toBe(
 			"Run the focused check",
 		);
+	});
+});
+
+describe("kanbanTaskSystemGuidance", () => {
+	it.each([
+		["build", "Implement the requested behavior"],
+		["fix", "Reproduce or establish the reported failure"],
+		["review", "findings first"],
+		["research", "evidence-based conclusions"],
+		["maintenance", "bounded maintenance"],
+	] as const)("adds targeted %s guidance", (kind, expected) => {
+		const guidance = kanbanTaskSystemGuidance(kind, false);
+		expect(guidance).toContain(`Current task type: ${kind}.`);
+		expect(guidance).toContain(expected);
+		expect(guidance).not.toContain("Kanban task type guidance:");
+	});
+
+	it("lists every type for Auto model selection and clearly selects the card type", () => {
+		const guidance = kanbanTaskSystemGuidance("review", true);
+		for (const kind of ["build", "fix", "review", "research", "maintenance"] as const) {
+			expect(guidance).toContain(`${kind}:`);
+		}
+		expect(guidance).toContain("Current task type: review. Follow the review guidance for this run.");
 	});
 });
 

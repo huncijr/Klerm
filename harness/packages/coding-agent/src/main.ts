@@ -823,7 +823,6 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 			() => settingsManager.getKlermProfiles().sharedMemory,
 			() => settingsManager.getCodingHarnessSlots(),
-			(id) => settingsManager.getKlermProfiles().profiles.find((profile) => profile.id === id),
 		);
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...projectTrustDiagnostics,

@@ -96,7 +96,7 @@ describe("coding harness setup", () => {
 		expect(createCodingHarnessAgent("agent2")).toEqual(agent("agent2", "klerm"));
 	});
 
-	it("enables Work together for two enabled modeled agents and preserves memory assignments", () => {
+	it("enables Work together and drops legacy slot memory assignments", () => {
 		const agents = [
 			{
 				...agent("agent1", "klerm"),
@@ -107,12 +107,13 @@ describe("coding harness setup", () => {
 			{ ...agent("agent2", "klerm"), model: "provider/two" },
 			{ ...agent("agent3", "klerm"), model: "provider/three" },
 		];
+		const normalizedAgents = [{ ...agent("agent1", "klerm"), model: "provider/one" }, agents[1]!, agents[2]!];
 		expect(
 			normalizeCodingHarnessSlots({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents }),
 		).toEqual({
 			externalHarnessesEnabled: true,
 			workTogetherEnabled: true,
-			agents,
+			agents: normalizedAgents,
 		});
 		expect(
 			normalizeCodingHarnessSlots({
@@ -120,7 +121,7 @@ describe("coding harness setup", () => {
 				workTogetherEnabled: true,
 				agents: agents.slice(0, 2),
 			}),
-		).toEqual({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents: agents.slice(0, 2) });
+		).toEqual({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents: normalizedAgents.slice(0, 2) });
 		expect(
 			normalizeCodingHarnessSlots({
 				externalHarnessesEnabled: true,
@@ -128,23 +129,18 @@ describe("coding harness setup", () => {
 				agents: [...agents.slice(0, 2), { ...agents[2], kind: "codex" }],
 			}),
 		).toMatchObject({ workTogetherEnabled: true });
-		expect(parseCodingHarnessSlots({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents })).toEqual({
-			externalHarnessesEnabled: true,
-			workTogetherEnabled: true,
-			agents,
-		});
+		expect(
+			parseCodingHarnessSlots({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents }),
+		).toBeUndefined();
 		expect(
 			normalizeCodingHarnessSlots({
 				externalHarnessesEnabled: false,
-				agents: [{ ...agent("agent1", "klerm"), personalBotId: " bot-scout " }],
+				agents: [{ ...agent("agent1", "klerm"), personalBotId: "bot-scout", memoryProfileId: "planner" }],
 			}),
-		).toMatchObject({ agents: [{ personalBotId: "bot-scout" }, { id: "agent2" }] });
-		expect(
-			parseCodingHarnessSlots({
-				externalHarnessesEnabled: false,
-				agents: [{ ...agent("agent1", "klerm"), personalBotId: "" }],
-			}),
-		).toBeUndefined();
+		).toEqual({
+			externalHarnessesEnabled: false,
+			agents: [agent("agent1", "klerm"), { ...agent("agent2", "klerm"), role: "planner" }],
+		});
 	});
 
 	it("discovers builtin Klerm and probes only fixed external version commands", async () => {

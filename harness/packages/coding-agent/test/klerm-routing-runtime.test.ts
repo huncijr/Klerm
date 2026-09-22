@@ -176,44 +176,57 @@ describe("Klerm routing runtime", () => {
 			localModel: "ollama/qwen2.5-coder:7b",
 			frontierModel: "google/gemini-3.5-flash-lite",
 		});
-		const controller = new KlermRoutingController(tempDir, runtime, store, undefined, undefined, undefined, () => ({
-			externalHarnessesEnabled: true,
-			workTogetherEnabled: true,
-			agents: [
-				{
-					id: "agent1",
-					kind: "klerm",
-					enabled: true,
-					model: "ollama/qwen2.5-coder:7b",
-					role: "builder",
-					effort: "off",
-					tools: [],
-				},
-				{
-					id: "agent2",
-					kind: "klerm",
-					enabled: true,
-					model: "google/gemini-3.5-flash-lite",
-					role: "builder",
-					effort: "off",
-					tools: [],
-				},
-				{
-					id: "agent3",
-					kind: "klerm",
-					enabled: true,
-					model: "anthropic/claude-opus-4",
-					role: "planner",
-					effort: "high",
-					tools: ["read", "grep"],
-				},
-			],
-		}));
+		const scout = normalizeProfileState({}).profiles.find((profile) => profile.id === "scout")!;
+		const controller = new KlermRoutingController(
+			tempDir,
+			runtime,
+			store,
+			undefined,
+			() => scout,
+			() => "Shared only",
+			() => ({
+				externalHarnessesEnabled: true,
+				workTogetherEnabled: true,
+				agents: [
+					{
+						id: "agent1",
+						kind: "klerm",
+						enabled: true,
+						model: "ollama/qwen2.5-coder:7b",
+						role: "builder",
+						effort: "off",
+						tools: [],
+					},
+					{
+						id: "agent2",
+						kind: "klerm",
+						enabled: true,
+						model: "google/gemini-3.5-flash-lite",
+						role: "builder",
+						effort: "off",
+						tools: [],
+					},
+					{
+						id: "agent3",
+						kind: "klerm",
+						enabled: true,
+						model: "anthropic/claude-opus-4",
+						role: "planner",
+						effort: "high",
+						tools: ["read", "grep"],
+					},
+				],
+			}),
+		);
 
 		const initial = await controller.routePrompt("Review the architecture");
 		expect(initial?.model).toBe(local);
 		await initial?.commit();
-		expect(controller.getSystemPromptContribution()).toContain("agent3: anthropic/claude-opus-4");
+		const initialSystemPrompt = controller.getSystemPromptContribution();
+		expect(initialSystemPrompt).toContain("agent3: anthropic/claude-opus-4");
+		expect(initialSystemPrompt).toContain("Shared only");
+		expect(initialSystemPrompt).not.toContain("Profile behaviour:");
+		expect(initialSystemPrompt).not.toContain("<klerm_personal_memory>");
 
 		await controller.createDelegationTool().execute(
 			"delegate-agent3",

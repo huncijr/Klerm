@@ -42,6 +42,17 @@ Delivery order remains:
   Display the mixed-license notice and the Klerm Community Source License for
   any new Klerm-specific release material to which it is expressly applied.
 
+### Verification cadence
+
+- Keep implementation loops fast. Do not run build, typecheck, browser smoke,
+  or test commands after every prompt, file edit, or small syntax change.
+- Batch verification at the end of a coherent fix or milestone. Run the
+  smallest relevant targeted check once, then run the required repository-wide
+  check once before reporting completion, committing, or pushing.
+- Add an intermediate targeted check only when reproducing a concrete failure,
+  validating an uncertain external API contract, or resolving a reported test
+  failure. Do not repeatedly rerun unchanged checks for reassurance.
+
 ## 3. Application layout
 
 The main application should feel like a live collaboration workspace rather
@@ -1167,7 +1178,7 @@ OpenCode/Codex prompts use a versioned sequential coordinator, all eligible
 capability-ranked peers, coordinator-finalization flow for broad tasks, and record structured
 no-delegation reasons for direct tasks. Focused tests prove Agent 6 to Agent 7
   multi-peer handoff and return, native coordinator session reuse, disabled-agent exclusion,
-  per-agent Personal Memory and Plan/Build prompt snapshots, deterministic event
+  shared prompt and Plan/Build role snapshots without Personal Bot memory, deterministic event
   ordering, cancellation, workspace/verification evidence, JSONL append behavior, and the
   two-agent Work together threshold. Desktop state tests cover live/replayed
   bridge card identity, per-agent output boundaries,
@@ -1265,7 +1276,7 @@ without replacing memory owned by its native harness.
 - Persist one editable default shared-memory text, one active selection, and up
   to 20 globally named presets in Klerm settings. Selecting or deleting a preset
   must not overwrite the retained default. Presets contain no credentials and
-  are separate from per-agent persona/profile memory.
+  are the only Klerm-owned memory attached to coding-harness runs.
 - Generate the default context dynamically from the runnable roster at task
   start. Include stable agent id, harness, model, role, effort, availability,
   strengths, limits, tools, specialties, native-session resume support, and role
@@ -1279,9 +1290,9 @@ without replacing memory owned by its native harness.
 - Show the editable Default Shared Memory first under Settings > Memory, with a
   separate `Add New Memory` action below it and saved-memory cards with active,
   select, and delete controls. Display the exact active task-start shared prompt,
-  including the current runnable roster, in a read-only preview. Put individual
-  agent profile context in a visually separate `Personal Memory` section and keep
-  agent roles under Settings > Agents.
+  including the current runnable roster, in a read-only preview. Keep Personal
+  Bots and their profiles in the separate Personal Bots workspace, and keep agent
+  roles under Settings > Agents.
 - Record only the selected preset id and a SHA-256 context digest in normal
   orchestration diagnostics. Full prompt/context text is allowed only in the
   explicitly enabled AI debug trace.
@@ -1291,8 +1302,8 @@ without replacing memory owned by its native harness.
 Acceptance criteria:
 
 - Every agent participating in one external bridge task receives byte-identical
-  shared context even when the active preset changes during the run, plus its
-  own task-start Personal Memory and Plan/Build instructions.
+  shared context even when the active preset changes during the run. Harness
+  slots do not receive Personal Bot or profile-memory blocks.
 - Disabled or unrunnable agents never appear in the dynamic roster.
 - The default text and presets survive restart, can be selected from Settings,
   and selecting or deleting a preset does not overwrite the retained default.
@@ -1306,7 +1317,7 @@ capability-advertised RPC. Legacy custom active text migrates to the retained
 default. The desktop composer has no Shared Memory editor; Settings > Memory
 shows the default editor, a separate `Add New Memory` flow, and selectable
 saved-memory cards. It also shows the exact active shared prompt beneath the
-default editor and separates agent profiles under `Personal Memory`. External
+default editor. Personal Bots remain separate standalone conversations. External
 coordinator, peer, and finalization prompts receive one unchanged task-start
 roster/memory snapshot. Normal route decisions contain
 only its SHA-256 digest and optional preset id. Focused persistence, prompt, and
@@ -1326,8 +1337,8 @@ cd /home/abro/Desktop/Klerm/harness
    `Add New Memory` to create and select a named memory. Return to
    Default and confirm the original default text is still present. Confirm
    `Prompt used by all agents` shows the default collaboration instructions, the
-   runnable agents, and the active memory text. Confirm agent profiles appear in
-   a clearly separate `Personal Memory` section.
+   runnable agents, and the active memory text. Confirm there is no Personal Bot
+   or `No memory` selector in an agent model menu.
 3. While that task runs, change the active memory. Confirm the active peer and
    finalizer retain the original snapshot, then submit another task and confirm
    it receives the changed memory.
@@ -1378,7 +1389,7 @@ without allowing an unbounded autonomous loop or concurrent workspace writers.
   success.
 - Reuse native sessions when the effective role is unchanged and safely restart
   a native session when temporary role enforcement requires a role switch.
-- Preserve task-start Shared Memory, Personal Memory, roster, and role snapshots,
+- Preserve task-start Shared Memory, roster, and role snapshots,
   deterministic cancellation, Git/verification evidence, and append-only bridge
   logging throughout the workflow.
 
@@ -1442,25 +1453,18 @@ frontend.
   oversized fields.
 - Give every bot one durable, continuous conversation. The conversation owns its
   transcript, selected bot, Klerm session id, native adapter session reference
-  where supported, status, task sequence, and latest work summary. Bot messages
+  where supported, status, and task sequence. Bot messages
   must not be reconstructed by parsing the normal shared session feed.
 - Show a bot list and the selected bot's independent chat. The header displays
   bot name, face, harness/model, role, reasoning, availability, and native
   session state.
-- When a bot is explicitly linked as an agent personality, request one bounded
-  summary in the same bot personality/session after every third successful task
-  completed by an agent linked to that bot. Keep immutable summary history with
-  delete but no edit. Store
-  completed work, decisions, changed files, verification, blockers, and next
-  action. Summary failure does not change the original task outcome.
-- At the next task boundary, a bot may receive bounded, labeled summaries from
-  the other bots in the same project. Treat those summaries as untrusted agent
-  output, enforce count/character limits, and store only digests in normal
-  decision logs.
-- Each Agents & Routing slot can explicitly select one Personal Bot personality
-  or `None`. The stable bot id and its existing profile id are persisted on the
-  slot; bot transcripts and summary text remain outside the routing session.
-- Move Personal Memory/profile creation and editing from Settings to Personal
+- Personal Bots remain standalone discussion chats. They are not assignable to
+  coding-harness slots, and normal coding-agent task completions do not append to
+  their conversations.
+- Keep Personal Bot chat context isolated from other bots and coding-agent task
+  results. The visible transcript is the complete user-facing conversation;
+  there is no separate summary history or automatic summary generation.
+- Move Personal Bot profile creation and editing from Settings to Personal
   Bots. Settings > Memory is reduced to Shared Memory, named shared presets, and
   the exact effective shared prompt preview.
 
@@ -1494,14 +1498,15 @@ frontend.
 #### Typed backend contracts
 
 - Personal Bots: `get_personal_bots`, `upsert_personal_bot`,
-  `delete_personal_bot`, conversation read/prompt/reset commands, and
-  `delete_personal_bot_summary`. Agent-side bot links use the existing typed
-  coding-harness slot contract.
+  `delete_personal_bot`, and conversation read/prompt/reset commands. The
+  coding-harness slot contract contains no Personal Bot or memory-profile
+  assignment. The legacy summary deletion command remains accepted only for
+  persisted-data compatibility and is not exposed by the desktop.
 - Kanban: `get_kanban_board`, `create_kanban_card`, `update_kanban_card`,
   `schedule_kanban_card`, `run_kanban_card`, `cancel_kanban_card`,
   `retry_kanban_card`, and `get_kanban_attempts`.
-- Events: `bot_conversation_changed`, `bot_summary_updated`,
-  `kanban_card_changed`, and `kanban_attempt_changed` with stable ids,
+- Events: `bot_conversation_changed`, `kanban_card_changed`, and
+  `kanban_attempt_changed` with stable ids,
   monotonically increasing sequence, status, timestamp, and reason.
 - Extend adapters with explicit native-session reconstruction before claiming
   bot conversation resume survives a sidecar restart.
@@ -1514,11 +1519,10 @@ Implementation order:
 3. Move profile editing into Personal Bots and leave only Shared Memory in
    Settings.
 4. Add isolated bot conversations and bot-attributed task events.
-5. Add same-personality post-task summaries and bounded cross-bot awareness.
-6. Add explicit per-agent Personal Bot personality assignment.
-7. Add persistent Kanban CRUD and manual Run now.
-8. Add foreground due-time dispatch, interruption recovery, and workspace lock.
-9. Add a separately supervised scheduler only after native-session recovery and
+5. Keep standalone Personal Bot chats isolated from cross-bot and coding-task context.
+6. Add persistent Kanban CRUD and manual Run now.
+7. Add foreground due-time dispatch, interruption recovery, and workspace lock.
+8. Add a separately supervised scheduler only after native-session recovery and
    sidecar packaging are proven.
 
 Acceptance criteria for the first slice:
@@ -1540,8 +1544,8 @@ Current follow-up: **isolated Personal Bot chat implemented**. Agents & Routing
 maps to the existing shared prompt and agent workspace and is the default view.
 Personal Bots uses a vertical bot list, central private chat, compact right-side
 conversation information, separate on-demand AI, model, and reasoning settings, one durable
-conversation per bot, built-in Klerm model sessions, bounded previous-session
-context refreshed by digest, and ordered `.klerm/personal-bot-events.jsonl`
+conversation per bot, built-in Klerm model sessions, previous-session context,
+and ordered `.klerm/personal-bot-events.jsonl`
 lifecycle records. Personal Bots always run through Klerm; they do not expose a
 runtime or enabled-state selector. Their sessions are tool-free so concurrent
 Personal Bot chats cannot modify the workspace. Personal Bots are
@@ -1557,24 +1561,20 @@ have their own settings surface, remain separate from AI identity, and may
 change without replacing the continuous transcript. Focused RPC tests verify
 continuation after profile and reasoning updates.
 
-Same-personality conversation summaries and bounded cross-bot awareness are now
-implemented for Klerm Personal Bots. Summary generation is enabled only while a
-bot is explicitly selected as an Agents & Routing personality, and runs after
-every third successful normal coding-agent task linked to that bot. Summaries are immutable Markdown
-records with deterministic prompt ranges, digests, and ordered create/delete
-events in `.klerm/personal-bot-events.jsonl`; users can view and delete each
-record but cannot edit it. On a later prompt, a bot may receive the newest
-remaining summaries from at most four other bots in the same workspace, capped
-at 4000 characters total and explicitly labeled as untrusted. Summary failure
-does not change the completed user response. The desktop safely renders
-headings, emphasis, lists, code, and tables.
-
-Agents & Routing now owns Personal Bot personality assignment. Every agent slot
-can select one bot or `None`; the backend validates the stable bot id and keeps
-its profile id synchronized. Compact agent cards and Settings show the active
-personality. Non-contiguous agent ids use slot-specific model catalogs, and
-top-right notifications report completed bot replies outside Personal Bots and
-settled agent work outside Agents & Routing.
+Personal Bots remain independent, tool-free discussion chats with their own
+profiles and durable transcripts. They are not assignable to Agents & Routing
+slots, and coding-agent task results do not feed Personal Bot summaries. Legacy
+`personalBotId` and `memoryProfileId` slot data is removed during normalization.
+The desktop no longer exposes summary history, cadence, pending summary tasks,
+or summary status, and the backend no longer generates Personal Bot summaries.
+Harness names and model
+discovery capabilities come from shared metadata instead of scattered
+provider-specific UI branches. Enabling external harnesses is a configuration
+state: incomplete slots show a concrete readiness reason but no longer block
+normal Klerm chat. Open View remains directly available from the top bar when
+the session pane is collapsed or off-canvas. Non-contiguous agent ids use
+slot-specific model catalogs, and top-right notifications report completed bot
+replies from any workspace and settled agent work outside Agents & Routing.
 
 Kanban persistence and foreground execution are now implemented. New boards
 and new cards are blank: no starter cards, empty title/brief/folder, Auto
@@ -1585,8 +1585,16 @@ model-specific reasoning, automatic or custom target time, optional
 first-run/repeat scheduling, drag/drop status, manual Run/Stop/Retry, elapsed
 time, per-attempt history, and a live bounded activity view. Each run appends
 a persistent attempt with model snapshot, provider error or result, and a
-short execution checklist rendered under its own card. The backend preserves
-the real provider error instead of reporting a generic empty result, runs
+short execution checklist. Ideas use a separate lightweight capture action,
+while normal tasks start in Planned. Cards remain compact and expose their brief
+on hover; running boards and cards show live spinners, elapsed time, and the
+active step. Selecting a card opens one full-width workspace below all columns
+for editing, execution controls, attempt plans, results, and activity instead of
+expanding those details inside each card. Build, fix, review,
+research, and maintenance cards receive type-specific system guidance. Auto
+model selection lists all five definitions and explicitly marks the current
+card type; an explicit model receives only the selected type guidance. The
+backend preserves the real provider error instead of reporting a generic empty result, runs
 cards in isolated sessions outside the normal session list, persists ordered
 lifecycle records in `.klerm/kanban-runs.jsonl`, dispatches due work while the
 sidecar is open, reschedules repeats, and marks stale running work

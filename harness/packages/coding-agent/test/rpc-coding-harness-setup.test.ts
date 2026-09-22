@@ -243,12 +243,8 @@ describe("coding harness setup RPC", () => {
 				agents: [agent("agent1", "codex"), { ...agent("agent2", "claude-code"), model: "sonnet" }],
 			});
 
-			const blockedPrompt = await send({ id: "blocked-prompt", type: "prompt", message: "do not fall back" });
-			expect(blockedPrompt).toMatchObject({
-				success: false,
-				code: "CODING_HARNESS_UNAVAILABLE",
-				error: "Agent 1 (Codex) is not available.",
-			});
+			const klermPrompt = await send({ id: "klerm-prompt", type: "prompt", message: "use Klerm" });
+			expect(klermPrompt).toMatchObject({ success: true });
 			expect(opencodeAdapter.prompt).not.toHaveBeenCalled();
 
 			const opencodeSetup = await send({
@@ -398,21 +394,15 @@ describe("coding harness setup RPC", () => {
 						{
 							...agent("agent6", "opencode"),
 							model: "openai/gpt-5.6-terra",
-							personalBotId: "bot-sage",
-							memoryProfileId: "sage",
 						},
 						{
 							...agent("agent7", "codex"),
 							model: "gpt-5-codex",
 							role: "planner",
-							personalBotId: "bot-scout",
-							memoryProfileId: "scout",
 						},
 						{
 							...agent("agent8", "codex"),
 							model: "gpt-5.6-luna",
-							personalBotId: "bot-builder",
-							memoryProfileId: "builder",
 						},
 					],
 				},
@@ -462,7 +452,8 @@ describe("coding harness setup RPC", () => {
 			expect(promptCalls[0]?.text).toContain("agent7: available; harness codex");
 			expect(promptCalls[0]?.text).toContain("agent8: available; harness codex");
 			expect(promptCalls[0]?.text).toContain("Use the shared repository conventions.");
-			expect(promptCalls[0]?.text).toContain("Work in Build mode:");
+			expect(promptCalls[0]?.text).not.toContain("<klerm_personal_memory>");
+			expect(promptCalls[0]?.text).not.toContain("Profile behaviour:");
 			await send({
 				id: "change-shared-memory",
 				type: "set_klerm_shared_memory",
@@ -482,7 +473,8 @@ describe("coding harness setup RPC", () => {
 			expect(promptCalls[1]?.text).toContain("Coordinator result:\nCoordinator pass");
 			expect(promptCalls[1]?.text).toContain("Use the shared repository conventions.");
 			expect(promptCalls[1]?.text).not.toContain("This applies only to the next task.");
-			expect(promptCalls[1]?.text).toContain("Profile planner mode:");
+			expect(promptCalls[1]?.text).not.toContain("<klerm_personal_memory>");
+			expect(promptCalls[1]?.text).not.toContain("Profile planner mode:");
 
 			listeners.get("codex")?.({ type: "message", agentId: "agent7", text: "Peer pass" });
 			listeners.get("codex")?.({ type: "settled", agentId: "agent7", status: "completed" });
@@ -491,7 +483,8 @@ describe("coding harness setup RPC", () => {
 			expect(promptCalls[2]?.text).toContain("Prior agent7 result:\nPeer pass");
 			expect(promptCalls[2]?.text).toContain("Use the shared repository conventions.");
 			expect(promptCalls[2]?.text).not.toContain("This applies only to the next task.");
-			expect(promptCalls[2]?.text).toContain("Work in Build mode:");
+			expect(promptCalls[2]?.text).not.toContain("<klerm_personal_memory>");
+			expect(promptCalls[2]?.text).not.toContain("Profile builder mode:");
 
 			listeners.get("codex")?.({ type: "message", agentId: "agent8", text: "Second peer pass" });
 			listeners.get("codex")?.({ type: "settled", agentId: "agent8", status: "completed" });
@@ -509,24 +502,6 @@ describe("coding harness setup RPC", () => {
 			);
 
 			await vi.waitFor(() => expect(bridgeRecords).toHaveLength(17));
-			for (const [botId, linkedAgentId] of [
-				["bot-sage", "agent6"],
-				["bot-scout", "agent7"],
-				["bot-builder", "agent8"],
-			] as const) {
-				const conversation = await send({
-					id: `linked-conversation-${botId}`,
-					type: "get_personal_bot_conversation",
-					botId,
-				});
-				expect(conversation).toMatchObject({
-					success: true,
-					data: {
-						linkedSuccessfulPromptCount: 1,
-						pendingSummarySources: [expect.objectContaining({ agentId: linkedAgentId })],
-					},
-				});
-			}
 			expect(bridgeRecords.map((record) => record.event)).toEqual([
 				"TASK_CREATED",
 				"TASK_ASSIGNED",

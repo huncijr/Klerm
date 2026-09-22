@@ -1,5 +1,18 @@
 <script lang="ts">
-	import { ArrowLeft, Check, CircleDot, FolderGit2, FolderOpen, Play, Plus, RotateCcw, Square, X } from "@lucide/svelte";
+	import {
+		ArrowLeft,
+		Check,
+		CircleDot,
+		FolderGit2,
+		FolderOpen,
+		Lightbulb,
+		LoaderCircle,
+		Play,
+		Plus,
+		RotateCcw,
+		Square,
+		X,
+	} from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type {
 		KanbanActivityEvent,
@@ -148,7 +161,7 @@
 			operationBusy = false;
 		}
 	}
-	async function addTask(status: KanbanTaskStatus = "ideas"): Promise<void> {
+	async function addTask(status: KanbanTaskStatus = "planned"): Promise<void> {
 		if (!board || operationBusy) return;
 		const now = new Date().toISOString();
 		const task = blankTask(status, board.tasks.length + 1, now);
@@ -324,6 +337,9 @@
 	function latestAttempt(task: KanbanTask): KanbanRunAttempt | undefined {
 		return task.attempts?.length ? task.attempts[task.attempts.length - 1] : undefined;
 	}
+	function activeStep(task: KanbanTask): string | undefined {
+		return latestAttempt(task)?.steps.find((step) => step.status === "active")?.label;
+	}
 	function stepMarker(status: string): string {
 		if (status === "completed") return "x";
 		if (status === "active") return ">";
@@ -431,8 +447,7 @@
 							><FolderGit2 size={9} /> {item.workspaceRoot}</span
 						>
 						<span class="mt-1.5 block font-mono text-[7px] text-[#9bbc79]"
-							>{item.tasks.filter((task) => task.runStatus === "running").length} running · {item.tasks.length}
-							cards</span
+							>{#if item.tasks.some((task) => task.runStatus === "running")}<LoaderCircle size={9} class="mr-1 inline animate-spin" />{/if}{item.tasks.filter((task) => task.runStatus === "running").length} running · {item.tasks.length} cards</span
 						>
 					</button>
 				{/each}
@@ -453,21 +468,31 @@
 								<FolderGit2 size={10} /> {board.workspaceRoot}
 							</p>
 						</div>
-						<button
-							type="button"
-							disabled={operationBusy}
-							title="Add a blank task and open its details"
-							class="flex h-10 items-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] px-3.5 font-mono text-[9px] font-semibold text-[#f0ffdf] shadow-[0_10px_24px_rgba(93,139,54,.18)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-50"
-							onclick={() => void addTask()}
-							><Plus size={12} /> Add task</button
-						>
+						<div class="flex gap-2">
+							<button
+								type="button"
+								disabled={operationBusy}
+								title="Capture a lightweight idea"
+								class="flex h-10 items-center gap-1.5 rounded-xl border border-[#5d5540] bg-[#211d14] px-3.5 font-mono text-[9px] font-semibold text-[#e4cc8a] transition hover:-translate-y-0.5 hover:border-[#8d7c50] disabled:cursor-wait disabled:opacity-50"
+								onclick={() => void addTask("ideas")}
+								><Lightbulb size={12} /> Add idea</button
+							>
+							<button
+								type="button"
+								disabled={operationBusy}
+								title="Add a planned task and open its details"
+								class="flex h-10 items-center gap-1.5 rounded-xl border border-[rgba(199,246,125,.45)] bg-[linear-gradient(135deg,#648a3f,#3f5f2d)] px-3.5 font-mono text-[9px] font-semibold text-[#f0ffdf] shadow-[0_10px_24px_rgba(93,139,54,.18)] transition hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-50"
+								onclick={() => void addTask("planned")}
+								><Plus size={12} /> Add task</button
+							>
+						</div>
 					</div>
 					<div class="grid grid-cols-7 gap-2.5">
 						{#each columns as column (column.id)}
 							<div
 								role="list"
 								aria-label={column.label}
-								class="min-h-[460px] rounded-2xl border border-[#27363d] bg-[rgba(10,17,21,.76)] p-2.5"
+								class={`min-h-[460px] rounded-2xl border p-2.5 ${column.id === "ideas" ? "border-dashed border-[#554d39] bg-[linear-gradient(180deg,rgba(48,41,24,.48),rgba(10,17,21,.72))]" : column.id === "running" ? "border-[#31513a] bg-[linear-gradient(180deg,rgba(20,45,28,.34),rgba(10,17,21,.76))]" : "border-[#27363d] bg-[rgba(10,17,21,.76)]"}`}
 								ondragover={(event) => event.preventDefault()}
 								ondrop={() => {
 									if (draggedTaskId) void moveTask(draggedTaskId, column.id);
@@ -483,15 +508,25 @@
 								</div>
 								<div class="space-y-2">
 									{#each board.tasks.filter((task) => task.status === column.id) as task (task.id)}
-										<button
-											draggable="true"
-											type="button"
-											ondragstart={() => (draggedTaskId = task.id)}
-											ondragend={() => (draggedTaskId = "")}
-											onclick={() => (selectedTaskId = task.id)}
-											class={`group relative w-full rounded-xl border p-2.5 text-left transition ${task.runStatus === "running" ? "border-[rgba(134,213,138,.55)] bg-[rgba(24,44,28,.55)]" : "border-[#31424a] bg-[#0e161b] hover:border-[#5c747d]"}`}
-										>
-											<span class="block text-[10px] leading-snug font-semibold text-[#e6eeee]">{displayTitle(task)}</span>
+									<div
+										draggable="true"
+										role="button"
+										tabindex="0"
+										ondragstart={() => (draggedTaskId = task.id)}
+										ondragend={() => (draggedTaskId = "")}
+										onclick={() => (selectedTaskId = task.id)}
+										onkeydown={(event) => {
+											if (event.key === "Enter" || event.key === " ") {
+												event.preventDefault();
+												selectedTaskId = task.id;
+											}
+										}}
+										class={`group relative w-full cursor-pointer overflow-hidden rounded-xl border p-2.5 text-left outline-none transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_10px_24px_rgba(0,0,0,.24)] focus-visible:ring-1 focus-visible:ring-[#a9d873] ${selectedTaskId === task.id ? "border-[#9ac369] bg-[#17221a] shadow-[0_0_0_1px_rgba(169,216,115,.12)]" : task.runStatus === "running" ? "border-[rgba(134,213,138,.55)] bg-[linear-gradient(135deg,rgba(31,62,37,.72),rgba(15,29,21,.8))] hover:border-[#9be19f]" : "border-[#31424a] bg-[#0e161b] hover:border-[#647e87] hover:bg-[#121d22]"}`}
+									>
+										<span class="flex items-start gap-1.5">
+											{#if task.runStatus === "running"}<LoaderCircle size={11} class="mt-0.5 shrink-0 animate-spin text-[#9be19f]" />{/if}
+											<span class="block min-w-0 text-[10px] leading-snug font-semibold text-[#e6eeee]">{displayTitle(task)}</span>
+										</span>
 											<span class="mt-1.5 flex flex-wrap items-center gap-1">
 												<span
 													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
@@ -519,9 +554,15 @@
 													>
 												{/if}
 											</span>
-											{#if scheduleText(task)}
-												<span class="mt-1.5 block font-mono text-[7px] text-[#7f9298]">{scheduleText(task)}</span>
-											{/if}
+										{#if scheduleText(task)}
+											<span class="mt-1.5 block font-mono text-[7px] text-[#7f9298]">{scheduleText(task)}</span>
+										{/if}
+										{#if task.runStatus === "running" && activeStep(task)}
+											<span class="mt-1.5 flex items-center gap-1 font-mono text-[7px] text-[#b9ea78]"><span class="h-1 w-1 animate-pulse rounded-full bg-[#b9ea78]"></span>{activeStep(task)}</span>
+										{/if}
+										{#if task.prompt}
+											<span class="mt-0 max-h-0 overflow-hidden text-[8px] leading-snug text-[#91a3a8] opacity-0 transition-all duration-200 group-hover:mt-2 group-hover:max-h-12 group-hover:opacity-100 group-focus-visible:mt-2 group-focus-visible:max-h-12 group-focus-visible:opacity-100"><span class="line-clamp-3">{task.prompt}</span></span>
+										{/if}
 											{#if task.lastResult && task.runStatus !== "running"}
 												<span class="mt-1.5 line-clamp-2 block text-[8px] leading-snug text-[#9fb0b4]"
 													>{task.lastResult}</span
@@ -532,25 +573,8 @@
 													>{task.runError}</span
 												>
 											{/if}
-											{#if latestAttempt(task)}
-												{@const attempt = latestAttempt(task)!}
-												<span class="mt-1.5 block font-mono text-[7px] text-[#8fb6c4]">
-													{attempt.status === "running" ? displayTitle(task) : `Attempt ${attempt.sequence}`} · {attempt.status} · {attempt.model}
-													{#if attempt.status === "running" && task.runStartedAt} · {elapsedText(task.runStartedAt)}{/if}
-												</span>
-												<span class="mt-1 block space-y-0.5">
-													{#each attempt.steps as step (step.id)}
-														<span
-															class={`block font-mono text-[7px] leading-snug ${step.status === "completed" ? "text-[#6f8577] line-through" : step.status === "active" ? "text-[#b9ea78]" : step.status === "failed" ? "text-[#d99a8c]" : "text-[#74868c]"}`}
-															>[{stepMarker(step.status)}] {step.label}</span
-														>
-													{/each}
-												</span>
-												{#if attempt.error && attempt.status !== "running"}
-													<span class="mt-1 line-clamp-2 block text-[7px] leading-snug text-[#d99a8c]">{attempt.error}</span>
-												{/if}
-											{/if}
-										</button>
+										<span class="mt-2 block border-t border-[#26363d] pt-1.5 font-mono text-[7px] text-[#6f8389] opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">Open workspace details</span>
+									</div>
 									{/each}
 								</div>
 							</div>
@@ -558,9 +582,10 @@
 					</div>
 					{#if board.tasks.length === 0}
 						<p class="rounded-2xl border border-dashed border-[#31424a] bg-[#0b1217] p-4 text-center text-[10px] text-[#74868c]">
-							This board is empty. Use Add task to create a blank card, then fill in title, brief, and folder before running.
+							This board is empty. Capture a lightweight idea or add a planned task to begin.
 						</p>
 					{/if}
+					{@render taskDetails()}
 				</div>
 			{:else}
 				<div class="mx-auto max-w-[1680px]">
@@ -571,26 +596,24 @@
 			{/if}
 		</section>
 	</div>
-	{#if selectedTask && board}
-		<div
-			class="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px]"
-			role="presentation"
-			onclick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}
-		>
+	{#snippet taskDetails()}
+		{#if selectedTask && board}
+		<section class="mt-1 scroll-mt-4 rounded-2xl border border-[#34444b] bg-[linear-gradient(145deg,rgba(14,24,29,.98),rgba(8,15,19,.98))] p-4 shadow-[0_18px_50px_rgba(0,0,0,.2)]" aria-label="Selected task workspace">
 			<div
-				class="h-full w-[min(520px,94vw)] overflow-y-auto border-l border-[#34444b] bg-[#0c1419] p-5 shadow-[-24px_0_70px_rgba(0,0,0,.42)]"
-				role="dialog"
-				aria-modal="true"
-				aria-label="Task details"
+				class="grid min-w-0 grid-cols-[minmax(0,1.1fr)_minmax(340px,.9fr)] gap-4 max-[1100px]:grid-cols-1"
 			>
 				<form
+					class="min-w-0 rounded-2xl border border-[#2b3a40] bg-[#0a1115] p-4"
 					onsubmit={(event) => {
 						event.preventDefault();
 						void saveTask(false);
 					}}
 				>
 					<div class="flex items-center gap-2">
-						<p class="m-0 font-mono text-[8px] tracking-[.14em] text-[#89ad71] uppercase">Task card</p>
+						<div class="min-w-0">
+							<p class="m-0 font-mono text-[8px] tracking-[.14em] text-[#89ad71] uppercase">Task workspace</p>
+							<h3 class="mt-1 mb-0 truncate text-[14px] font-semibold text-[#edf3f4]">{displayTitle(selectedTask)}</h3>
+						</div>
 						<button
 							type="button"
 							aria-label="Close task"
@@ -748,11 +771,12 @@
 						><Check size={12} /> {operationBusy ? "Working..." : selectedTask.runStatus === "running" ? "Locked while running" : "Save task card"}</button
 					>
 				</form>
-				<div class="mt-4 rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
+				<div class="min-w-0 space-y-3">
+				<div class="rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
 					<p class="m-0 font-mono text-[8px] tracking-[.12em] text-[#71858a] uppercase">Execution</p>
 					{#if selectedTask.runStatus === "running"}
-						<p class="mt-1.5 mb-0 font-mono text-[11px] text-[#86d58a]">
-							Run #{selectedTask.runCount ?? 1} · {elapsedText(selectedTask.runStartedAt)}
+						<p class="mt-2 mb-0 flex items-center gap-2 font-mono text-[11px] text-[#86d58a]">
+							<LoaderCircle size={14} class="animate-spin" /> Run #{selectedTask.runCount ?? 1} · {elapsedText(selectedTask.runStartedAt)}
 						</p>
 						<p class="mt-1 mb-0 text-[9px] text-[#8ca0a3]">
 							Started {formatTime(selectedTask.runStartedAt)}. Target is advisory only.
@@ -824,14 +848,14 @@
 					</div>
 				</div>
 				{#if selectedTask.lastResult}
-					<div class="mt-3 rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
+					<div class="rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
 						<p class="m-0 font-mono text-[8px] tracking-[.12em] text-[#71858a] uppercase">Final result</p>
 						<p class="mt-1.5 mb-0 text-[9px] leading-relaxed whitespace-pre-wrap text-[#c4d2d5]">
 							{selectedTask.lastResult}
 						</p>
 					</div>
 				{/if}
-				<div class="mt-3 rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
+				<div class="rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
 					<p class="m-0 font-mono text-[8px] tracking-[.12em] text-[#71858a] uppercase">
 						Activity · {taskActivity.length}
 					</p>
@@ -852,7 +876,9 @@
 						</ul>
 					{/if}
 				</div>
+				</div>
 			</div>
-		</div>
-	{/if}
+		</section>
+		{/if}
+	{/snippet}
 </div>

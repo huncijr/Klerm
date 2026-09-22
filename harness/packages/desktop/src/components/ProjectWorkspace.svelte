@@ -6,6 +6,7 @@
 		DesktopSession,
 		ThinkingLevel,
 	} from "../lib/model.ts";
+	import { codingHarnessDisplayName } from "../lib/coding-harnesses.ts";
 	import SessionRow from "./SessionRow.svelte";
 	type ProjectPromptAgent = Pick<
 		CodingHarnessSetup["runnableAgents"][number],
@@ -69,8 +70,7 @@
 	}
 
 	function agentLabel(agent: ProjectPromptAgent): string {
-		const harness = agent.harness === "claude-code" ? "Claude Code" : agent.harness === "opencode" ? "OpenCode" : agent.harness.charAt(0).toUpperCase() + agent.harness.slice(1);
-		return `${agent.agentId.replace("agent", "Agent ")} · ${harness} · ${agent.model}`;
+		return `${agent.agentId.replace("agent", "Agent ")} · ${codingHarnessDisplayName(agent.harness)} · ${agent.model}`;
 	}
 </script>
 

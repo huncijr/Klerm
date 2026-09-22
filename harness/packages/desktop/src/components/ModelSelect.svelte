@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
-	import type { PersonalBot, SelectOption } from "../lib/model.ts";
-	import { profileIcon } from "../lib/profiles.ts";
+	import type { SelectOption } from "../lib/model.ts";
 
 	let {
 		label,
@@ -10,10 +9,6 @@
 		disabled,
 		placeholder,
 		onchange,
-		memories = [],
-		selectedMemoryId,
-		onmemory,
-		flyout = "right",
 		direction = "up",
 		allowEmpty = false,
 		emptyLabel = "None",
@@ -24,17 +19,12 @@
 		disabled: boolean;
 		placeholder: string;
 		onchange: (value: string) => void;
-		memories?: PersonalBot[];
-		selectedMemoryId?: string;
-		onmemory?: (model: string, botId: string) => void;
-		flyout?: "left" | "right";
 		direction?: "up" | "down";
 		allowEmpty?: boolean;
 		emptyLabel?: string;
 	} = $props();
 
 	let open = $state(false);
-	let hovered = $state("");
 	let query = $state("");
 	let queryInput: HTMLInputElement | undefined = $state();
 	let rootEl: HTMLElement | undefined = $state();
@@ -42,7 +32,6 @@
 
 	const selected = $derived(options.find((option) => option.value === value));
 	const displayLabel = $derived(selected?.label ?? placeholder);
-	const selectedMemory = $derived(memories.find((memory) => memory.id === selectedMemoryId));
 	const filteredOptions = $derived.by(() => {
 		const needle = query.trim().toLowerCase();
 		if (!needle) return options;
@@ -76,16 +65,7 @@
 		if (disabled) return;
 		if (!option.value && !allowEmpty) return;
 		open = false;
-		hovered = "";
 		onchange(option.value);
-		buttonEl?.focus();
-	}
-
-	function selectMemory(botId: string): void {
-		if (!hovered || !onmemory) return;
-		open = false;
-		onmemory(hovered, botId);
-		hovered = "";
 		buttonEl?.focus();
 	}
 
@@ -151,10 +131,7 @@
 			onclick={toggle}
 			onkeydown={handleButtonKeydown}
 		>
-			<span class="flex min-w-0 items-center gap-1.5" title={selected?.label ?? ""}>
-				{#if selectedMemory}<span class="shrink-0 text-[12px]">{profileIcon(selectedMemory.face)}</span>{/if}
-				<span class="min-w-0 truncate">{displayLabel}</span>
-			</span>
+			<span class="min-w-0 truncate" title={selected?.label ?? ""}>{displayLabel}</span>
 			<i
 				class={`h-1.75 w-1.75 shrink-0 border-r border-b border-[#6f7a82] transition-transform duration-150 ${
 					open ? "-translate-x-[2px] -translate-y-[1px] rotate-[225deg]" : "translate-y-[-2px] rotate-45"
@@ -200,7 +177,6 @@
 							class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#141a1f] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#141a1f] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
 								value === "" ? "bg-[#141a1f] text-[#f1f4f5]" : "bg-transparent text-[#77828a]"
 							}`}
-							onmouseenter={() => hovered = ""}
 							onclick={() => select({ value: "", label: emptyLabel })}
 						>
 							{emptyLabel}
@@ -213,11 +189,8 @@
 							aria-selected={option.value === value}
 							disabled={disabled || !option.value}
 							class={`block w-full cursor-pointer truncate rounded-md border-0 px-2.5 py-[9px] text-left text-[10px] focus-visible:bg-[#141a1f] focus-visible:text-[#f1f4f5] focus-visible:outline-0 enabled:hover:bg-[#141a1f] enabled:hover:text-[#f1f4f5] disabled:cursor-default disabled:text-[#535d64] ${
-								option.value === value || option.value === hovered ? "bg-[#141a1f] text-[#f1f4f5]" : "bg-transparent text-[#aeb7bd]"
+								option.value === value ? "bg-[#141a1f] text-[#f1f4f5]" : "bg-transparent text-[#aeb7bd]"
 							}`}
-							onmouseenter={() => {
-								if (option.value) hovered = option.value;
-							}}
 							onclick={() => select(option)}
 							>
 							{option.label}
@@ -227,22 +200,6 @@
 							<p class="m-0 px-2.5 py-2 font-mono text-[9px] text-[#59636b]">No models match "{query.trim()}".</p>
 							{/if}
 				</div>
-				{#if memories.length > 0 && hovered}
-					<div class={`absolute top-0 w-[158px] rounded-lg border border-[#1b2228] bg-[#05080b] p-1 shadow-[0_18px_55px_rgba(0,0,0,.62)] ${flyout === "left" ? "right-[calc(100%+6px)]" : "left-[calc(100%+6px)]"}`}>
-						<p class="px-2 py-1 font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase">Memories</p>
-						{#each memories as memory (memory.id)}
-							<button
-								type="button"
-								class={`flex w-full cursor-pointer items-center gap-2 rounded-md border-0 px-2 py-1.5 text-left font-mono text-[10px] hover:bg-[#141a1f] ${selectedMemoryId === memory.id ? "bg-[#141a1f] text-white" : "text-[#d7dfe2]"}`}
-								onmousedown={(event) => event.preventDefault()}
-								onclick={() => selectMemory(memory.id)}
-							>
-								<span>{profileIcon(memory.face)}</span>
-								<span class="truncate">{memory.name}</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>

@@ -10,7 +10,11 @@
 		splitMcpMentions,
 	} from "../lib/mcp-mentions.ts";
 	import { imageDataUrl } from "../lib/helpers.ts";
-	import { canPromptTogether, codingHarnessModelOptions } from "../lib/coding-harnesses.ts";
+	import {
+		canPromptTogether,
+		codingHarnessDisplayName,
+		codingHarnessModelOptions,
+	} from "../lib/coding-harnesses.ts";
 	import type {
 		ApprovalMode,
 		CodingHarnessKind,
@@ -19,14 +23,12 @@
 		ImageAttachment,
 		McpColor,
 		McpServerStatus,
-		PersonalBot,
 		SelectOption,
 		ThinkingLevel,
 		WorkerRole,
 	} from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import ProviderLogo from "./ProviderLogo.svelte";
-	import { profileIcon } from "../lib/profiles.ts";
 	import ThinkingSlider from "./ThinkingSlider.svelte";
 
 	let {
@@ -43,6 +45,7 @@
 		localValue,
 		frontierValue,
 		routingValue,
+		hasSecondKlermModel,
 		codingHarnessOptions,
 		localDisabled,
 		frontierDisabled,
@@ -67,7 +70,6 @@
 		mcpServers,
 		localProfileId,
 		frontierProfileId,
-		personalBots,
 		localRole,
 		frontierRole,
 		approvalMode,
@@ -92,7 +94,6 @@
 		onexternalharnesschange,
 		onexternalharnesskindchange,
 		onexternalmodelchange,
-		onexternalpersonalitychange,
 		onexternaleffortchange,
 		onaddexternalagent,
 		onremoveexternalagent,
@@ -116,6 +117,7 @@
 		localValue: string;
 		frontierValue: string;
 		routingValue: string;
+		hasSecondKlermModel: boolean;
 		codingHarnessOptions: SelectOption[];
 		localDisabled: boolean;
 		frontierDisabled: boolean;
@@ -140,7 +142,6 @@
 		mcpServers: McpServerStatus[];
 		localProfileId: string;
 		frontierProfileId: string;
-		personalBots: PersonalBot[];
 		localRole: WorkerRole;
 		frontierRole: WorkerRole;
 		approvalMode: ApprovalMode;
@@ -165,7 +166,6 @@
 		onexternalharnesschange: (id: string, enabled: boolean) => void;
 		onexternalharnesskindchange: (id: string, kind: CodingHarnessKind) => void;
 		onexternalmodelchange: (id: string, model: string) => void;
-		onexternalpersonalitychange: (id: string, botId: string) => void;
 		onexternaleffortchange: (id: string, effort: ThinkingLevel) => void;
 		onaddexternalagent: () => void;
 		onremoveexternalagent: (id: string) => void;
@@ -194,6 +194,7 @@
 	let agentStripRoot: HTMLElement | undefined = $state();
 	let pinnedAgentId = $state("");
 	let externalAgentsCollapsed = $state(false);
+	let agent2PickerOpen = $state(false);
 	let mcpPickerOpen = $state(false);
 	let mcpQuery = $state("");
 	let mcpTokenStart = $state(-1);
@@ -214,21 +215,12 @@
 		externalHarnessSetup?.slots.externalHarnessesEnabled ? configuredAgentSlots : [],
 	);
 	const externalMode = $derived(externalHarnessSetup?.slots.externalHarnessesEnabled === true);
+	const showSecondAgent = $derived(externalMode || hasSecondKlermModel || agent2PickerOpen);
 	const roleControlDisabled = $derived(externalMode ? externalHarnessBusy : roleDisabled);
 	const allExternalAgentsDisabled = $derived(
 		externalAgentSlots.length > 0 && externalAgentSlots.every(({ slot }) => !slot.enabled),
 	);
 	const compactWorkTogetherLayout = $derived(externalMode && workTogetherVisible && externalAgentSlots.length > 2);
-
-	function harnessDisplayName(kind: CodingHarnessSlotSettings["kind"]): string {
-		if (kind === "claude-code") return "Claude Code";
-		if (kind === "opencode") return "OpenCode";
-		if (kind === "codex") return "Codex";
-		if (kind === "cline") return "Cline";
-		if (kind === "pi") return "Pi";
-		if (kind === "klerm") return "Klerm";
-		return "Not configured";
-	}
 
 	function harnessModels(slot: CodingHarnessSlotSettings): SelectOption[] {
 		return codingHarnessModelOptions(slot, externalHarnessSetup, klermLocalOptions, klermFrontierOptions);
@@ -278,6 +270,10 @@
 		if (!allExternalAgentsDisabled) return;
 		externalAgentsCollapsed = true;
 		pinnedAgentId = "";
+	});
+
+	$effect(() => {
+		if (hasSecondKlermModel) agent2PickerOpen = false;
 	});
 
 	$effect(() => {
@@ -585,7 +581,6 @@
 				{:else}
 				{#each externalAgentSlots as { label, slot }, index (slot.id)}
 					{@const models = harnessModels(slot)}
-					{@const personality = personalBots.find((bot) => bot.id === slot.personalBotId)}
 					{@const viewVisible = visibleAgentIds.includes(slot.id)}
 					<div class="group relative">
 						<div class={`flex h-11 min-w-[190px] items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
@@ -602,18 +597,15 @@
 							<button
 								type="button"
 								aria-expanded={pinnedAgentId === slot.id}
-								aria-label={`Configure ${label} ${harnessDisplayName(slot.kind)}`}
+								aria-label={`Configure ${label} ${codingHarnessDisplayName(slot.kind)}`}
 								class="flex h-full min-w-0 flex-1 items-center gap-2 px-1.5 text-left font-mono"
 								onfocus={() => (pinnedAgentId = slot.id)}
 								onclick={() => (pinnedAgentId = pinnedAgentId === slot.id ? "" : slot.id)}
 							>
-								<ProviderLogo id={slot.kind ?? "klerm"} label={harnessDisplayName(slot.kind)} size={16} decorative />
-								{#if personality}
-									<span class="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#252f35] text-[12px] text-[#d6e0e4]" title={personality.name}>{profileIcon(personality.face)}</span>
-								{/if}
+								<ProviderLogo id={slot.kind ?? "klerm"} label={codingHarnessDisplayName(slot.kind)} size={16} decorative />
 								<span class="min-w-0 flex-1">
-									<span class="block text-[8px] text-[#d5dfbe]">{label} · {harnessDisplayName(slot.kind)}</span>
-									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · {personality?.name ?? "No personality"} · thinking {slot.effort}</span>
+									<span class="block text-[8px] text-[#d5dfbe]">{label} · {codingHarnessDisplayName(slot.kind)}</span>
+									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · thinking {slot.effort}</span>
 								</span>
 							</button>
 							<button
@@ -650,16 +642,9 @@
 								disabled={externalHarnessBusy || models.length === 0}
 								placeholder={slot.kind === "klerm" ? "Choose a model" : models.length > 0 ? "Choose a harness model" : "No models reported"}
 								direction="down"
-								flyout={index > 1 ? "left" : "right"}
 								allowEmpty
 								emptyLabel="No model"
-								memories={personalBots}
-								selectedMemoryId={slot.personalBotId}
 								onchange={(value) => onexternalmodelchange(slot.id, value)}
-								onmemory={(model, botId) => {
-									if (model) onexternalmodelchange(slot.id, model);
-									onexternalpersonalitychange(slot.id, botId);
-								}}
 							/>
 							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-harness-${slot.id}`}>Harness</label>
 							<select
@@ -799,7 +784,7 @@
 				</button>
 				{#if roleMenuOpen}
 					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
-							{#each [["agent1", localRole], ["agent2", frontierRole]] as [agent, role]}
+							{#each (hasSecondKlermModel ? [["agent1", localRole], ["agent2", frontierRole]] : [["agent1", localRole]]) as [agent, role]}
 								<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
 									<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
 									{#each ["planner", "builder"] as option}
@@ -836,13 +821,13 @@
 		</div>
 	</form>
 	{#if externalHarnessSetup?.blockingReason}
-		<p class="mx-auto mt-1.5 w-[min(820px,100%)] px-1 font-mono text-[8px] text-[#e18b82]" role="alert">
-			{externalHarnessSetup.blockingReason}
+		<p class="mx-auto mt-1.5 w-[min(820px,100%)] px-1 font-mono text-[8px] text-[#d8bd8a]">
+			External routing setup: {externalHarnessSetup.blockingReason} Normal Klerm chat remains available.
 		</p>
 	{/if}
 	<div class="mx-auto mt-1.5 flex w-[min(820px,100%)] justify-end px-1">
 		<label class="flex items-center gap-2 font-mono text-[8px] text-[#66727b]">
-			<span>All agents approval</span>
+			<span>{externalMode || hasSecondKlermModel ? "All agents approval" : "Agent 1 approval"}</span>
 			<input
 				type="range"
 				min="0"
@@ -863,7 +848,6 @@
 
 	<div class={`mx-auto mt-1.5 grid w-[min(820px,100%)] gap-2 narrow-520:mt-[5px] narrow-520:gap-[5px] ${compactWorkTogetherLayout || (externalMode && externalAgentSlots.length < 2) ? "grid-cols-2" : externalMode && workTogetherVisible ? "grid-cols-2 min-[760px]:grid-cols-4" : "grid-cols-3"}`}>
 		{#if !compactWorkTogetherLayout}
-			{@const agent1Slot = configuredAgentSlots[0]?.slot}
 			<div class="min-w-0">
 			<ModelSelect
 				label={`${externalAgentSlots[0]?.label ?? "Agent 1"} model`}
@@ -871,15 +855,9 @@
 				value={localValue}
 				disabled={localDisabled}
 				placeholder="Discovering models..."
-				memories={personalBots}
-				selectedMemoryId={agent1Slot?.personalBotId}
 				onchange={(value) => {
 					onlocalchange(value);
 					if (localProfileId) onlocalprofilechange("");
-				}}
-				onmemory={(model, botId) => {
-					onlocalchange(model);
-					if (agent1Slot) onexternalpersonalitychange(agent1Slot.id, botId);
 				}}
 			/>
 			{#if !externalMode && localThinkingLevels.length > 1}
@@ -893,8 +871,7 @@
 			{/if}
 			</div>
 		{/if}
-		{#if !compactWorkTogetherLayout && (!externalMode || externalAgentSlots.length > 1)}
-			{@const agent2Slot = configuredAgentSlots[1]?.slot}
+		{#if !compactWorkTogetherLayout && (!externalMode ? showSecondAgent : externalAgentSlots.length > 1)}
 			<div class="min-w-0">
 			<ModelSelect
 				label={`${externalAgentSlots[1]?.label ?? "Agent 2"} model`}
@@ -902,16 +879,12 @@
 				value={frontierValue}
 				disabled={frontierDisabled}
 				placeholder="Choose a model"
-				memories={personalBots}
-				selectedMemoryId={agent2Slot?.personalBotId}
-				flyout="left"
+				allowEmpty={!externalMode}
+				emptyLabel="Remove Agent 2"
 				onchange={(value) => {
-					onfrontierchange(value);
+						onfrontierchange(value);
+						if (!value) agent2PickerOpen = false;
 					if (frontierProfileId) onfrontierprofilechange("");
-				}}
-				onmemory={(model, botId) => {
-					onfrontierchange(model);
-					if (agent2Slot) onexternalpersonalitychange(agent2Slot.id, botId);
 				}}
 			/>
 			{#if !externalMode && frontierThinkingLevels.length > 1}
@@ -923,7 +896,27 @@
 					onchange={onfrontierthinkingchange}
 				/>
 			{/if}
+			{#if !externalMode && hasSecondKlermModel}
+				<button
+					type="button"
+					disabled={routingDisabled}
+					class="mt-1 w-full rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[8px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-not-allowed disabled:opacity-40"
+					onclick={() => onfrontierchange("")}
+				>
+					Remove Agent 2
+				</button>
+			{/if}
 			</div>
+		{:else if !externalMode}
+			<button
+				type="button"
+				disabled={frontierDisabled}
+				class="flex min-w-0 items-center justify-between rounded-lg border border-dashed border-[#40505a] bg-[#0a0f13] px-3 py-2 text-left text-[#b8c3c9] transition-colors hover:border-[#738895] hover:bg-[#0d1419] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+				onclick={() => (agent2PickerOpen = true)}
+			>
+				<span><strong class="block font-mono text-[8px] tracking-[.1em] text-[#66747d] uppercase">Agent 2</strong><span class="mt-1 block font-mono text-[10px]">Add model</span></span>
+				<Plus size={15} stroke-width={1.6} />
+			</button>
 		{/if}
 		{#if canPromptTogether(externalHarnessSetup)}
 			<button
@@ -936,7 +929,7 @@
 				<span><strong class="block font-mono text-[8px] tracking-[.1em] text-[#7f9251] uppercase">Iterative mode</strong><span class="mt-1 block font-mono text-[10px]">Prompt Together</span></span>
 				<Users size={15} stroke-width={1.6} />
 			</button>
-		{:else}
+		{:else if externalMode || hasSecondKlermModel}
 			<ModelSelect
 				label="Routing"
 				options={routingOptions}

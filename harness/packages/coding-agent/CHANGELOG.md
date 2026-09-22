@@ -26,7 +26,7 @@
 - Added MCP server configuration reporting to `klerm doctor`, and recorded the active session id on routing decision-log events.
 - Added persistent Agent 1/Agent 2 planner/builder roles through `klerm mode`, TUI `/mode`, typed desktop RPC, backend-enforced structure-only planner tools, and interactive approval for risky builder actions.
 - Added a persisted dynamic coding-agent setup registry with safe Klerm, Pi, Claude Code, Codex, OpenCode, and Cline discovery, existing-agent `/view` and complete `/agent N` selectors, availability-filtered CLI/desktop choices, typed desktop RPC, and desktop agent cards.
-- Added desktop Work together orchestration for two or more distinct Klerm models, with shared capability rosters, task-aware peer selection, per-agent memory profiles, and target-attributed transition logs.
+- Added desktop Work together orchestration for two or more distinct Klerm models, with shared capability rosters, task-aware peer selection, normal Klerm lane profiles, and target-attributed transition logs.
 - Added typed on-demand coding-harness model discovery through the native Pi, Codex, and OpenCode interfaces, with desktop refresh, loading, and error states.
 - Added eye-toggleable desktop agent context views independent of Work together mode, split the workspace across up to four agents, show model, connection status, thinking effort, and Plan/Build controls, provide bulk enable, disable, collapse, and turn-off actions, and retain the shared prompt and handoff feed in a vertically resizable lower pane.
 - Added typed OpenCode and Codex coding-harness prompt adapters with `startSession`, `prompt`, `abort`, `closeSession`, agent-attributed message, tool-start, tool-end, settled, and error events, native session reuse, and desktop RPC forwarding of those events.
@@ -34,15 +34,19 @@
 - Added a versioned sequential external-agent bridge that routes broad tasks coordinator-to-peer-to-coordinator, reuses native sessions, supports cancellation, emits typed desktop task events, and writes credential-safe correlated lifecycle records to `.klerm/bridge-events.jsonl`.
 - Added an opt-in `KLERM_AI_DEBUG_LOG` JSONL trace for full model prompts, visible agent rosters, explicit reasoning/session events, raw external harness output, tool input/output, responses, and bridge handoffs. Debug traces may contain secrets and are disabled by default.
 - Added shared collaboration-memory presets and a task-start context snapshot containing the runnable external-agent roster, injected unchanged into coordinator, peer, and finalization prompts.
-- Added per-agent Personal Memory and Plan/Build prompt snapshots for external tasks, plus Git workspace-change and successful-verification evidence on task outcomes and bridge completion events.
+- Added Plan/Build role snapshots for external tasks, plus Git workspace-change and successful-verification evidence on task outcomes and bridge completion events.
 - Added an explicit desktop Prompt Together workflow for three or more runnable external agents, with temporary Planner/Builder/Reviewer roles, strict review verdicts, bounded repair iterations, native role-session switching, cancellation, and deterministic bridge logs.
-- Added persistent desktop Projects with stable session membership, backend CRUD and migration RPC, bounded summaries, and grounded project questions.
+- Added persistent desktop Projects with stable session membership, backend CRUD and migration RPC, bounded summaries, grounded project questions, a dedicated project workspace, and explicit per-prompt agent selection.
+- Added task-type-specific Kanban system guidance for build, fix, review, research, and maintenance; Auto model selection includes all definitions and explicitly selects the current card type.
 
 ### Changed
 
-- Changed desktop Memory settings to separate shared team context from personal agent profiles and show the exact active shared prompt sent to external agents.
+- Changed desktop Memory settings to make the shared team prompt the only Klerm-owned harness memory and show the exact active shared prompt sent to external agents; Personal Bots remain standalone chats.
+- Removed Personal Bot and memory-profile assignment from coding-harness slots, including legacy persisted-field normalization and desktop model-menu controls.
+- Removed automatic Personal Bot summary generation and the desktop summary history, cadence, pending-task, and summary-state controls.
+- Changed the desktop Kanban to separate quick idea capture from planned tasks, show running spinners and hover previews, and move execution plans, attempts, results, and activity into a full-width workspace below the board.
 - Moved all Shared Memory editing and saved-memory selection from the composer into desktop Memory settings.
-- Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization, and changed composer memory selection to require explicit application.
+- Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization.
 - Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
 - Changed the desktop external-team composer to keep per-agent roles in Settings and show Shared Memory instead of a team-wide `All Plan` / `All Build` override.
 - Changed newly added coding agents to use the enabled Klerm harness by default while keeping external harness activation as an independent global setting.
@@ -61,6 +65,7 @@
 - Fixed text-only desktop prompts sending an invalid empty image list, and replaced the stale external-adapter model placeholder with the actual discovery state.
 - Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.
 - Fixed Work together persistence and visibility for two to four runnable agents and mapped the OpenCode harness logo.
+- Fixed completed Personal Bot replies being hidden while the Personal Bots workspace was open; reply notifications are now deduplicated, clickable, and visible for eight seconds in every workspace.
 - Fixed resumed Klerm sessions omitting the local/frontier delegation and return markers that were visible before exit; new transitions are persisted in the session, and legacy sessions are reconstructed from their routing messages and tool results.
 - Fixed complex automatic tasks bypassing deterministic frontier delegation enforcement when the persistent active start lane was local, and recognized explicit Hungarian requests for the other configured model.
 - Fixed the subagent example repeatedly prompting before running project-local agents in trusted repositories ([#8261](https://github.com/earendil-works/pi/issues/8261)).

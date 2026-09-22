@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { Check, Files, FolderGit2, Menu, X } from "@lucide/svelte";
 	import { tick } from "svelte";
+	import type { WorkspaceView } from "../lib/model.ts";
+	import WorkspaceNavMenu from "./WorkspaceNavMenu.svelte";
 
 	let {
 		title,
@@ -14,6 +16,9 @@
 		onchangeroot,
 		workspacePanelOpen,
 		ontogglefiles,
+		workspaceView,
+		showWorkspaceMenu,
+		onworkspaceview,
 	}: {
 		title: string;
 		cwd: string;
@@ -26,6 +31,9 @@
 		onchangeroot: () => void;
 		workspacePanelOpen: boolean;
 		ontogglefiles: () => void;
+		workspaceView?: WorkspaceView;
+		showWorkspaceMenu: boolean;
+		onworkspaceview: (view: WorkspaceView) => void;
 	} = $props();
 
 	let editing = $state(false);
@@ -87,6 +95,9 @@
 		>
 			<Menu size={14} stroke-width={1.7} />
 		</button>
+		<div class={showWorkspaceMenu ? "block" : "hidden narrow-720:block"}>
+			<WorkspaceNavMenu activeView={workspaceView} compact onselect={onworkspaceview} />
+		</div>
 		<div class="min-w-0 narrow-520:hidden">
 			{#if editing}
 				<div class="flex max-w-[340px] items-center gap-1">

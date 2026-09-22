@@ -1,6 +1,57 @@
-import type { CodingHarnessSetup, CodingHarnessSlotSettings, SelectOption, WorkerRole } from "./model.ts";
+import type {
+	CodingHarnessKind,
+	CodingHarnessSetup,
+	CodingHarnessSlot,
+	CodingHarnessSlotSettings,
+	SelectOption,
+	WorkerRole,
+} from "./model.ts";
 
 type CodingHarnessSlots = CodingHarnessSetup["slots"];
+
+export interface CodingHarnessMetadata {
+	label: string;
+	supportsModelDiscovery: boolean;
+}
+
+const codingHarnessMetadata: Record<CodingHarnessKind, CodingHarnessMetadata> = {
+	klerm: { label: "Klerm", supportsModelDiscovery: false },
+	pi: { label: "Pi", supportsModelDiscovery: true },
+	"claude-code": { label: "Claude Code", supportsModelDiscovery: false },
+	codex: { label: "Codex", supportsModelDiscovery: true },
+	opencode: { label: "OpenCode", supportsModelDiscovery: true },
+	cline: { label: "Cline", supportsModelDiscovery: false },
+};
+
+export function getCodingHarnessMetadata(kind: CodingHarnessKind): CodingHarnessMetadata {
+	return codingHarnessMetadata[kind];
+}
+
+export function codingHarnessDisplayName(kind: CodingHarnessSlot): string {
+	return kind ? getCodingHarnessMetadata(kind).label : "Not configured";
+}
+
+export function supportsCodingHarnessModelDiscovery(kind: CodingHarnessSlot): boolean {
+	return kind ? getCodingHarnessMetadata(kind).supportsModelDiscovery : false;
+}
+
+export function codingHarnessReadiness(setup: CodingHarnessSetup | undefined): {
+	state: "disabled" | "loading" | "setup-required" | "ready";
+	detail: string;
+} {
+	if (!setup) return { state: "loading", detail: "Waiting for coding harness setup." };
+	if (!setup.slots.externalHarnessesEnabled) return { state: "disabled", detail: "External harnesses are disabled." };
+	if (setup.runnableAgents.length === 0) {
+		return {
+			state: "setup-required",
+			detail: setup.excludedAgents[0]?.reason ?? "Configure at least one enabled agent with an available model.",
+		};
+	}
+	return {
+		state: "ready",
+		detail: `${setup.runnableAgents.length} runnable agent${setup.runnableAgents.length === 1 ? "" : "s"}.`,
+	};
+}
 
 export function hasTwoEnabledCodingHarnessAgents(slots: CodingHarnessSlots): boolean {
 	return slots.externalHarnessesEnabled && slots.agents.filter((agent) => agent.enabled).length >= 2;

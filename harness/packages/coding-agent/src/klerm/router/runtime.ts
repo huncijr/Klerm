@@ -455,7 +455,6 @@ export class KlermRoutingController {
 	private readonly profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined;
 	private readonly sharedMemory?: () => string;
 	private readonly codingHarnessSlots?: () => CodingHarnessSlots;
-	private readonly profileById?: (id: string) => KlermProfile | undefined;
 
 	constructor(
 		cwd: string,
@@ -465,7 +464,6 @@ export class KlermRoutingController {
 		profileForLane?: (lane: "local" | "frontier") => KlermProfile | undefined,
 		sharedMemory?: () => string,
 		codingHarnessSlots?: () => CodingHarnessSlots,
-		profileById?: (id: string) => KlermProfile | undefined,
 	) {
 		this.cwd = cwd;
 		this.modelRuntime = modelRuntime;
@@ -474,7 +472,6 @@ export class KlermRoutingController {
 		this.profileForLane = profileForLane;
 		this.sharedMemory = sharedMemory;
 		this.codingHarnessSlots = codingHarnessSlots;
-		this.profileById = profileById;
 		const config = configStore.get();
 		this.state = {
 			mode: config.routing,
@@ -624,13 +621,6 @@ export class KlermRoutingController {
 				const profile = describeModelProfile(agent.model, model);
 				return `${agent.id}: ${profile.reference}; role ${agent.role}; strength ${profile.band}/5; reasoning ${profile.reasoning ? "yes" : "no"}; strengths ${profile.strengths.join(", ")}; tools ${agent.tools.join(", ") || "default"}`;
 			});
-			const profile = active.memoryProfileId
-				? this.profileById?.(active.memoryProfileId)
-				: active.id === "agent1"
-					? this.profileForLane?.("local")
-					: active.id === "agent2"
-						? this.profileForLane?.("frontier")
-						: undefined;
 			const identity = [
 				"<klerm_identity>",
 				`You are ${active.id} running ${active.model}.`,
@@ -638,13 +628,10 @@ export class KlermRoutingController {
 				...roster,
 				"</klerm_identity>",
 			].join("\n");
-			const identityWithProfile = profile
-				? `${identity}\n\n${formatProfilePrompt(`Agent ${Number(active.id.slice(5))}`, profile, active.role)}`
-				: identity;
 			const memory = this.sharedMemory?.().trim();
 			return memory
-				? `${identityWithProfile}\n\n<klerm_shared_memory>\nShared durable workspace facts for the active Klerm team:\n${memory}\n</klerm_shared_memory>`
-				: identityWithProfile;
+				? `${identity}\n\n<klerm_shared_memory>\nShared durable workspace facts for the active Klerm team:\n${memory}\n</klerm_shared_memory>`
+				: identity;
 		}
 		const selfRef = lane === "local" ? this.config.localModel : this.config.frontierModel;
 		const otherRef = lane === "local" ? this.config.frontierModel : this.config.localModel;
@@ -1012,7 +999,6 @@ export class KlermRoutingController {
 				workTogetherAgents: this.workTogetherAgents().map((agent) => ({
 					id: agent.id,
 					model: agent.model,
-					memoryProfileId: agent.memoryProfileId,
 					role: agent.role,
 					tools: agent.tools,
 				})),

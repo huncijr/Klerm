@@ -81,8 +81,6 @@ export interface CodingHarnessSlotSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
-	personalBotId?: string;
-	memoryProfileId?: string;
 	role: WorkerRole;
 	effort: ThinkingLevel;
 	tools: string[];

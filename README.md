@@ -274,7 +274,7 @@ frontier worker and records the enforced reason in the routing log.
 Example explicit delegation:
 
 ```text
-/local task Tell the Codex worker which model you are using, then delegate and ask Codex to identify its own model.
+/local task Tell the configured frontier worker which model you are using, then delegate and ask it to identify its own model.
 ```
 
 Expected lifecycle:

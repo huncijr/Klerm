@@ -13,13 +13,24 @@ export type CodingHarnessEffort = (typeof CODING_HARNESS_EFFORTS)[number];
 export type CodingHarnessRole = "planner" | "builder";
 export type CodingHarnessSlot = CodingHarnessKind | null;
 
+const CODING_HARNESS_LABELS: Record<CodingHarnessKind, string> = {
+	klerm: "Klerm",
+	pi: "Pi",
+	"claude-code": "Claude Code",
+	codex: "Codex",
+	opencode: "OpenCode",
+	cline: "Cline",
+};
+
+export function codingHarnessLabel(kind: CodingHarnessKind): string {
+	return CODING_HARNESS_LABELS[kind];
+}
+
 export interface CodingHarnessAgentSettings {
 	id: string;
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
-	personalBotId?: string;
-	memoryProfileId?: string;
 	role: CodingHarnessRole;
 	effort: CodingHarnessEffort;
 	tools: string[];
@@ -154,10 +165,6 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 	const id = typeof candidate.id === "string" && AGENT_ID_PATTERN.test(candidate.id) ? candidate.id : fallback.id;
 	const kind = candidate.kind === null ? fallback.kind : (normalizeCodingHarnessKind(candidate.kind) ?? fallback.kind);
 	const model = typeof candidate.model === "string" ? candidate.model.trim().slice(0, MAX_MODEL_LENGTH) : "";
-	const personalBotId =
-		typeof candidate.personalBotId === "string" ? candidate.personalBotId.trim().slice(0, 128) : "";
-	const memoryProfileId =
-		typeof candidate.memoryProfileId === "string" ? candidate.memoryProfileId.trim().slice(0, 128) : "";
 	const role = candidate.role === "planner" || candidate.role === "builder" ? candidate.role : fallback.role;
 	const effort = CODING_HARNESS_EFFORTS.includes(candidate.effort as CodingHarnessEffort)
 		? (candidate.effort as CodingHarnessEffort)
@@ -185,8 +192,6 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		kind,
 		enabled: kind !== null && (typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled),
 		...(model ? { model } : {}),
-		...(personalBotId ? { personalBotId } : {}),
-		...(memoryProfileId ? { memoryProfileId } : {}),
 		role,
 		effort,
 		tools,
@@ -238,19 +243,7 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	const agent = value as Record<string, unknown>;
 	if (
 		Object.keys(agent).some(
-			(key) =>
-				![
-					"id",
-					"kind",
-					"enabled",
-					"model",
-					"personalBotId",
-					"memoryProfileId",
-					"role",
-					"effort",
-					"tools",
-					"specialties",
-				].includes(key),
+			(key) => !["id", "kind", "enabled", "model", "role", "effort", "tools", "specialties"].includes(key),
 		)
 	) {
 		return undefined;
@@ -261,18 +254,6 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (
 		agent.model !== undefined &&
 		(typeof agent.model !== "string" || !agent.model.trim() || agent.model.length > MAX_MODEL_LENGTH)
-	) {
-		return undefined;
-	}
-	if (
-		agent.personalBotId !== undefined &&
-		(typeof agent.personalBotId !== "string" || !agent.personalBotId.trim() || agent.personalBotId.length > 128)
-	) {
-		return undefined;
-	}
-	if (
-		agent.memoryProfileId !== undefined &&
-		(typeof agent.memoryProfileId !== "string" || !agent.memoryProfileId.trim() || agent.memoryProfileId.length > 128)
 	) {
 		return undefined;
 	}
@@ -298,8 +279,6 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		kind: agent.kind as CodingHarnessSlot,
 		enabled: agent.enabled,
 		...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
-		...(typeof agent.personalBotId === "string" ? { personalBotId: agent.personalBotId.trim() } : {}),
-		...(typeof agent.memoryProfileId === "string" ? { memoryProfileId: agent.memoryProfileId.trim() } : {}),
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,
 		tools: [...new Set(agent.tools as string[])],
@@ -393,17 +372,11 @@ export function createCodingHarnessSetup(
 	const activeCount = runnableAgents.length;
 	const effectiveRouting =
 		!slots.externalHarnessesEnabled || activeCount === 0 ? "disabled" : activeCount === 1 ? "none" : "auto";
-	const harnessLabel = (kind: CodingHarnessKind) =>
-		kind === "opencode"
-			? "OpenCode"
-			: kind === "claude-code"
-				? "Claude Code"
-				: kind.charAt(0).toUpperCase() + kind.slice(1);
 	const excludedAgents: ExcludedCodingHarnessAgent[] = slots.agents
 		.filter((agent) => agent.enabled)
 		.sort(byAgentId)
 		.flatMap((agent) => {
-			const label = `Agent ${agent.id.slice(5)}${agent.kind ? ` (${harnessLabel(agent.kind)})` : ""}`;
+			const label = `Agent ${agent.id.slice(5)}${agent.kind ? ` (${codingHarnessLabel(agent.kind)})` : ""}`;
 			if (!agent.kind) return [{ agentId: agent.id, reason: `${label} has no configured harness.` }];
 			if (!discovery.get(agent.kind)?.available)
 				return [{ agentId: agent.id, reason: `${label} is not available.` }];

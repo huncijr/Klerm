@@ -1,7 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import {
 	contentImages,
+	hasDistinctSecondKlermModel,
 	imageDataUrl,
+	latestCompletedPersonalBotReplyId,
 	rpcImageAttachments,
 	saveDesktopSettingsChanges,
 	shouldReplaceSettingsDrafts,
@@ -92,6 +94,28 @@ describe("desktop image and task helpers", () => {
 				dirty: true,
 			}),
 		).toBe(true);
+	});
+
+	test("requires a distinct configured model before showing Agent 2 controls", () => {
+		expect(hasDistinctSecondKlermModel("provider/one")).toBe(false);
+		expect(hasDistinctSecondKlermModel("provider/one", "provider/one")).toBe(false);
+		expect(hasDistinctSecondKlermModel("provider/one", "provider/two")).toBe(true);
+	});
+
+	test("selects only a completed Personal Bot assistant reply for notification", () => {
+		const messages = [
+			{ id: "user-1", role: "user" as const, text: "Question", timestamp: "2026-09-22T10:00:00.000Z" },
+			{ id: "reply-1", role: "assistant" as const, text: "Answer", timestamp: "2026-09-22T10:00:01.000Z" },
+		];
+		expect(latestCompletedPersonalBotReplyId({ status: "idle", messages })).toBe("reply-1");
+		expect(latestCompletedPersonalBotReplyId({ status: "running", messages })).toBeUndefined();
+		expect(latestCompletedPersonalBotReplyId({ status: "failed", messages })).toBeUndefined();
+		expect(
+			latestCompletedPersonalBotReplyId({
+				status: "idle",
+				messages: [{ id: "empty", role: "assistant", text: "  ", timestamp: "2026-09-22T10:00:01.000Z" }],
+			}),
+		).toBeUndefined();
 	});
 
 	test("maps native coding harness logos", () => {

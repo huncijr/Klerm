@@ -1,4 +1,10 @@
-import type { AgentContentPart, AgentMessage, ImageAttachment, TimelineTone } from "./model.ts";
+import type {
+	AgentContentPart,
+	AgentMessage,
+	ImageAttachment,
+	PersonalBotConversation,
+	TimelineTone,
+} from "./model.ts";
 
 export const TIMELINE_PREVIEW_LINES = 24;
 const MCP_TOOL_PATTERN = /^mcp_/;
@@ -38,6 +44,18 @@ export function shouldReplaceSettingsDrafts(options: {
 }): boolean {
 	if (options.appliedSource === options.source) return false;
 	return !options.initialized || options.saving || !options.dirty;
+}
+
+export function hasDistinctSecondKlermModel(localModel?: string, frontierModel?: string): boolean {
+	return Boolean(frontierModel && frontierModel !== localModel);
+}
+
+export function latestCompletedPersonalBotReplyId(
+	conversation: Pick<PersonalBotConversation, "messages" | "status">,
+): string | undefined {
+	if (conversation.status !== "idle") return undefined;
+	return [...conversation.messages].reverse().find((message) => message.role === "assistant" && message.text.trim())
+		?.id;
 }
 
 export function messageText(message: AgentMessage): string {

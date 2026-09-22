@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { KanbanAttemptStatus, KanbanRegistry, KanbanRunAttempt, KanbanTask } from "./kanban.ts";
+import type { KanbanAttemptStatus, KanbanRegistry, KanbanRunAttempt, KanbanTask, KanbanTaskKind } from "./kanban.ts";
 
 export const KANBAN_RUN_LOG_DIRECTORY = ".klerm";
 export const KANBAN_RUN_LOG_FILE = "kanban-runs.jsonl";
@@ -75,6 +75,26 @@ export function nextRepeatAt(fromMs: number, repeatMinutes: number): string {
 
 export function effectiveKanbanTaskPrompt(task: Pick<KanbanTask, "prompt" | "title">): string {
 	return task.prompt.trim();
+}
+
+const kanbanTaskGuidance: Record<KanbanTaskKind, string> = {
+	build: "Implement the requested behavior in the workspace. Inspect the relevant code first, make the required changes, run relevant verification, and report concrete results.",
+	fix: "Reproduce or establish the reported failure and identify its root cause. Make the smallest correct fix, add regression coverage where practical, run relevant verification, and report concrete results.",
+	review:
+		"Review the relevant code and evidence with findings first, ordered by severity and including file references. Do not modify files unless the task brief explicitly requests changes.",
+	research:
+		"Investigate the relevant code and available evidence. Distinguish verified facts from inference, cite concrete sources or file references, and provide evidence-based conclusions without modifying files by default.",
+	maintenance:
+		"Perform only the bounded maintenance requested, preserve existing behavior outside that scope, run relevant checks, and report exactly what changed.",
+};
+
+export function kanbanTaskSystemGuidance(kind: KanbanTaskKind, autoModel: boolean): string {
+	const selected = `Current task type: ${kind}. Follow the ${kind} guidance for this run.`;
+	if (!autoModel) return `${selected}\n${kanbanTaskGuidance[kind]}`;
+	const definitions = (Object.entries(kanbanTaskGuidance) as Array<[KanbanTaskKind, string]>)
+		.map(([taskKind, guidance]) => `${taskKind}: ${guidance}`)
+		.join("\n");
+	return `Kanban task type guidance:\n${definitions}\n\n${selected}`;
 }
 
 export function validateRunnableKanbanTask(task: Pick<KanbanTask, "title" | "prompt" | "workspaceRoot">): string[] {

@@ -4,13 +4,16 @@ import {
 	assignWorkTogetherModels,
 	canEnableWorkTogether,
 	canPromptTogether,
+	codingHarnessDisplayName,
 	codingHarnessModelOptions,
+	codingHarnessReadiness,
 	hasTwoEnabledCodingHarnessAgents,
 	removeCodingHarnessSlot,
 	setAllCodingHarnessAgentRoles,
 	setAllCodingHarnessAgentsEnabled,
 	setExternalCodingHarnessesEnabled,
 	shouldShowAgentContext,
+	supportsCodingHarnessModelDiscovery,
 	updateCodingHarnessSlot,
 } from "../src/lib/coding-harnesses.ts";
 import type { CodingHarnessSetup } from "../src/lib/model.ts";
@@ -50,7 +53,7 @@ describe("desktop coding harness slots", () => {
 			order: Number(agentId.slice(5)),
 			agentId,
 			harness,
-			model: `${harness}/model`,
+			model: `provider/model-${agentId}`,
 			role: "builder" as const,
 			effort: "high" as const,
 			tools: [],
@@ -81,6 +84,31 @@ describe("desktop coding harness slots", () => {
 			canPromptTogether({ ...setup, runnableAgents: [...setup.runnableAgents, runnableAgent("agent3", "codex")] }),
 		).toBe(true);
 		expect(canPromptTogether({ ...setup, slots: { ...slots, externalHarnessesEnabled: false } })).toBe(false);
+	});
+
+	test("resolves harness labels and discovery capabilities from shared metadata", () => {
+		expect(codingHarnessDisplayName("claude-code")).toBe("Claude Code");
+		expect(codingHarnessDisplayName("opencode")).toBe("OpenCode");
+		expect(codingHarnessDisplayName(null)).toBe("Not configured");
+		expect(supportsCodingHarnessModelDiscovery("pi")).toBe(true);
+		expect(supportsCodingHarnessModelDiscovery("cline")).toBe(false);
+	});
+
+	test("reports enabled setups without runnable agents as configuration work instead of disabled", () => {
+		const setup: CodingHarnessSetup = {
+			slots,
+			harnesses: [],
+			effectiveRouting: "disabled",
+			externalPromptingAvailable: false,
+			workTogetherAvailable: false,
+			runnableAgents: [],
+			excludedAgents: [{ agentId: "agent1", reason: "Agent 1 has no configured model." }],
+			blockingReason: "Agent 1 has no configured model.",
+		};
+		expect(codingHarnessReadiness(setup)).toEqual({
+			state: "setup-required",
+			detail: "Agent 1 has no configured model.",
+		});
 	});
 
 	test("shows selected enabled agent context without requiring Work together", () => {

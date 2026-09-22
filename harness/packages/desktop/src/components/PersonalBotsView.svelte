@@ -25,7 +25,6 @@
 		onprofilesave,
 		ongeneratememory,
 		ondelete,
-		onsummarydelete,
 		onprompt,
 		onabort,
 	}: {
@@ -42,7 +41,6 @@
 		onprofilesave: (profile: KlermProfile) => Promise<boolean>;
 		ongeneratememory: (model: string, brief: string) => Promise<string | undefined>;
 		ondelete: (bot: PersonalBot) => Promise<void>;
-		onsummarydelete: (botId: string, summaryId: string) => Promise<void>;
 		onprompt: (botId: string, message: string) => Promise<boolean>;
 		onabort: (botId: string) => Promise<void>;
 	} = $props();
@@ -77,16 +75,8 @@
 
 	const selected = $derived(bots.find((bot) => bot.id === selectedId) ?? bots[0]);
 	const conversation = $derived(selected ? conversations[selected.id] : undefined);
-	const conversationBusy = $derived(
-		conversation?.status === "running" || conversation?.status === "summarizing",
-	);
+	const conversationBusy = $derived(conversation?.status === "running");
 	const selectedProfile = $derived(profiles.find((profile) => profile.id === selected?.profileId));
-	const summaries = $derived([...(conversation?.summaries ?? [])].reverse());
-	const linkedPromptProgress = $derived(
-		conversation?.status === "summarizing" && (conversation.linkedSuccessfulPromptCount ?? 0) > 0
-			? 3
-			: (conversation?.linkedSuccessfulPromptCount ?? 0) % 3,
-	);
 	const configuredProfile = $derived(profiles.find((profile) => profile.id === profileId));
 	const harnesses = $derived(harnessSetup?.harnesses ?? []);
 	const klermHarness = $derived(harnesses.find((item) => item.kind === "klerm"));
@@ -355,7 +345,7 @@
 					<h2 class="m-0 truncate text-[13px] font-semibold text-[#eef2f3]">{selected.name}</h2>
 					<p class="m-0 truncate text-[10px] text-[#68747a]">{selected.model || "No model selected"}</p>
 				</div>
-				{#if conversationBusy}<span class="ml-auto rounded-full bg-[#382f18] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#e1c66b]">{conversation?.status === "summarizing" ? "Summarizing" : "Thinking"}</span>{/if}
+				{#if conversationBusy}<span class="ml-auto rounded-full bg-[#382f18] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#e1c66b]">Thinking</span>{/if}
 			</header>
 
 			<div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -371,7 +361,7 @@
 							</div>
 						{/each}
 						{#if conversationBusy}
-							<div class="text-[11px] text-[#7e8a90]">{selected.name} is {conversation.status === "summarizing" ? "updating the conversation summary" : "thinking"}...</div>
+							<div class="text-[11px] text-[#7e8a90]">{selected.name} is thinking...</div>
 						{/if}
 					</div>
 				{:else}
@@ -430,32 +420,11 @@
 				<div class="grid grid-cols-2 gap-2"><div><span class="block uppercase tracking-wider text-[#4f5a60]">Messages</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.messages.length ?? 0}</span></div><div><span class="block uppercase tracking-wider text-[#4f5a60]">Status</span><span class="mt-1 block capitalize text-[#9ba6ab]">{conversation?.status ?? "loading"}</span></div></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Session</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.nativeSessionId ? "Persistent" : "Not started"}</span></div>
 				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Previous sessions</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.sessionContextDigest ? "Context synchronized" : "Added on first discussion"}</span></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Other bots</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.peerSummaryDigest ? "Summary context synchronized" : "No new summaries"}</span></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary cadence</span><span class="mt-1 block text-[#9ba6ab]">{linkedPromptProgress} / 3 linked agent tasks</span></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Pending tasks</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.pendingSummarySources.length ?? 0} queued{(conversation?.pendingSummarySources.length ?? 0) > 0 ? ` (${[...new Set((conversation?.pendingSummarySources ?? []).map((source) => source.agentId))].join(", ")})` : ""}</span></div>
-				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Summary state</span><span class="mt-1 block text-[#c9827b]">Last bot run failed. Successful linked agent tasks still count toward the next summary.</span></div>{/if}
+				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Last reply</span><span class="mt-1 block text-[#c9827b]">The last bot response failed.</span></div>{/if}
 			</div>
 			<div class="mt-5 grid gap-2">
 				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
 			</div>
-			<section class="mt-5 border-t border-[#252e33] pt-4">
-				<div class="mb-2 flex items-center justify-between gap-2"><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#7f8b91]">Summary history</p><span class="text-[8px] text-[#536067]">{summaries.length}</span></div>
-				{#if summaries.length > 0}
-					<div class="space-y-2">
-						{#each summaries as summary (summary.id)}
-							<article class="rounded-lg border border-[#283238] bg-[#10171b] p-2.5">
-								<div class="mb-2 flex items-start justify-between gap-2">
-									<div><strong class="block text-[9px] text-[#b9c3c7]">Summary {summary.ordinal}</strong><span class="mt-0.5 block text-[8px] text-[#59656b]">{summary.source === "legacy-conversation" ? "Legacy conversation" : `Agent tasks ${summary.linkedPromptRange.start}-${summary.linkedPromptRange.end}`} · {new Date(summary.timestamp).toLocaleString()}</span></div>
-									<button type="button" class="shrink-0 rounded border border-[#4a3030] px-1.5 py-1 text-[8px] text-[#c9827b] hover:bg-[#241111] hover:text-[#efaaa3] disabled:opacity-40" disabled={busy} onclick={() => onsummarydelete(selected.id, summary.id)}>Delete</button>
-								</div>
-								<div class="text-[9px] leading-4 text-[#87939a]"><MarkdownLite text={summary.text} /></div>
-							</article>
-						{/each}
-					</div>
-				{:else}
-					<p class="m-0 text-[9px] leading-4 text-[#59656b]">A summary is added after every three successful tasks completed by an agent linked to this bot.</p>
-				{/if}
-			</section>
 			{#if notice}<p class="mt-3 text-[10px] text-[#72cda8]">{notice}</p>{/if}
 		{/if}
 	</aside>

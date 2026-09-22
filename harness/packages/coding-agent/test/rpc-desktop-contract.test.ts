@@ -451,37 +451,7 @@ describe("Klerm desktop RPC contract", () => {
 						],
 					},
 				}),
-			).toMatchObject({
-				success: true,
-				data: {
-					slots: {
-						agents: [
-							{ personalBotId: "bot-sage", memoryProfileId: "sage" },
-							{ id: "agent2", kind: "klerm", role: "planner" },
-						],
-					},
-				},
-			});
-			expect(
-				await send({
-					id: "personal-bot-link-missing",
-					type: "set_coding_harness_slots",
-					slots: {
-						externalHarnessesEnabled: false,
-						agents: [
-							{
-								id: "agent1",
-								kind: "klerm",
-								enabled: true,
-								personalBotId: "missing-bot",
-								role: "builder",
-								effort: "off",
-								tools: [],
-							},
-						],
-					},
-				}),
-			).toMatchObject({ success: false, code: "PERSONAL_BOT_NOT_FOUND" });
+			).toMatchObject({ success: false, code: "INVALID_CODING_HARNESS_SLOTS" });
 			expect(
 				await send({
 					id: "personal-bot-prompt-klerm",
@@ -642,28 +612,6 @@ describe("Klerm desktop RPC contract", () => {
 			});
 			expect(
 				await send({
-					id: "personal-bot-relink-agent",
-					type: "set_coding_harness_slots",
-					slots: {
-						externalHarnessesEnabled: true,
-						agents: [
-							{
-								id: "agent1",
-								kind: "codex",
-								enabled: true,
-								model: "codex/test",
-								personalBotId: "bot-sage",
-								memoryProfileId: "sage",
-								role: "builder",
-								effort: "off",
-								tools: [],
-							},
-						],
-					},
-				}),
-			).toMatchObject({ success: true });
-			expect(
-				await send({
 					id: "personal-bot-model-settings-update",
 					type: "upsert_personal_bot",
 					bot: {
@@ -709,88 +657,6 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
-			for (const taskNumber of [1, 2]) {
-				expect(
-					await send({
-						id: `normal-linked-prompt-${taskNumber}`,
-						type: "prompt",
-						targetAgentId: "agent1",
-						message: `Normal linked task ${taskNumber}`,
-					}),
-				).toMatchObject({ success: true });
-				await vi.waitFor(async () => {
-					const response = await send({
-						id: `normal-linked-conversation-${taskNumber}`,
-						type: "get_personal_bot_conversation",
-						botId: "bot-sage",
-					});
-					expect(response).toMatchObject({
-						success: true,
-						data: {
-							linkedSuccessfulPromptCount: taskNumber,
-							pendingSummarySources: expect.arrayContaining([expect.objectContaining({ agentId: "agent1" })]),
-							summaries: [],
-						},
-					});
-				});
-			}
-			harness.setResponses([
-				fauxAssistantMessage(
-					"**Decision:** keep the stable link.\n\n| Item | State |\n| --- | --- |\n| Link | active |",
-				),
-			]);
-			expect(
-				await send({
-					id: "normal-linked-prompt-3",
-					type: "prompt",
-					targetAgentId: "agent1",
-					message: "Normal linked task 3",
-				}),
-			).toMatchObject({ success: true });
-			await vi.waitFor(async () => {
-				const response = await send({
-					id: "normal-linked-conversation-3",
-					type: "get_personal_bot_conversation",
-					botId: "bot-sage",
-				});
-				expect(response).toMatchObject({
-					success: true,
-					data: {
-						status: "idle",
-						linkedSuccessfulPromptCount: 3,
-						pendingSummarySources: [],
-						summaries: [
-							expect.objectContaining({
-								id: "bot-summary-3",
-								ordinal: 1,
-								linkedPromptRange: { start: 1, end: 3 },
-								text: expect.stringContaining("# Personal Bot Summary"),
-								sourceMessageCount: 3,
-							}),
-						],
-					},
-				});
-			});
-			const directMessagesAfterSummary = await send({
-				id: "normal-linked-hidden-summary",
-				type: "get_personal_bot_conversation",
-				botId: "bot-sage",
-			});
-			expect((directMessagesAfterSummary.data as { messages: unknown[] }).messages).toHaveLength(7);
-			expect(directMessagesAfterSummary).toMatchObject({
-				success: true,
-				data: {
-					messages: [
-						{},
-						{},
-						{},
-						{},
-						{},
-						{},
-						{ role: "assistant", text: expect.stringContaining("# Personal Bot Summary") },
-					],
-				},
-			});
 			expect(
 				await send({
 					id: "personal-bot-enable-peer",
@@ -828,7 +694,6 @@ describe("Klerm desktop RPC contract", () => {
 					success: true,
 					data: {
 						status: "idle",
-						peerSummaryDigest: expect.any(String),
 						linkedSuccessfulPromptCount: 0,
 						summaries: [],
 						messages: [
@@ -838,32 +703,6 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
-			const sageConversation = await send({
-				id: "personal-bot-summary-before-delete",
-				type: "get_personal_bot_conversation",
-				botId: "bot-sage",
-			});
-			const summaryId = (
-				(sageConversation.data as { summaries: Array<{ id: string }> }).summaries[0] as {
-					id: string;
-				}
-			).id;
-			expect(
-				await send({
-					id: "personal-bot-summary-delete",
-					type: "delete_personal_bot_summary",
-					botId: "bot-sage",
-					summaryId,
-				}),
-			).toMatchObject({ success: true, data: { summaries: [], linkedSuccessfulPromptCount: 3 } });
-			const summaryDeletionEvent = readFileSync(join(harness.tempDir, ".klerm", "personal-bot-events.jsonl"), "utf8")
-				.trim()
-				.split("\n")
-				.map((line) => JSON.parse(line) as Record<string, unknown>)
-				.find((event) => event.event === "SUMMARY_DELETED");
-			expect(summaryDeletionEvent).toMatchObject({ botId: "bot-sage", summaryId });
-			expect(JSON.stringify(summaryDeletionEvent)).not.toContain("stable link");
-
 			const addedBot = await send({
 				id: "personal-bot-add",
 				type: "upsert_personal_bot",
@@ -890,8 +729,6 @@ describe("Klerm desktop RPC contract", () => {
 						id: "agent1",
 						kind: "klerm",
 						enabled: true,
-						personalBotId: "bot-reviewer",
-						memoryProfileId: "sage",
 						role: "builder",
 						effort: "off",
 						tools: [],
