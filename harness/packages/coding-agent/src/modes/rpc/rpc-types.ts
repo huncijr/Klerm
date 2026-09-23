@@ -276,7 +276,6 @@ export type RpcCommand =
 	| {
 			id?: string;
 			type: "start_browser_run";
-			agentId: string;
 			model: string;
 			prompt: string;
 			startUrl: string;

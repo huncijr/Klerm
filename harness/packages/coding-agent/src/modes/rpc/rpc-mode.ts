@@ -3124,7 +3124,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			case "start_browser_run": {
 				const cwd = session.sessionManager.getCwd();
 				if (
-					typeof command.agentId !== "string" ||
 					typeof command.model !== "string" ||
 					typeof command.prompt !== "string" ||
 					!command.prompt.trim() ||
@@ -3133,7 +3132,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(
 						id,
 						"start_browser_run",
-						"Browser agent, model, prompt, and start URL are required.",
+						"Browser model, prompt, and start URL are required.",
 						"INVALID_BROWSER_RUN",
 					);
 				}
@@ -3145,20 +3144,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"WORKSPACE_NOT_TRUSTED",
 					);
 				}
-				const configuredAgent = session.settingsManager
-					.getCodingHarnessSlots()
-					.agents.find((agent) => agent.id === command.agentId && agent.enabled && agent.kind === "klerm");
-				if (!configuredAgent) {
-					return error(
-						id,
-						"start_browser_run",
-						"Browser Agent requires an enabled Klerm agent.",
-						"INVALID_BROWSER_AGENT",
-					);
-				}
 				try {
 					const state = await getBrowserCoordinator().start({
-						agentId: command.agentId,
 						model: command.model,
 						prompt: command.prompt.trim(),
 						startUrl: command.startUrl.trim(),

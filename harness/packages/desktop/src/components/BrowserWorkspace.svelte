@@ -1,7 +1,6 @@
 <script lang="ts">
 	import {
 		ArrowLeft,
-		Bot,
 		Check,
 		ChevronDown,
 		CircleStop,
@@ -20,16 +19,9 @@
 		Sparkles,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
-	import type {
-		BrowserActivityEvent,
-		BrowserAvailability,
-		BrowserRunState,
-		CodingHarnessSetup,
-		SelectOption,
-	} from "../lib/model.ts";
+	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, SelectOption } from "../lib/model.ts";
 
 	let {
-		setup,
 		models,
 		availability,
 		run,
@@ -41,7 +33,6 @@
 		onstop,
 		onclose,
 	}: {
-		setup?: CodingHarnessSetup;
 		models: SelectOption[];
 		availability?: BrowserAvailability;
 		run?: BrowserRunState;
@@ -49,7 +40,6 @@
 		loading: boolean;
 		onrefresh: () => Promise<void>;
 		onstart: (input: {
-			agentId: string;
 			model: string;
 			prompt: string;
 			startUrl: string;
@@ -65,19 +55,16 @@
 	type ChatPlacement = "left" | "center" | "right";
 	type BrowserMessage = { id: number; role: "user" | "assistant"; text: string; tone?: "normal" | "error" };
 
-	let selectedAgentId = $state("");
 	let selectedModel = $state("");
 	let placement = $state<ChatPlacement>("right");
 	let prompt = $state("");
-	let startUrl = $state("");
+	let startUrl = $state("https://example.com");
 	let commandBusy = $state(false);
 	let messageId = 0;
 	let localRunId = $state<string | undefined>(undefined);
 	let renderedSettlement = $state<string | undefined>(undefined);
 	let messages = $state<BrowserMessage[]>([]);
 
-	const agents = $derived((setup?.slots.agents ?? []).filter((agent) => agent.enabled && agent.kind === "klerm"));
-	const selectedAgent = $derived(agents.find((agent) => agent.id === selectedAgentId) ?? agents[0]);
 	const running = $derived(run?.status === "queued" || run?.status === "running" || run?.status === "waiting-approval");
 	const browserFirst = $derived(placement === "left");
 	const currentActivity = $derived(activity.filter((item) => !run || !item.runId || item.runId === run.runId));
@@ -87,15 +74,20 @@
 		if (!availability.available) return "runtime unavailable";
 		return `${availability.runtime}${availability.version ? ` / ${availability.version}` : ""}`;
 	});
-
-	$effect(() => {
-		if (!selectedAgentId && agents[0]) selectedAgentId = agents[0].id;
+	const blockReason = $derived.by(() => {
+		if (running) return "";
+		if (loading && !availability) return "Checking browser runtime";
+		if (!availability) return "Browser runtime is not checked yet";
+		if (!availability.available) return availability.reason;
+		if (!selectedModel) return "Select a model";
+		if (!startUrl.trim()) return "Enter a start URL";
+		if (!prompt.trim()) return "Enter a task";
+		return "";
 	});
 
 	$effect(() => {
 		if (models.some((option) => option.value === selectedModel)) return;
-		const preferred = selectedAgent?.model;
-		selectedModel = (preferred && models.some((option) => option.value === preferred) ? preferred : models[0]?.value) ?? "";
+		selectedModel = models[0]?.value ?? "";
 	});
 
 	$effect(() => {
@@ -120,21 +112,15 @@
 		void onrefresh();
 	});
 
-	function changeAgent(event: Event): void {
-		selectedAgentId = (event.currentTarget as HTMLSelectElement).value;
-		const agent = agents.find((candidate) => candidate.id === selectedAgentId);
-		if (agent?.model && models.some((option) => option.value === agent.model)) selectedModel = agent.model;
-	}
-
 	async function submit(): Promise<void> {
 		const text = prompt.trim();
 		const url = startUrl.trim();
-		if (!text || !url || !selectedAgent || !selectedModel || running || commandBusy || !availability?.available) return;
+		if (blockReason || !text || !url || !selectedModel || running || commandBusy) return;
 		messages = [...messages, { id: ++messageId, role: "user", text }];
 		prompt = "";
 		commandBusy = true;
 		try {
-			const started = await onstart({ agentId: selectedAgent.id, model: selectedModel, prompt: text, startUrl: url });
+			const started = await onstart({ model: selectedModel, prompt: text, startUrl: url });
 			localRunId = started.runId;
 			renderedSettlement = undefined;
 		} catch (error) {
@@ -202,8 +188,7 @@
 
 	<div class="flex min-h-0 flex-1 flex-col p-3 sm:p-4">
 		<div class="mx-auto flex w-full max-w-[1480px] shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#27353c] bg-[linear-gradient(110deg,rgba(14,21,26,.96),rgba(9,15,19,.96))] p-2 shadow-[0_14px_40px_rgba(0,0,0,.2)]">
-			<label class="relative min-w-[180px] flex-1 sm:max-w-[250px]"><span class="sr-only">Browser agent</span><Bot size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#95b978]" /><select value={selectedAgent?.id ?? ""} disabled={running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45" onchange={changeAgent}><option value="" disabled>Choose Klerm agent</option>{#each agents as agent (agent.id)}<option value={agent.id}>Agent {agent.id.replace(/^agent-?/, "")}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
-			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser model</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedModel} disabled={models.length === 0 || running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="" disabled>Choose Klerm model</option>{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
+			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser model</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedModel} disabled={models.length === 0 || running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="" disabled>Choose a model</option>{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
 			<button type="button" aria-label="Refresh browser runtime" disabled={loading || running} class="grid h-9 w-9 place-items-center rounded-xl border border-[#303e44] bg-[#080e12] text-[#7f9297] transition hover:text-white disabled:opacity-40" onclick={() => void onrefresh()}><RefreshCw size={12} class={loading ? "animate-spin" : ""} /></button>
 			<div class="ml-auto flex items-center gap-1 rounded-xl border border-[#303e44] bg-[#080e12] p-1" aria-label="Prompt placement">
 				<button type="button" aria-label="Prompt left" aria-pressed={placement === "left"} class={`grid h-7 w-8 place-items-center rounded-lg transition ${placement === "left" ? "bg-[#344b2a] text-[#d7f2b8]" : "text-[#697a80] hover:text-white"}`} onclick={() => (placement = "left")}><LayoutPanelLeft size={13} /></button>
@@ -245,8 +230,8 @@
 					{/if}
 				</div>
 				<div class="shrink-0 border-t border-[#29373d] bg-[#0a1014] p-3">
-					<div class="mb-2 flex items-center gap-2 rounded-xl border border-[#34444b] bg-[#070c10] px-3"><LockKeyhole size={11} class="shrink-0 text-[#789081]" /><input bind:value={startUrl} type="url" disabled={running} placeholder="https://example.com/start" class="h-9 min-w-0 flex-1 border-0 bg-transparent font-mono text-[9px] text-[#d8e2e4] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" /></div>
-					<div class="rounded-2xl border border-[#34444b] bg-[#070c10] p-2 focus-within:border-[#617f50]"><textarea bind:value={prompt} rows="2" disabled={running} placeholder="Ask the browser to read, research, compare, or extract..." class="max-h-28 min-h-12 w-full resize-none border-0 bg-transparent px-2 py-1 text-[11px] leading-[1.5] text-[#e1e8ea] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" onkeydown={handlePromptKeydown}></textarea><div class="flex items-center gap-2 px-1 pb-0.5"><span class="min-w-0 flex-1 truncate font-mono text-[7px] text-[#5e7075]">{selectedModel || "Select a Klerm agent and model"}</span>{#if running}<button type="button" aria-label="Stop browser task" disabled={commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#704847] bg-[#301a1a] text-[#f3a6a1] transition hover:bg-[#442121] disabled:opacity-40" onclick={() => void stop()}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<CircleStop size={13} />{/if}</button>{:else}<button type="button" aria-label="Send browser task" disabled={!prompt.trim() || !startUrl.trim() || !selectedAgent || !selectedModel || !availability?.available || commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#648643] bg-[linear-gradient(145deg,#5f843c,#3e602d)] text-[#efffd9] shadow-[0_8px_20px_rgba(90,133,51,.2)] transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35" onclick={() => void submit()}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<Send size={13} />{/if}</button>{/if}</div></div>
+					<div class="mb-2 flex items-center gap-2 rounded-xl border border-[#34444b] bg-[#070c10] px-3"><LockKeyhole size={11} class="shrink-0 text-[#789081]" /><input bind:value={startUrl} type="url" disabled={running} placeholder="https://example.com" class="h-9 min-w-0 flex-1 border-0 bg-transparent font-mono text-[9px] text-[#d8e2e4] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" /></div>
+					<div class="rounded-2xl border border-[#34444b] bg-[#070c10] p-2 focus-within:border-[#617f50]"><textarea bind:value={prompt} rows="2" disabled={running} placeholder="Ask the browser to read, research, compare, or extract..." class="max-h-28 min-h-12 w-full resize-none border-0 bg-transparent px-2 py-1 text-[11px] leading-[1.5] text-[#e1e8ea] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" onkeydown={handlePromptKeydown}></textarea><div class="flex items-center gap-2 px-1 pb-0.5"><span class={`min-w-0 flex-1 truncate font-mono text-[7px] ${blockReason && !running ? "text-[#c9816f]" : "text-[#5e7075]"}`}>{running ? selectedModel || "Browser task running" : blockReason || selectedModel || "No model selected"}</span>{#if running}<button type="button" aria-label="Stop browser task" disabled={commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#704847] bg-[#301a1a] text-[#f3a6a1] transition hover:bg-[#442121] disabled:opacity-40" onclick={() => void stop()}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<CircleStop size={13} />{/if}</button>{:else}<button type="button" aria-label="Send browser task" disabled={!!blockReason || commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#648643] bg-[linear-gradient(145deg,#5f843c,#3e602d)] text-[#efffd9] shadow-[0_8px_20px_rgba(90,133,51,.2)] transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35" onclick={() => void submit()} title={blockReason || "Send browser task"}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<Send size={13} />{/if}</button>{/if}</div></div>
 					<div class="mt-2 flex items-center gap-1.5 px-1 font-mono text-[7px] text-[#586a70]"><ShieldCheck size={10} class="text-[#80a86d]" /><span>Temporary read-only task. Audit: .klerm/browser-events.jsonl</span>{#if run && !running}<span class="ml-auto flex items-center gap-1 text-[#718d6a]"><Check size={9} /> {run.status}</span>{/if}</div>
 				</div>
 			</section>

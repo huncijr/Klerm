@@ -150,7 +150,7 @@ function startRequest() {
 		runId: "run-1",
 		taskId: "task-1",
 		correlationId: "correlation-1",
-		agentId: "agent-1",
+		agentId: "browser-agent",
 		prompt: "Read the public documentation.",
 		model: "local-model",
 		startUrl: "https://example.com/docs",
@@ -214,7 +214,7 @@ describe("BrowserWorkerRunner", () => {
 			run_id: "run-1",
 			task_id: "task-1",
 			correlation_id: "correlation-1",
-			agent_id: "agent-1",
+			agent_id: "browser-agent",
 			task: "Begin at this validated public URL: https://example.com/docs\n\nRequested task:\nRead the public documentation.",
 			max_steps: 10,
 		});

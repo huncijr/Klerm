@@ -30,6 +30,7 @@ import {
 
 const MAX_LAST_ACTIONS = 20;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const BROWSER_AGENT_ID = "browser-agent";
 const BLOCKED_NETWORKS = new BlockList();
 for (const [network, prefix] of [
 	["0.0.0.0", 8],
@@ -63,7 +64,6 @@ for (const [network, prefix] of [
 type BrowserCoordinatorModelRuntime = Pick<ModelRuntime, "completeSimple" | "getAvailableSnapshot">;
 
 export interface BrowserRunStartInput {
-	agentId: string;
 	model: string;
 	prompt: string;
 	startUrl: string;
@@ -237,7 +237,6 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		return this.exclusive(async () => {
 			if (this.closed) throw new Error("The browser run coordinator is closed.");
 			if (this.active) throw new Error("A browser run is already active.");
-			if (!IDENTIFIER_PATTERN.test(input.agentId)) throw new Error("Invalid browser agentId.");
 			if (!input.prompt || input.prompt.length > 32_000) throw new Error("Invalid browser prompt.");
 			if (!input.model || input.model.length > 256) throw new Error("Invalid browser model.");
 			if (
@@ -264,7 +263,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			const requestedAt = this.timestamp();
 			this.current = {
 				...ids,
-				agentId: input.agentId,
+				agentId: BROWSER_AGENT_ID,
 				model: modelReference(pinnedModel),
 				status: "queued",
 				requestedAt,
@@ -291,7 +290,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				active.gateway = await this.startGateway({ modelRuntime: this.modelRuntime, pinnedModel });
 				await runner.start({
 					...ids,
-					agentId: input.agentId,
+					agentId: BROWSER_AGENT_ID,
 					prompt: input.prompt,
 					model: modelReference(pinnedModel),
 					startUrl: url.url,

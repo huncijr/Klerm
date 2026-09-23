@@ -447,7 +447,6 @@
 	}
 
 	async function startBrowserRun(input: {
-		agentId: string;
 		model: string;
 		prompt: string;
 		startUrl: string;
@@ -3202,7 +3201,6 @@
 			/>
 		{:else if workspaceView === "browser"}
 			<BrowserWorkspace
-				setup={codingHarnessSetup}
 				models={modelCatalog}
 				availability={browserAvailability}
 				run={browserRun}

@@ -213,7 +213,7 @@ describe("Klerm desktop RPC contract", () => {
 			runId: "browser-run-1",
 			taskId: "browser-task-1",
 			correlationId: "browser-correlation-1",
-			agentId: "agent1",
+			agentId: "browser-agent",
 			model: "faux/test",
 			status: "running",
 			requestedAt: "2026-09-23T10:00:00.000Z",
@@ -346,7 +346,6 @@ describe("Klerm desktop RPC contract", () => {
 			const untrustedBrowserRun = await send({
 				id: "browser-untrusted",
 				type: "start_browser_run",
-				agentId: "agent1",
 				model: "faux/test",
 				prompt: "Summarize the public documentation.",
 				startUrl: "https://example.com/docs",
@@ -764,19 +763,6 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: { bots: expect.arrayContaining([expect.objectContaining({ id: "bot-reviewer" })]) },
 			});
-			harness.settingsManager.setCodingHarnessSlots({
-				externalHarnessesEnabled: false,
-				agents: [
-					{
-						id: "agent1",
-						kind: "klerm",
-						enabled: true,
-						role: "builder",
-						effort: "off",
-						tools: [],
-					},
-				],
-			});
 			expect(await send({ id: "browser-trust", type: "set_project_trust", trusted: true })).toMatchObject({
 				success: true,
 			});
@@ -796,7 +782,7 @@ describe("Klerm desktop RPC contract", () => {
 					runId: "browser-run-1",
 					taskId: "browser-task-1",
 					correlationId: "browser-correlation-1",
-					agentId: "agent1",
+					agentId: "browser-agent",
 					status: "running",
 					reason: "Browser worker started.",
 					timestamp: "2026-09-23T10:00:01.000Z",
@@ -814,7 +800,6 @@ describe("Klerm desktop RPC contract", () => {
 				await send({
 					id: "browser-start",
 					type: "start_browser_run",
-					agentId: "agent1",
 					model: "faux/test",
 					prompt: " Summarize the public documentation. ",
 					startUrl: " https://example.com/docs ",
@@ -822,7 +807,6 @@ describe("Klerm desktop RPC contract", () => {
 				}),
 			).toMatchObject({ success: true, data: browserState });
 			expect(browserStart).toHaveBeenCalledWith({
-				agentId: "agent1",
 				model: "faux/test",
 				prompt: "Summarize the public documentation.",
 				startUrl: "https://example.com/docs",

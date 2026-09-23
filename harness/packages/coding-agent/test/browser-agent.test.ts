@@ -30,7 +30,7 @@ describe("browser agent protocol and security", () => {
 		const availability: BrowserAvailability = { available: true, runtime: "browser-use", version: "1.0.0" };
 		const run: BrowserRunRequest = {
 			runId: "run-1",
-			agentId: "agent2",
+			agentId: "browser-agent",
 			prompt: "Compare the public documentation.",
 			startUrl: "https://docs.example.com/start",
 			allowedOrigins: ["https://docs.example.com"],

@@ -198,7 +198,6 @@ function setup(options: { models?: readonly Model<Api>[] } = {}) {
 }
 
 const startInput = {
-	agentId: "agent-2",
 	model: "faux/browser-model",
 	prompt: "Summarize the public page without exposing prompt-secret.",
 	startUrl: "https://EXAMPLE.com:443/docs?q=public",
@@ -214,7 +213,7 @@ describe("BrowserRunCoordinator", () => {
 			runId: "run-1",
 			taskId: "task-1",
 			correlationId: "correlation-1",
-			agentId: "agent-2",
+			agentId: "browser-agent",
 			model: "faux/browser-model",
 			status: "running",
 			startUrl: "https://example.com/docs?q=public",
@@ -224,6 +223,7 @@ describe("BrowserRunCoordinator", () => {
 			runId: "run-1",
 			taskId: "task-1",
 			correlationId: "correlation-1",
+			agentId: "browser-agent",
 			model: "faux/browser-model",
 			startUrl: "https://example.com/docs?q=public",
 			allowedOrigins: ["https://example.com"],
@@ -240,7 +240,7 @@ describe("BrowserRunCoordinator", () => {
 				runId: "run-1",
 				taskId: "task-1",
 				correlationId: "correlation-1",
-				agentId: "agent-2",
+				agentId: "browser-agent",
 			});
 			expect(event.reason).toBeTruthy();
 			expect(event.status).toBeTruthy();
