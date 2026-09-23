@@ -36,6 +36,9 @@
 	import type {
 		AgentMessage,
 		BashResult,
+		BrowserActivityEvent,
+		BrowserAvailability,
+		BrowserRunState,
 		ChatMessage,
 		CodingHarnessBridgeChatEntry,
 		CodingHarnessBridgeEvent,
@@ -130,6 +133,10 @@
 	let projects = $state<DesktopProject[]>([]);
 	let kanbanRegistry = $state<KanbanRegistry>({ version: 1, boards: [] });
 	let kanbanActivity = $state<KanbanActivityEvent[]>([]);
+	let browserAvailability = $state<BrowserAvailability | undefined>(undefined);
+	let browserRun = $state<BrowserRunState | undefined>(undefined);
+	let browserActivity = $state<BrowserActivityEvent[]>([]);
+	let browserStatusLoading = $state(false);
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
 	let defaultProjectId = $state("");
@@ -407,6 +414,74 @@
 		} catch (error) {
 			showError(toError(error).message);
 			throw error;
+		}
+	}
+
+	async function refreshBrowserStatus(): Promise<void> {
+		if (!backendReady || browserStatusLoading) return;
+		if (!supportsCommand("get_browser_availability")) {
+			browserAvailability = {
+				available: false,
+				runtime: "browser worker",
+				reason: "Restart Klerm to upgrade the desktop backend.",
+			};
+			return;
+		}
+		browserStatusLoading = true;
+		try {
+			const [availability, run] = await Promise.all([
+				bridge.send<BrowserAvailability>("get_browser_availability", {}, 15_000),
+				bridge.send<{ state?: BrowserRunState }>("get_browser_run"),
+			]);
+			browserAvailability = availability;
+			browserRun = run.state;
+		} catch (error) {
+			browserAvailability = {
+				available: false,
+				runtime: "browser worker",
+				reason: toError(error).message,
+			};
+		} finally {
+			browserStatusLoading = false;
+		}
+	}
+
+	async function startBrowserRun(input: {
+		agentId: string;
+		model: string;
+		prompt: string;
+		startUrl: string;
+	}): Promise<BrowserRunState> {
+		if (!supportsCommand("start_browser_run")) throw new Error("Restart Klerm to upgrade the desktop backend.");
+		browserActivity = [];
+		const state = await bridge.send<BrowserRunState>("start_browser_run", input, 60_000);
+		browserRun = state;
+		return state;
+	}
+
+	async function resolveBrowserOrigin(
+		decision: "approved" | "denied",
+		scope?: "allow_once" | "current_run",
+	): Promise<void> {
+		const pending = browserRun?.pendingApproval;
+		if (!browserRun || !pending) return;
+		browserRun = await bridge.send<BrowserRunState>("resolve_browser_origin", {
+			runId: browserRun.runId,
+			approvalId: pending.approvalId,
+			decision,
+			...(scope ? { scope } : {}),
+		});
+	}
+
+	async function stopBrowserRun(): Promise<void> {
+		if (!browserRun || !["queued", "running", "waiting-approval"].includes(browserRun.status)) return;
+		browserRun = await bridge.send<BrowserRunState>("stop_browser_run", { runId: browserRun.runId }, 30_000);
+	}
+
+	function closeBrowserWorkspace(): void {
+		workspaceView = undefined;
+		if (browserRun && ["queued", "running", "waiting-approval"].includes(browserRun.status)) {
+			void stopBrowserRun().catch((error) => showError(toError(error).message));
 		}
 	}
 
@@ -1324,6 +1399,15 @@
 			case "kanban_registry_changed": {
 				const registry = event.registry as KanbanRegistry | undefined;
 				if (registry && Array.isArray(registry.boards)) kanbanRegistry = registry;
+				return;
+			}
+			case "browser_event": {
+				const state = event.state as BrowserRunState | undefined;
+				const activity = event.event as BrowserActivityEvent | undefined;
+				if (state && typeof state.runId === "string") browserRun = state;
+				if (activity && typeof activity.event === "string" && typeof activity.sequence === "number") {
+					browserActivity = [...browserActivity.slice(-99), activity];
+				}
 				return;
 			}
 			case "extension_ui_request": {
@@ -2925,6 +3009,7 @@
 				settingsFullscreen = false;
 			}
 			else if (selectedProjectId) selectedProjectId = undefined;
+			else if (workspaceView === "browser") closeBrowserWorkspace();
 			else if (workspaceView) workspaceView = undefined;
 			else if (sidebarOpen) sidebarOpen = false;
 			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
@@ -3116,7 +3201,19 @@
 				onstop={stopKanbanTask}
 			/>
 		{:else if workspaceView === "browser"}
-			<BrowserWorkspace setup={codingHarnessSetup} onclose={() => (workspaceView = undefined)} />
+			<BrowserWorkspace
+				setup={codingHarnessSetup}
+				models={modelCatalog}
+				availability={browserAvailability}
+				run={browserRun}
+				activity={browserActivity}
+				loading={browserStatusLoading}
+				onrefresh={refreshBrowserStatus}
+				onstart={startBrowserRun}
+				onresolveorigin={resolveBrowserOrigin}
+				onstop={stopBrowserRun}
+				onclose={closeBrowserWorkspace}
+			/>
 		{:else if selectedProject}
 			<ProjectWorkspace
 				project={selectedProject}

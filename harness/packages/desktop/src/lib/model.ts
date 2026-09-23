@@ -76,6 +76,49 @@ export interface KanbanRegistry {
 	boards: KanbanBoard[];
 }
 
+export type BrowserRunStatus = "queued" | "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
+
+export type BrowserAvailability =
+	| { available: true; runtime: string; version?: string }
+	| { available: false; runtime: string; reason: string };
+
+export interface BrowserPendingOriginApproval {
+	approvalId: string;
+	origin: string;
+	requestedAt: string;
+}
+
+export interface BrowserRunState {
+	runId: string;
+	taskId: string;
+	correlationId: string;
+	agentId: string;
+	model: string;
+	status: BrowserRunStatus;
+	requestedAt: string;
+	updatedAt: string;
+	startedAt?: string;
+	settledAt?: string;
+	startUrl: string;
+	pendingApproval?: BrowserPendingOriginApproval;
+	lastActions: readonly string[];
+	resultSummary?: string;
+	resultMetadata?: { present: boolean; length: number; sha256: string | null };
+	error?: string;
+}
+
+export interface BrowserActivityEvent {
+	event: string;
+	runId?: string;
+	taskId?: string;
+	correlationId?: string;
+	sequence: number;
+	timestamp: string;
+	status?: BrowserRunStatus;
+	reason?: string;
+	details?: unknown;
+}
+
 export interface CodingHarnessSlotSettings {
 	id: string;
 	kind: CodingHarnessSlot;

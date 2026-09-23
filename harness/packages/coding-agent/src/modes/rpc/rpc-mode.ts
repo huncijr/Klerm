@@ -50,6 +50,11 @@ import {
 	createAiDebugTraceFromEnvironment,
 } from "../../klerm/ai-debug-trace.ts";
 import {
+	BrowserRunCoordinator,
+	type BrowserRunCoordinatorApi,
+	type BrowserRunCoordinatorOptions,
+} from "../../klerm/browser-run-coordinator.ts";
+import {
 	type CodingHarnessAdapter,
 	type CodingHarnessAdapterEvent,
 	type CodingHarnessSessionRef,
@@ -200,6 +205,7 @@ export interface RunRpcModeOptions {
 	listSessions?: () => Promise<SessionInfo[]>;
 	renameSession?: (sessionPath: string, name: string) => Promise<void> | void;
 	deleteSession?: (sessionPath: string) => Promise<void>;
+	createBrowserRunCoordinator?: (options: BrowserRunCoordinatorOptions) => BrowserRunCoordinatorApi;
 }
 
 interface ActiveCodingHarnessBridge {
@@ -254,6 +260,11 @@ const DESKTOP_COMMANDS = [
 	"set_kanban_registry",
 	"run_kanban_task",
 	"stop_kanban_task",
+	"get_browser_availability",
+	"get_browser_run",
+	"start_browser_run",
+	"resolve_browser_origin",
+	"stop_browser_run",
 	"get_personal_bots",
 	"upsert_personal_bot",
 	"generate_personal_bot_profile",
@@ -347,6 +358,7 @@ const DESKTOP_EVENTS = [
 	"personal_bot_error",
 	"kanban_event",
 	"kanban_registry_changed",
+	"browser_event",
 ] as const;
 
 const WORKSPACE_ATTRIBUTION_CUSTOM_TYPE = "klerm-workspace-attribution";
@@ -483,7 +495,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	let bridgeWriteQueue: Promise<void> = Promise.resolve();
 	let personalBotWriteQueue: Promise<void> = Promise.resolve();
 	let bridgeTransitionQueue: Promise<void> = Promise.resolve();
+	let browserCoordinator: BrowserRunCoordinatorApi | undefined;
+	let browserCoordinatorCwd: string | undefined;
+	const getBrowserCoordinator = (): BrowserRunCoordinatorApi => {
+		const cwd = session.sessionManager.getCwd();
+		if (browserCoordinator && browserCoordinatorCwd === cwd) return browserCoordinator;
+		browserCoordinator = (
+			options.createBrowserRunCoordinator ?? ((coordinatorOptions) => new BrowserRunCoordinator(coordinatorOptions))
+		)({
+			cwd,
+			modelRuntime: session.modelRuntime,
+			onEvent: ({ event, state }) => output({ type: "browser_event", event, state }),
+		});
+		browserCoordinatorCwd = cwd;
+		return browserCoordinator;
+	};
 	const closeCodingHarnessSessions = async () => {
+		await browserCoordinator?.close().catch(() => undefined);
+		browserCoordinator = undefined;
+		browserCoordinatorCwd = undefined;
 		await Promise.all(
 			[...codingHarnessSessions.values()].map((adapterSession) =>
 				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
@@ -3079,6 +3109,116 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"stop_kanban_task",
 						stopError instanceof Error ? stopError.message : String(stopError),
 						"KANBAN_STOP_FAILED",
+					);
+				}
+			}
+
+			case "get_browser_availability": {
+				return success(id, "get_browser_availability", await getBrowserCoordinator().availability());
+			}
+
+			case "get_browser_run": {
+				return success(id, "get_browser_run", { state: getBrowserCoordinator().state() });
+			}
+
+			case "start_browser_run": {
+				const cwd = session.sessionManager.getCwd();
+				if (
+					typeof command.agentId !== "string" ||
+					typeof command.model !== "string" ||
+					typeof command.prompt !== "string" ||
+					!command.prompt.trim() ||
+					typeof command.startUrl !== "string"
+				) {
+					return error(
+						id,
+						"start_browser_run",
+						"Browser agent, model, prompt, and start URL are required.",
+						"INVALID_BROWSER_RUN",
+					);
+				}
+				if (projectTrustStore.get(cwd) !== true) {
+					return error(
+						id,
+						"start_browser_run",
+						"Browser Agent requires a trusted workspace.",
+						"WORKSPACE_NOT_TRUSTED",
+					);
+				}
+				const configuredAgent = session.settingsManager
+					.getCodingHarnessSlots()
+					.agents.find((agent) => agent.id === command.agentId && agent.enabled && agent.kind === "klerm");
+				if (!configuredAgent) {
+					return error(
+						id,
+						"start_browser_run",
+						"Browser Agent requires an enabled Klerm agent.",
+						"INVALID_BROWSER_AGENT",
+					);
+				}
+				try {
+					const state = await getBrowserCoordinator().start({
+						agentId: command.agentId,
+						model: command.model,
+						prompt: command.prompt.trim(),
+						startUrl: command.startUrl.trim(),
+						...(command.maxSteps === undefined ? {} : { maxSteps: command.maxSteps }),
+					});
+					return success(id, "start_browser_run", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"start_browser_run",
+						browserError instanceof Error ? browserError.message : "Browser run could not be started.",
+						"BROWSER_RUN_FAILED",
+					);
+				}
+			}
+
+			case "resolve_browser_origin": {
+				if (
+					typeof command.runId !== "string" ||
+					typeof command.approvalId !== "string" ||
+					(command.decision !== "approved" && command.decision !== "denied")
+				) {
+					return error(
+						id,
+						"resolve_browser_origin",
+						"A valid browser run, approval, and decision are required.",
+						"INVALID_BROWSER_APPROVAL",
+					);
+				}
+				try {
+					const state = await getBrowserCoordinator().approve({
+						runId: command.runId,
+						approvalId: command.approvalId,
+						decision: command.decision,
+						...(command.scope === undefined ? {} : { scope: command.scope }),
+					});
+					return success(id, "resolve_browser_origin", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"resolve_browser_origin",
+						browserError instanceof Error ? browserError.message : "Browser approval failed.",
+						"BROWSER_APPROVAL_FAILED",
+					);
+				}
+			}
+
+			case "stop_browser_run": {
+				if (typeof command.runId !== "string") {
+					return error(id, "stop_browser_run", "A browser run id is required.", "INVALID_BROWSER_RUN");
+				}
+				try {
+					const state = await getBrowserCoordinator().stop(command.runId);
+					return success(id, "stop_browser_run", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"stop_browser_run",
+						browserError instanceof Error ? browserError.message : "Browser run could not be stopped.",
+						"BROWSER_STOP_FAILED",
 					);
 				}
 			}

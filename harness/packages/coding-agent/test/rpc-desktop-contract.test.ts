@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
+import type { BrowserRunCoordinatorOptions, BrowserRunPublicState } from "../src/klerm/browser-run-coordinator.ts";
 import type {
 	CodingHarnessAdapter,
 	CodingHarnessAdapterListener,
@@ -208,6 +209,30 @@ describe("Klerm desktop RPC contract", () => {
 				return () => adapterListeners.delete(listener);
 			},
 		};
+		const browserState: BrowserRunPublicState = {
+			runId: "browser-run-1",
+			taskId: "browser-task-1",
+			correlationId: "browser-correlation-1",
+			agentId: "agent1",
+			model: "faux/test",
+			status: "running",
+			requestedAt: "2026-09-23T10:00:00.000Z",
+			updatedAt: "2026-09-23T10:00:01.000Z",
+			startUrl: "https://example.com/docs",
+			lastActions: [],
+		};
+		const browserStart = vi.fn(async () => browserState);
+		const browserApprove = vi.fn(async () => browserState);
+		const browserStop = vi.fn(async () => ({ ...browserState, status: "cancelled" as const }));
+		const browserClose = vi.fn(async () => undefined);
+		const createBrowserRunCoordinator = vi.fn((_options: BrowserRunCoordinatorOptions) => ({
+			availability: async () => ({ available: true as const, runtime: "test browser worker" }),
+			state: () => browserState,
+			start: browserStart,
+			approve: browserApprove,
+			stop: browserStop,
+			close: browserClose,
+		}));
 
 		try {
 			void runRpcMode(runtimeHost, {
@@ -239,6 +264,7 @@ describe("Klerm desktop RPC contract", () => {
 				],
 				renameSession,
 				deleteSession,
+				createBrowserRunCoordinator,
 			});
 			await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 
@@ -295,6 +321,11 @@ describe("Klerm desktop RPC contract", () => {
 							"cancel_provider_oauth",
 							"bash",
 							"abort_bash",
+							"get_browser_availability",
+							"get_browser_run",
+							"start_browser_run",
+							"resolve_browser_origin",
+							"stop_browser_run",
 						]),
 						events: expect.arrayContaining([
 							"model_select",
@@ -305,12 +336,23 @@ describe("Klerm desktop RPC contract", () => {
 							"personal_bot_conversation_changed",
 							"personal_bot_summary_updated",
 							"personal_bot_summaries_changed",
+							"browser_event",
 						]),
 					},
 					state: { cwd: expect.any(String) },
 					routingState: { mode: "off", lane: "direct" },
 				},
 			});
+			const untrustedBrowserRun = await send({
+				id: "browser-untrusted",
+				type: "start_browser_run",
+				agentId: "agent1",
+				model: "faux/test",
+				prompt: "Summarize the public documentation.",
+				startUrl: "https://example.com/docs",
+			});
+			expect(untrustedBrowserRun).toMatchObject({ success: false, code: "WORKSPACE_NOT_TRUSTED" });
+			expect(createBrowserRunCoordinator).not.toHaveBeenCalled();
 
 			const runtimes = await send({ id: "runtimes", type: "get_local_runtimes" });
 			expect(runtimes).toMatchObject({
@@ -735,6 +777,78 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				],
 			});
+			expect(await send({ id: "browser-trust", type: "set_project_trust", trusted: true })).toMatchObject({
+				success: true,
+			});
+			expect(await send({ id: "browser-availability", type: "get_browser_availability" })).toMatchObject({
+				success: true,
+				data: { available: true, runtime: "test browser worker" },
+			});
+			expect(await send({ id: "browser-state", type: "get_browser_run" })).toMatchObject({
+				success: true,
+				data: { state: browserState },
+			});
+			await createBrowserRunCoordinator.mock.calls[0]![0].onEvent?.({
+				event: {
+					version: 1,
+					sequence: 1,
+					event: "RUN_STARTED",
+					runId: "browser-run-1",
+					taskId: "browser-task-1",
+					correlationId: "browser-correlation-1",
+					agentId: "agent1",
+					status: "running",
+					reason: "Browser worker started.",
+					timestamp: "2026-09-23T10:00:01.000Z",
+				},
+				state: browserState,
+			});
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					type: "browser_event",
+					event: expect.objectContaining({ event: "RUN_STARTED", sequence: 1 }),
+					state: browserState,
+				}),
+			);
+			expect(
+				await send({
+					id: "browser-start",
+					type: "start_browser_run",
+					agentId: "agent1",
+					model: "faux/test",
+					prompt: " Summarize the public documentation. ",
+					startUrl: " https://example.com/docs ",
+					maxSteps: 8,
+				}),
+			).toMatchObject({ success: true, data: browserState });
+			expect(browserStart).toHaveBeenCalledWith({
+				agentId: "agent1",
+				model: "faux/test",
+				prompt: "Summarize the public documentation.",
+				startUrl: "https://example.com/docs",
+				maxSteps: 8,
+			});
+			expect(
+				await send({
+					id: "browser-approve",
+					type: "resolve_browser_origin",
+					runId: "browser-run-1",
+					approvalId: "approval-1",
+					decision: "approved",
+					scope: "allow_once",
+				}),
+			).toMatchObject({ success: true, data: browserState });
+			expect(browserApprove).toHaveBeenCalledWith({
+				runId: "browser-run-1",
+				approvalId: "approval-1",
+				decision: "approved",
+				scope: "allow_once",
+			});
+			expect(await send({ id: "browser-stop", type: "stop_browser_run", runId: "browser-run-1" })).toMatchObject({
+				success: true,
+				data: { status: "cancelled" },
+			});
+			expect(browserStop).toHaveBeenCalledWith("browser-run-1");
 			expect(
 				await send({ id: "personal-bot-delete", type: "delete_personal_bot", botId: "bot-reviewer" }),
 			).toMatchObject({

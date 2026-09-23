@@ -18,6 +18,8 @@ import type {
 	SettingsScope,
 } from "../../core/settings-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import type { BrowserAvailability } from "../../klerm/browser-agent.ts";
+import type { BrowserRunPublicState } from "../../klerm/browser-run-coordinator.ts";
 import type {
 	CodingHarnessDiscoveryResult,
 	CodingHarnessKind,
@@ -247,6 +249,8 @@ export interface RpcProviderConnect {
 export type RpcCodingHarnessSetup = CodingHarnessSetup;
 export type RpcCodingHarnessSlots = CodingHarnessSlots;
 export type RpcKanbanRegistry = KanbanRegistry;
+export type RpcBrowserAvailability = BrowserAvailability;
+export type RpcBrowserRunState = BrowserRunPublicState;
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -267,6 +271,26 @@ export type RpcCommand =
 	| { id?: string; type: "set_kanban_registry"; registry: RpcKanbanRegistry }
 	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "stop_kanban_task"; boardId: string; taskId: string }
+	| { id?: string; type: "get_browser_availability" }
+	| { id?: string; type: "get_browser_run" }
+	| {
+			id?: string;
+			type: "start_browser_run";
+			agentId: string;
+			model: string;
+			prompt: string;
+			startUrl: string;
+			maxSteps?: number;
+	  }
+	| {
+			id?: string;
+			type: "resolve_browser_origin";
+			runId: string;
+			approvalId: string;
+			decision: "approved" | "denied";
+			scope?: "allow_once" | "current_run";
+	  }
+	| { id?: string; type: "stop_browser_run"; runId: string }
 	| { id?: string; type: "get_personal_bots" }
 	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
 	| { id?: string; type: "generate_personal_bot_profile"; botId: string; brief: string; style?: string }
@@ -470,6 +494,27 @@ export type RpcResponse =
 			command: "get_kanban_registry" | "set_kanban_registry" | "run_kanban_task" | "stop_kanban_task";
 			success: true;
 			data: RpcKanbanRegistry;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_browser_availability";
+			success: true;
+			data: RpcBrowserAvailability;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_browser_run";
+			success: true;
+			data: { state?: RpcBrowserRunState };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "start_browser_run" | "resolve_browser_origin" | "stop_browser_run";
+			success: true;
+			data: RpcBrowserRunState;
 	  }
 	| { id?: string; type: "response"; command: "get_personal_bots"; success: true; data: PersonalBotRegistry }
 	| { id?: string; type: "response"; command: "upsert_personal_bot"; success: true; data: PersonalBotRegistry }

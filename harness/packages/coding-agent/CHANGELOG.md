@@ -38,6 +38,7 @@
 - Added an explicit desktop Prompt Together workflow for three or more runnable external agents, with temporary Planner/Builder/Reviewer roles, strict review verdicts, bounded repair iterations, native role-session switching, cancellation, and deterministic bridge logs.
 - Added persistent desktop Projects with stable session membership, backend CRUD and migration RPC, bounded summaries, grounded project questions, a dedicated project workspace, and explicit per-prompt agent selection.
 - Added task-type-specific Kanban system guidance for build, fix, review, research, and maintenance; Auto model selection includes all definitions and explicitly selects the current card type.
+- Added a sessionless read-only Browser Agent workspace backed by an isolated pinned browser-use worker, an ephemeral credential-free model gateway, exact-origin approvals, DNS public-address checks, typed desktop RPC, and deterministic `.klerm/browser-events.jsonl` audit records.
 
 ### Changed
 
