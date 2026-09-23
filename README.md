@@ -498,9 +498,9 @@ Windows startup, installers, and clean-machine Linux bundles remain unverified.
 
 For the complete Git, diff, editor, attribution, collapse, and prompt-rerun
 workspace smoke procedure, follow the Human test steps under App Milestone 2A in
-[`APP_PLAN.md`](APP_PLAN.md). Workspace text editing is limited to existing
-non-binary files up to 2 MiB inside the detected project root. Vim launching and
-listener discovery are Linux-only in this increment.
+the local `APP_PLAN.md` (not tracked in this repository). Workspace text editing
+is limited to existing non-binary files up to 2 MiB inside the detected project
+root. Vim launching and listener discovery are Linux-only in this increment.
 
 ## Development
 
