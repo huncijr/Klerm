@@ -43,7 +43,10 @@ bounded, redacted events.
 
 Every command requires `version`, `command`, and `request_id`. Unknown fields,
 duplicate JSON keys, malformed identifiers, non-loopback model endpoints, and
-oversized input are rejected. One browser run may be active at a time.
+oversized input are rejected. One browser run may be active at a time; follow-up
+starts on the same worker reuse its browser until shutdown. An empty
+`allowed_origins` list starts without a chosen URL and requires approval for
+the first navigation origin.
 
 Start a read-only run:
 
@@ -83,7 +86,10 @@ SHA-256 metadata.
 
 - Browser-use telemetry and OpenTelemetry are disabled before browser-use is
   imported.
-- Each run uses a new temporary browser profile removed after cleanup.
+- Each worker uses an isolated temporary browser profile shared by successive
+  runs in its Klerm conversation session. It is removed on worker shutdown or
+  replaced after a runtime failure; approval scope is reset between runs,
+  except for the origin already open in the reused page.
 - Chromium is headed, sandboxing remains enabled, browser security remains
   enabled, default extensions are disabled, and permissions are empty.
 - Downloads and automatic PDF downloads are disabled.
@@ -134,3 +140,6 @@ coordinator, RPC contract, and desktop types.
 - A real headed run still needs a human smoke test with a usable Chromium and an
   authenticated Klerm model. Automated tests do not validate window-manager or
   Chromium packaging behavior.
+- The Chromium window is still separate from the Tauri application. Native CEF
+  hosting, in-app input forwarding, and browser-crash detection beyond worker
+  failure are not implemented yet.

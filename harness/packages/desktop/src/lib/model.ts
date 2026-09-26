@@ -78,6 +78,8 @@ export interface KanbanRegistry {
 
 export type BrowserRunStatus = "queued" | "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
 
+export type BrowserControlOwner = "ai" | "pausing" | "human";
+
 export type BrowserAvailability =
 	| { available: true; runtime: string; version?: string }
 	| { available: false; runtime: string; reason: string };
@@ -90,16 +92,20 @@ export interface BrowserPendingOriginApproval {
 
 export interface BrowserRunState {
 	runId: string;
+	sessionId?: string;
 	taskId: string;
 	correlationId: string;
 	agentId: string;
 	model: string;
 	status: BrowserRunStatus;
+	browserReset?: boolean;
+	control: BrowserControlOwner;
+	controlReason?: string;
 	requestedAt: string;
 	updatedAt: string;
 	startedAt?: string;
 	settledAt?: string;
-	startUrl: string;
+	startUrl?: string;
 	pendingApproval?: BrowserPendingOriginApproval;
 	lastActions: readonly string[];
 	resultSummary?: string;

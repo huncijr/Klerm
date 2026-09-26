@@ -32,6 +32,8 @@ const model: Model<Api> = {
 class FakeRunner implements BrowserRunCoordinatorRunner {
 	readonly approvals: BrowserWorkerApprovalDecision[] = [];
 	readonly starts: BrowserWorkerStartRequest[] = [];
+	readonly takeovers: Array<{ runId: string; reason?: string }> = [];
+	readonly resumes: string[] = [];
 	readonly stops: string[] = [];
 	shutdownCalls = 0;
 	private eventListener?: BrowserWorkerEventListener;
@@ -79,6 +81,16 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 		this.emit({ ...this.base("run_stopped", "stopped"), ...this.runFields() });
 	}
 
+	async takeover(runId: string, reason?: string): Promise<void> {
+		if (runId !== this.starts.at(-1)?.runId) throw new Error("Fake run is not active.");
+		this.takeovers.push({ runId, ...(reason === undefined ? {} : { reason }) });
+	}
+
+	async resume(runId: string): Promise<void> {
+		if (runId !== this.starts.at(-1)?.runId) throw new Error("Fake run is not active.");
+		this.resumes.push(runId);
+	}
+
 	async shutdown(): Promise<void> {
 		this.shutdownCalls += 1;
 	}
@@ -94,6 +106,14 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 
 	plan(actions: string[]): void {
 		this.emit({ ...this.base("step_planned", "running"), ...this.runFields(), actions });
+	}
+
+	grantControl(reason: string): void {
+		this.emit({ ...this.base("control_granted", "paused"), ...this.runFields(), reason });
+	}
+
+	resumeControl(reason: string): void {
+		this.emit({ ...this.base("control_resumed", "running"), ...this.runFields(), reason });
 	}
 
 	complete(present = true): void {
@@ -123,7 +143,7 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 	}
 
 	private runFields() {
-		const request = this.starts[0];
+		const request = this.starts.at(-1);
 		if (!request) throw new Error("Fake run has not started.");
 		return {
 			run_id: request.runId,
@@ -179,6 +199,7 @@ function setup(options: { models?: readonly Model<Api>[] } = {}) {
 	});
 	const coordinator = new BrowserRunCoordinator({
 		cwd: "/workspace",
+		sessionId: "session-1",
 		modelRuntime: runtime(options.models),
 		createRunner: () => runner,
 		startGateway,
@@ -211,11 +232,13 @@ describe("BrowserRunCoordinator", () => {
 
 		expect(started).toMatchObject({
 			runId: "run-1",
+			sessionId: "session-1",
 			taskId: "task-1",
 			correlationId: "correlation-1",
 			agentId: "browser-agent",
 			model: "faux/browser-model",
 			status: "running",
+			control: "ai",
 			startUrl: "https://example.com/docs?q=public",
 		});
 		expect(context.gatewayOptions()?.pinnedModel).toBe(model);
@@ -238,6 +261,7 @@ describe("BrowserRunCoordinator", () => {
 		for (const event of context.audit) {
 			expect(event).toMatchObject({
 				runId: "run-1",
+				sessionId: "session-1",
 				taskId: "task-1",
 				correlationId: "correlation-1",
 				agentId: "browser-agent",
@@ -248,14 +272,50 @@ describe("BrowserRunCoordinator", () => {
 		await expect(context.coordinator.start(startInput)).rejects.toThrow("already active");
 
 		context.runner.complete();
-		await waitFor(() => context.runner.shutdownCalls === 1);
+		await waitFor(() => context.gatewayClose.mock.calls.length === 1);
 		expect(context.coordinator.state()).toMatchObject({
 			status: "completed",
 			resultSummary: "Browser run completed; result metadata reports 42 bytes.",
 			resultMetadata: { present: true, length: 42, sha256: "a".repeat(64) },
 		});
 		expect(context.gatewayClose).toHaveBeenCalledOnce();
+		expect(context.runner.shutdownCalls).toBe(0);
+		const followUp = await context.coordinator.start({ model: startInput.model, prompt: "What is on this page?" });
+		expect(followUp.runId).toBe("run-2");
+		expect(context.runner.starts).toHaveLength(2);
+		expect(context.runner.starts[1]?.startUrl).toBeUndefined();
+		context.runner.complete();
+		await waitFor(() => context.coordinator.state()?.status === "completed");
+		await context.coordinator.close();
 		expect(context.runner.shutdownCalls).toBe(1);
+	});
+
+	it("starts without a default URL and requires approval for the first origin", async () => {
+		const context = setup();
+		const started = await context.coordinator.start({ model: startInput.model, prompt: startInput.prompt });
+		expect(started.startUrl).toBeUndefined();
+		expect(context.runner.starts[0]?.startUrl).toBeUndefined();
+		expect(context.runner.starts[0]?.allowedOrigins).toEqual([]);
+		expect(context.audit[0]?.details).toBeUndefined();
+		context.runner.requestOrigin("https://example.com");
+		await waitFor(() => context.coordinator.state()?.pendingApproval?.origin === "https://example.com");
+		expect(context.coordinator.state()?.status).toBe("waiting-approval");
+		await context.coordinator.close();
+	});
+
+	it("reports an idle browser crash and resets before the next task", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		context.runner.complete();
+		await waitFor(() => context.gatewayClose.mock.calls.length === 1);
+		context.runner.failProcess({ reason: "process-exited", message: "Browser worker exited." });
+		await waitFor(() => context.coordinator.state()?.browserReset === true);
+		await waitFor(() => context.audit.some((event) => event.event === "BROWSER_RESET"));
+		expect(context.audit.at(-1)).toMatchObject({ event: "BROWSER_RESET", sessionId: "session-1" });
+		const next = await context.coordinator.start({ model: startInput.model, prompt: "Open a new page" });
+		expect(next.browserReset).toBeUndefined();
+		expect(next.startUrl).toBeUndefined();
+		await context.coordinator.close();
 	});
 
 	it("rejects unavailable and ambiguous model references before creating a gateway", async () => {
@@ -345,6 +405,49 @@ describe("BrowserRunCoordinator", () => {
 		await context.coordinator.close();
 	});
 
+	it("hands control to a human on takeover and back on resume", async () => {
+		const context = setup();
+		const started = await context.coordinator.start(startInput);
+		expect(started.control).toBe("ai");
+
+		const pausing = await context.coordinator.takeover({ runId: started.runId, reason: "CAPTCHA handoff" });
+		expect(pausing).toMatchObject({ control: "pausing", controlReason: "CAPTCHA handoff" });
+		expect(context.runner.takeovers).toEqual([{ runId: started.runId, reason: "CAPTCHA handoff" }]);
+		expect(context.audit.map((event) => event.event)).toEqual([
+			"RUN_REQUESTED",
+			"RUN_STARTED",
+			"CONTROL_PAUSE_REQUESTED",
+		]);
+
+		context.runner.grantControl("CAPTCHA handoff");
+		await waitFor(() => context.coordinator.state()?.control === "human");
+		expect(context.coordinator.state()).toMatchObject({ control: "human", controlReason: "CAPTCHA handoff" });
+
+		await expect(context.coordinator.takeover({ runId: started.runId })).rejects.toThrow(
+			"already under human control",
+		);
+
+		const resumed = await context.coordinator.resume(started.runId);
+		expect(resumed).toMatchObject({ status: "running", control: "ai" });
+		expect(resumed.controlReason).toBeUndefined();
+		expect(context.runner.resumes).toEqual([started.runId]);
+
+		context.runner.resumeControl("CAPTCHA handoff");
+		for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(context.audit.filter((event) => event.event === "CONTROL_RESUMED")).toHaveLength(1);
+		expect(context.coordinator.state()?.control).toBe("ai");
+		await expect(context.coordinator.resume(started.runId)).rejects.toThrow("not paused");
+		await context.coordinator.close();
+	});
+
+	it("rejects takeover reasons outside 1 through 500 characters", async () => {
+		const context = setup();
+		const started = await context.coordinator.start(startInput);
+		await expect(context.coordinator.takeover({ runId: started.runId, reason: "" })).rejects.toThrow("1 through 500");
+		expect(context.runner.takeovers).toEqual([]);
+		await context.coordinator.close();
+	});
+
 	it("denies an origin by stopping and settles only once across stop and close", async () => {
 		const context = setup();
 		const started = await context.coordinator.start(startInput);
@@ -407,6 +510,8 @@ describe("BrowserRunCoordinator", () => {
 		});
 		await waitFor(() => context.audit.some((event) => event.event === "RUN_FAILED"));
 		expect(context.coordinator.state()?.error).toBe("Browser worker process failed.");
-		expect(context.audit.at(-1)).toMatchObject({ event: "RUN_FAILED", status: "failed" });
+		await waitFor(() => context.audit.some((event) => event.event === "BROWSER_RESET"));
+		expect(context.audit.at(-1)?.reason).toContain("blank page");
+		expect(context.audit.at(-2)).toMatchObject({ event: "RUN_FAILED", status: "failed" });
 	});
 });

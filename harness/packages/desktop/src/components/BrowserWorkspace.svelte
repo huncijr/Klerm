@@ -6,12 +6,14 @@
 		CircleStop,
 		ExternalLink,
 		Globe2,
+		Hand,
 		LayoutPanelLeft,
 		LoaderCircle,
 		LockKeyhole,
 		MessageSquareText,
 		PanelRight,
 		PanelTop,
+		Play,
 		RefreshCw,
 		Send,
 		ShieldAlert,
@@ -31,6 +33,8 @@
 		onstart,
 		onresolveorigin,
 		onstop,
+		ontakeover,
+		onresume,
 		onclose,
 	}: {
 		models: SelectOption[];
@@ -42,13 +46,15 @@
 		onstart: (input: {
 			model: string;
 			prompt: string;
-			startUrl: string;
+			startUrl?: string;
 		}) => Promise<BrowserRunState>;
 		onresolveorigin: (
 			decision: "approved" | "denied",
 			scope?: "allow_once" | "current_run",
 		) => Promise<void>;
 		onstop: () => Promise<void>;
+		ontakeover: (reason?: string) => Promise<void>;
+		onresume: () => Promise<void>;
 		onclose: () => void;
 	} = $props();
 
@@ -58,7 +64,7 @@
 	let selectedModel = $state("");
 	let placement = $state<ChatPlacement>("right");
 	let prompt = $state("");
-	let startUrl = $state("https://example.com");
+	let startUrl = $state("");
 	let commandBusy = $state(false);
 	let messageId = 0;
 	let localRunId = $state<string | undefined>(undefined);
@@ -66,6 +72,8 @@
 	let messages = $state<BrowserMessage[]>([]);
 
 	const running = $derived(run?.status === "queued" || run?.status === "running" || run?.status === "waiting-approval");
+	const humanControl = $derived(run?.control === "human");
+	const pausingControl = $derived(run?.control === "pausing");
 	const browserFirst = $derived(placement === "left");
 	const currentActivity = $derived(activity.filter((item) => !run || !item.runId || item.runId === run.runId));
 	const runtimeLabel = $derived.by(() => {
@@ -80,7 +88,6 @@
 		if (!availability) return "Browser runtime is not checked yet";
 		if (!availability.available) return availability.reason;
 		if (!selectedModel) return "Select a model";
-		if (!startUrl.trim()) return "Enter a start URL";
 		if (!prompt.trim()) return "Enter a task";
 		return "";
 	});
@@ -115,12 +122,13 @@
 	async function submit(): Promise<void> {
 		const text = prompt.trim();
 		const url = startUrl.trim();
-		if (blockReason || !text || !url || !selectedModel || running || commandBusy) return;
+		if (blockReason || !text || !selectedModel || running || commandBusy) return;
 		messages = [...messages, { id: ++messageId, role: "user", text }];
 		prompt = "";
 		commandBusy = true;
 		try {
-			const started = await onstart({ model: selectedModel, prompt: text, startUrl: url });
+			const started = await onstart({ model: selectedModel, prompt: text, ...(url ? { startUrl: url } : {}) });
+			startUrl = "";
 			localRunId = started.runId;
 			renderedSettlement = undefined;
 		} catch (error) {
@@ -168,6 +176,88 @@
 		}
 	}
 
+	function pushError(error: unknown): void {
+		messages = [
+			...messages,
+			{ id: ++messageId, role: "assistant", text: error instanceof Error ? error.message : String(error), tone: "error" },
+		];
+	}
+
+	async function takeover(reason?: string): Promise<void> {
+		if (commandBusy || !run || run.control !== "ai" || !running) return;
+		commandBusy = true;
+		try {
+			await ontakeover(reason);
+		} catch (error) {
+			pushError(error);
+		} finally {
+			commandBusy = false;
+		}
+	}
+
+	async function resume(): Promise<void> {
+		if (commandBusy || !run || (run.control !== "human" && run.control !== "pausing")) return;
+		commandBusy = true;
+		try {
+			await onresume();
+		} catch (error) {
+			pushError(error);
+		} finally {
+			commandBusy = false;
+		}
+	}
+
+	let shakeRunId = $state<string | undefined>(undefined);
+	let shakeLastX = 0;
+	let shakeLastDir = 0;
+	let shakeReversals = 0;
+	let shakeWindowStart = 0;
+
+	function handleViewportPointerMove(event: PointerEvent): void {
+		if (!run || run.control !== "ai" || !running || commandBusy) return;
+		if (shakeRunId !== run.runId) {
+			shakeRunId = run.runId;
+			shakeReversals = 0;
+			shakeWindowStart = 0;
+			shakeLastDir = 0;
+			shakeLastX = event.clientX;
+			return;
+		}
+		const now = performance.now();
+		if (now - shakeWindowStart > 900) {
+			shakeWindowStart = now;
+			shakeReversals = 0;
+			shakeLastDir = 0;
+			shakeLastX = event.clientX;
+			return;
+		}
+		const dx = event.clientX - shakeLastX;
+		shakeLastX = event.clientX;
+		if (Math.abs(dx) < 4) return;
+		const dir = dx > 0 ? 1 : -1;
+		if (shakeLastDir !== 0 && dir !== shakeLastDir) {
+			shakeReversals += 1;
+			if (shakeReversals >= 4) {
+				shakeReversals = 0;
+				shakeWindowStart = 0;
+				shakeLastDir = 0;
+				void takeover("Pointer shake takeover gesture.");
+				return;
+			}
+		}
+		shakeLastDir = dir;
+	}
+
+	function handleViewportPointerDown(): void {
+		if (!run || run.control !== "ai" || !running || commandBusy) return;
+		void takeover("Human input in the browser viewport.");
+	}
+
+	function handleViewportWheel(): void {
+		if (!run || run.control !== "ai" || !running || commandBusy) return;
+		void takeover("Human input in the browser viewport.");
+	}
+
 	function handlePromptKeydown(event: KeyboardEvent): void {
 		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
@@ -181,7 +271,7 @@
 		<button type="button" aria-label="Back to Klerm" class="grid h-9 w-9 place-items-center rounded-xl border border-[#303c43] bg-[#10161a] text-[#a7b3b8] transition hover:-translate-x-0.5 hover:border-[#617078] hover:text-white" onclick={onclose}><ArrowLeft size={15} /></button>
 		<div class="flex min-w-0 items-center gap-2.5">
 			<div class="grid h-8 w-8 place-items-center rounded-xl border border-[rgba(190,240,112,.3)] bg-[linear-gradient(145deg,rgba(178,232,92,.16),rgba(72,103,50,.08))] text-[#cef49b]"><Globe2 size={16} /></div>
-			<div><p class="m-0 text-[12px] font-semibold text-[#f0f5f5]">Klerm <span class="font-normal text-[#617178]">/</span> Browser Task</p><p class="m-0 font-mono text-[7px] tracking-[.15em] text-[#60747a] uppercase">Ephemeral read-only run</p></div>
+			<div><p class="m-0 text-[12px] font-semibold text-[#f0f5f5]">Klerm <span class="font-normal text-[#617178]">/</span> Browser Task</p><p class="m-0 font-mono text-[7px] tracking-[.15em] text-[#60747a] uppercase">Session browser / read-only tasks</p></div>
 		</div>
 		<div class={`ml-auto hidden items-center gap-2 rounded-full border px-3 py-1.5 sm:flex ${availability?.available ? "border-[#31432f] bg-[#0c1510]" : "border-[#3b3330] bg-[#15100e]"}`}><span class={`h-1.5 w-1.5 rounded-full ${availability?.available ? "bg-[#a9e66f] shadow-[0_0_9px_#a9e66f]" : "bg-[#c9816f]"}`}></span><span class="max-w-[320px] truncate font-mono text-[7px] tracking-[.11em] text-[#7f9297] uppercase">{runtimeLabel}</span></div>
 	</header>
@@ -200,16 +290,22 @@
 		{#if availability && !availability.available}
 			<div class="mx-auto mt-3 flex w-full max-w-[1480px] items-start gap-2 rounded-xl border border-[#563c34] bg-[#1a100e] px-3 py-2 text-[9px] text-[#d7aaa0]"><ShieldAlert size={13} class="mt-0.5 shrink-0" /><span>{availability.reason}</span></div>
 		{/if}
+		{#if run?.browserReset}
+			<div class="mx-auto mt-3 flex w-full max-w-[1480px] items-start gap-2 rounded-xl border border-[#563c34] bg-[#1a100e] px-3 py-2 text-[9px] text-[#d7aaa0]" role="status"><ShieldAlert size={13} class="mt-0.5 shrink-0" /><span>The browser stopped unexpectedly. Your previous page was lost; your next question starts on a blank page.</span></div>
+		{/if}
 
 		<div class={`mx-auto mt-3 grid min-h-0 w-full max-w-[1480px] flex-1 gap-3 ${placement === "center" ? "grid-rows-[minmax(210px,1fr)_minmax(260px,.9fr)]" : "grid-cols-[minmax(320px,.82fr)_minmax(420px,1.25fr)] max-[850px]:grid-cols-1"}`}>
-			<section class={`relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#293940] bg-[#091116] shadow-[0_24px_70px_rgba(0,0,0,.3)] ${placement !== "center" && !browserFirst ? "order-2" : "order-1"}`}>
-				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#26363d] bg-[#0d171c] px-3"><span class="h-2 w-2 rounded-full bg-[#ff766f]"></span><span class="h-2 w-2 rounded-full bg-[#dfb960]"></span><span class="h-2 w-2 rounded-full bg-[#83ce75]"></span><div class="ml-2 flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-[#2e4046] bg-[#070d11] px-2.5 py-1.5"><LockKeyhole size={10} class="text-[#789081]" /><span class="truncate font-mono text-[8px] text-[#657a80]">{run?.startUrl ?? "browser-use://isolated-chromium"}</span></div><ExternalLink size={11} class="text-[#61767b]" /></div>
+			<section aria-label="Browser viewport. Moving the pointer rapidly side to side, clicking, or scrolling here hands control to you." onpointermove={handleViewportPointerMove} onpointerdown={handleViewportPointerDown} onwheel={handleViewportWheel} class={`relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#293940] bg-[#091116] shadow-[0_24px_70px_rgba(0,0,0,.3)] ${placement !== "center" && !browserFirst ? "order-2" : "order-1"}`}>
+				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#26363d] bg-[#0d171c] px-3"><span class="h-2 w-2 rounded-full bg-[#ff766f]"></span><span class="h-2 w-2 rounded-full bg-[#dfb960]"></span><span class="h-2 w-2 rounded-full bg-[#83ce75]"></span><div class="ml-2 flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-[#2e4046] bg-[#070d11] px-2.5 py-1.5"><LockKeyhole size={10} class="text-[#789081]" /><span class="truncate font-mono text-[8px] text-[#657a80]">{run?.startUrl ? `Task started at ${run.startUrl}` : "No start URL"}</span></div>{#if running && run?.control === "ai"}<button type="button" aria-label="Take browser control" title="Take control from the AI" disabled={commandBusy} class="flex shrink-0 items-center gap-1.5 rounded-lg border border-[#58713d] bg-[#26391c] px-2.5 py-1.5 text-[8px] font-semibold text-[#daf5b8] transition hover:brightness-110 disabled:opacity-40" onclick={() => void takeover()}><Hand size={11} /> Take control</button>{/if}<ExternalLink size={11} class="text-[#61767b]" /></div>
+				{#if run && (humanControl || pausingControl)}
+					<div class={`flex shrink-0 items-start gap-2 border-b px-3 py-2 ${humanControl ? "border-[#31432f] bg-[#0c1510]" : "border-[#65522d] bg-[#1a160b]"}`}><Hand size={13} class={`mt-0.5 shrink-0 ${humanControl ? "text-[#a9e66f]" : "text-[#e3c06b]"}`} /><div class="min-w-0 flex-1"><p class="m-0 text-[10px] font-semibold {humanControl ? "text-[#daf5b8]" : "text-[#f0d58e]"}">{humanControl ? "You are in control" : "Pausing the AI"}</p><p class="mt-0.5 mb-0 text-[8px] leading-[1.5] {humanControl ? "text-[#9db98c]" : "text-[#bba96f]"}">{humanControl ? `${run.controlReason ?? "Human takeover."} The AI waits; nothing resumes without your Continue.` : "The in-flight action drains first, then the AI waits for you."}</p></div><div class="flex shrink-0 gap-2">{#if humanControl}<button type="button" aria-label="Continue browser task" disabled={commandBusy} class="flex items-center gap-1.5 rounded-lg border border-[#648643] bg-[linear-gradient(145deg,#5f843c,#3e602d)] px-2.5 py-1.5 text-[8px] font-semibold text-[#efffd9] disabled:opacity-40" onclick={() => void resume()}><Play size={11} /> Continue</button>{/if}<button type="button" aria-label="Stop browser task" disabled={commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#704847] bg-[#301a1a] text-[#f3a6a1] transition hover:bg-[#442121] disabled:opacity-40" onclick={() => void stop()}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<CircleStop size={13} />{/if}</button></div></div>
+				{/if}
 				<div class="pointer-events-none absolute inset-x-0 top-11 bottom-0 opacity-50 [background-image:linear-gradient(rgba(169,229,190,.035)_1px,transparent_1px),linear-gradient(90deg,rgba(169,229,190,.035)_1px,transparent_1px)] [background-size:25px_25px]"></div>
 				<div class="relative min-h-0 flex-1 overflow-y-auto p-5">
 					<div class="mx-auto max-w-[560px]">
 						<div class={`mx-auto grid h-14 w-14 place-items-center rounded-2xl border ${running ? "border-[#bde67f] bg-[rgba(173,229,99,.13)] text-[#d6f5ae] shadow-[0_0_50px_rgba(163,221,89,.16)]" : "border-[#3a5057] bg-[#0d181d] text-[#8fac95]"}`}><Globe2 size={24} class={running ? "animate-pulse" : ""} /></div>
 						<h2 class="mt-4 mb-1 text-center text-[16px] font-semibold tracking-[-.03em] text-[#e9f0f1]">{run ? `Browser run: ${run.status}` : "Dedicated Chromium"}</h2>
-						<p class="m-0 text-center text-[9px] leading-[1.65] text-[#788d91]">The visible headed browser opens in its own isolated window. Klerm shows only normalized, ordered activity here; the Tauri webview is never automated.</p>
+						<p class="m-0 text-center text-[9px] leading-[1.65] text-[#788d91]">The browser currently opens in a separate window. This panel shows ordered activity, not a live in-app browser.</p>
 						{#if run?.pendingApproval}
 							<div class="mt-4 rounded-xl border border-[#65522d] bg-[#1a160b] p-3"><div class="flex items-start gap-2"><ShieldAlert size={14} class="mt-0.5 shrink-0 text-[#e3c06b]" /><div class="min-w-0"><p class="m-0 text-[10px] font-semibold text-[#f0d58e]">New origin requested</p><p class="mt-1 mb-0 break-all font-mono text-[8px] text-[#bba96f]">{run.pendingApproval.origin}</p></div></div><div class="mt-3 flex flex-wrap gap-2"><button type="button" disabled={commandBusy} class="rounded-lg border border-[#58713d] bg-[#26391c] px-2.5 py-1.5 text-[8px] font-semibold text-[#daf5b8] disabled:opacity-40" onclick={() => void resolveOrigin("approved", "allow_once")}>Allow once</button><button type="button" disabled={commandBusy} class="rounded-lg border border-[#58713d] bg-[#26391c] px-2.5 py-1.5 text-[8px] font-semibold text-[#daf5b8] disabled:opacity-40" onclick={() => void resolveOrigin("approved", "current_run")}>Allow for run</button><button type="button" disabled={commandBusy} class="rounded-lg border border-[#704847] bg-[#301a1a] px-2.5 py-1.5 text-[8px] font-semibold text-[#f3aaa4] disabled:opacity-40" onclick={() => void resolveOrigin("denied")}>Deny and stop</button></div></div>
 						{/if}
@@ -221,16 +317,16 @@
 			</section>
 
 			<section class={`flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#2d3c42] bg-[linear-gradient(155deg,#0d1419,#080d11)] shadow-[0_24px_70px_rgba(0,0,0,.24)] ${placement !== "center" && browserFirst ? "order-2" : "order-1"}`}>
-				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#28363c] px-4"><MessageSquareText size={13} class="text-[#b6db8e]" /><span class="text-[10px] font-semibold text-[#dbe5e6]">Browser task</span><span class="ml-auto rounded-full border border-[#2f4046] px-2 py-0.5 font-mono text-[7px] text-[#64787d]">NOT A SESSION</span></div>
+				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#28363c] px-4"><MessageSquareText size={13} class="text-[#b6db8e]" /><span class="text-[10px] font-semibold text-[#dbe5e6]">Browser task</span><span class="ml-auto rounded-full border border-[#2f4046] px-2 py-0.5 font-mono text-[7px] text-[#64787d]">SESSION BROWSER</span></div>
 				<div class="min-h-0 flex-1 overflow-y-auto p-4">
 					{#if messages.length === 0}
-						<div class="grid h-full min-h-[170px] place-items-center"><div class="max-w-[390px] text-center"><div class="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-[#34464c] bg-[#10191e] text-[#a8c98b]"><Sparkles size={17} /></div><h3 class="mt-3 mb-1.5 text-[13px] font-semibold text-[#dfe8e9]">Read a public site</h3><p class="m-0 text-[9px] leading-[1.6] text-[#718489]">Provide a public start URL and a read-only task. Login, clicking controls, forms, uploads, downloads, account changes, purchases, publishing, and deletion are blocked.</p></div></div>
+						<div class="grid h-full min-h-[170px] place-items-center"><div class="max-w-[390px] text-center"><div class="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-[#34464c] bg-[#10191e] text-[#a8c98b]"><Sparkles size={17} /></div><h3 class="mt-3 mb-1.5 text-[13px] font-semibold text-[#dfe8e9]">Read a public site</h3><p class="m-0 text-[9px] leading-[1.6] text-[#718489]">A start URL is optional. New origins require approval; clicking controls, forms, uploads and downloads remain blocked.</p></div></div>
 					{:else}
 						<div class="space-y-3">{#each messages as message (message.id)}<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><article class={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[10px] leading-[1.6] ${message.role === "user" ? "rounded-br-md border border-[#496038] bg-[linear-gradient(135deg,#304526,#22351e)] text-[#ecf7df]" : message.tone === "error" ? "rounded-bl-md border border-[#65413e] bg-[#211313] text-[#e7aaa4]" : "rounded-bl-md border border-[#304148] bg-[#111a1f] text-[#bcc9cc]"}`}><p class="m-0">{message.text}</p></article></div>{/each}{#if running}<div class="flex justify-start"><div class="flex items-center gap-2 rounded-2xl rounded-bl-md border border-[#304148] bg-[#111a1f] px-3.5 py-2.5"><LoaderCircle size={12} class="animate-spin text-[#b9e184]" /><span class="font-mono text-[8px] text-[#84979b]">{run?.status === "waiting-approval" ? "Waiting for origin approval" : "Browser task running"}</span></div></div>{/if}</div>
 					{/if}
 				</div>
 				<div class="shrink-0 border-t border-[#29373d] bg-[#0a1014] p-3">
-					<div class="mb-2 flex items-center gap-2 rounded-xl border border-[#34444b] bg-[#070c10] px-3"><LockKeyhole size={11} class="shrink-0 text-[#789081]" /><input bind:value={startUrl} type="url" disabled={running} placeholder="https://example.com" class="h-9 min-w-0 flex-1 border-0 bg-transparent font-mono text-[9px] text-[#d8e2e4] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" /></div>
+					<div class="mb-2 flex items-center gap-2 rounded-xl border border-[#34444b] bg-[#070c10] px-3"><LockKeyhole size={11} class="shrink-0 text-[#789081]" /><input bind:value={startUrl} type="url" disabled={running} placeholder="Optional start URL" aria-label="Optional browser start URL" class="h-9 min-w-0 flex-1 border-0 bg-transparent font-mono text-[9px] text-[#d8e2e4] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" /></div>
 					<div class="rounded-2xl border border-[#34444b] bg-[#070c10] p-2 focus-within:border-[#617f50]"><textarea bind:value={prompt} rows="2" disabled={running} placeholder="Ask the browser to read, research, compare, or extract..." class="max-h-28 min-h-12 w-full resize-none border-0 bg-transparent px-2 py-1 text-[11px] leading-[1.5] text-[#e1e8ea] outline-none placeholder:text-[#4d5c62] disabled:opacity-45" onkeydown={handlePromptKeydown}></textarea><div class="flex items-center gap-2 px-1 pb-0.5"><span class={`min-w-0 flex-1 truncate font-mono text-[7px] ${blockReason && !running ? "text-[#c9816f]" : "text-[#5e7075]"}`}>{running ? selectedModel || "Browser task running" : blockReason || selectedModel || "No model selected"}</span>{#if running}<button type="button" aria-label="Stop browser task" disabled={commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#704847] bg-[#301a1a] text-[#f3a6a1] transition hover:bg-[#442121] disabled:opacity-40" onclick={() => void stop()}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<CircleStop size={13} />{/if}</button>{:else}<button type="button" aria-label="Send browser task" disabled={!!blockReason || commandBusy} class="grid h-8 w-8 place-items-center rounded-xl border border-[#648643] bg-[linear-gradient(145deg,#5f843c,#3e602d)] text-[#efffd9] shadow-[0_8px_20px_rgba(90,133,51,.2)] transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-35" onclick={() => void submit()} title={blockReason || "Send browser task"}>{#if commandBusy}<LoaderCircle size={13} class="animate-spin" />{:else}<Send size={13} />{/if}</button>{/if}</div></div>
 					<div class="mt-2 flex items-center gap-1.5 px-1 font-mono text-[7px] text-[#586a70]"><ShieldCheck size={10} class="text-[#80a86d]" /><span>Temporary read-only task. Audit: .klerm/browser-events.jsonl</span>{#if run && !running}<span class="ml-auto flex items-center gap-1 text-[#718d6a]"><Check size={9} /> {run.status}</span>{/if}</div>
 				</div>

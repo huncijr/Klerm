@@ -265,6 +265,8 @@ const DESKTOP_COMMANDS = [
 	"start_browser_run",
 	"resolve_browser_origin",
 	"stop_browser_run",
+	"request_browser_takeover",
+	"resume_browser_run",
 	"get_personal_bots",
 	"upsert_personal_bot",
 	"generate_personal_bot_profile",
@@ -495,25 +497,27 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	let bridgeWriteQueue: Promise<void> = Promise.resolve();
 	let personalBotWriteQueue: Promise<void> = Promise.resolve();
 	let bridgeTransitionQueue: Promise<void> = Promise.resolve();
-	let browserCoordinator: BrowserRunCoordinatorApi | undefined;
-	let browserCoordinatorCwd: string | undefined;
+	const browserCoordinators = new Map<string, BrowserRunCoordinatorApi>();
 	const getBrowserCoordinator = (): BrowserRunCoordinatorApi => {
 		const cwd = session.sessionManager.getCwd();
-		if (browserCoordinator && browserCoordinatorCwd === cwd) return browserCoordinator;
-		browserCoordinator = (
+		const sessionId = session.sessionManager.getSessionId();
+		const key = `${cwd}\0${sessionId}`;
+		const existing = browserCoordinators.get(key);
+		if (existing) return existing;
+		const coordinator = (
 			options.createBrowserRunCoordinator ?? ((coordinatorOptions) => new BrowserRunCoordinator(coordinatorOptions))
 		)({
 			cwd,
+			sessionId,
 			modelRuntime: session.modelRuntime,
-			onEvent: ({ event, state }) => output({ type: "browser_event", event, state }),
+			onEvent: ({ event, state }) => {
+				if (session.sessionManager.getSessionId() === sessionId) output({ type: "browser_event", event, state });
+			},
 		});
-		browserCoordinatorCwd = cwd;
-		return browserCoordinator;
+		browserCoordinators.set(key, coordinator);
+		return coordinator;
 	};
 	const closeCodingHarnessSessions = async () => {
-		await browserCoordinator?.close().catch(() => undefined);
-		browserCoordinator = undefined;
-		browserCoordinatorCwd = undefined;
 		await Promise.all(
 			[...codingHarnessSessions.values()].map((adapterSession) =>
 				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
@@ -3127,12 +3131,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					typeof command.model !== "string" ||
 					typeof command.prompt !== "string" ||
 					!command.prompt.trim() ||
-					typeof command.startUrl !== "string"
+					(command.startUrl !== undefined && typeof command.startUrl !== "string")
 				) {
 					return error(
 						id,
 						"start_browser_run",
-						"Browser model, prompt, and start URL are required.",
+						"Browser model and prompt are required; start URL must be a string when provided.",
 						"INVALID_BROWSER_RUN",
 					);
 				}
@@ -3148,7 +3152,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					const state = await getBrowserCoordinator().start({
 						model: command.model,
 						prompt: command.prompt.trim(),
-						startUrl: command.startUrl.trim(),
+						...(command.startUrl?.trim() ? { startUrl: command.startUrl.trim() } : {}),
 						...(command.maxSteps === undefined ? {} : { maxSteps: command.maxSteps }),
 					});
 					return success(id, "start_browser_run", state);
@@ -3206,6 +3210,54 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"stop_browser_run",
 						browserError instanceof Error ? browserError.message : "Browser run could not be stopped.",
 						"BROWSER_STOP_FAILED",
+					);
+				}
+			}
+
+			case "request_browser_takeover": {
+				if (typeof command.runId !== "string") {
+					return error(id, "request_browser_takeover", "A browser run id is required.", "INVALID_BROWSER_RUN");
+				}
+				if (
+					command.reason !== undefined &&
+					(typeof command.reason !== "string" || !command.reason.length || command.reason.length > 500)
+				) {
+					return error(
+						id,
+						"request_browser_takeover",
+						"Browser takeover reason must be 1 through 500 characters.",
+						"INVALID_BROWSER_TAKEOVER",
+					);
+				}
+				try {
+					const state = await getBrowserCoordinator().takeover({
+						runId: command.runId,
+						...(command.reason === undefined ? {} : { reason: command.reason }),
+					});
+					return success(id, "request_browser_takeover", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"request_browser_takeover",
+						browserError instanceof Error ? browserError.message : "Browser takeover failed.",
+						"BROWSER_TAKEOVER_FAILED",
+					);
+				}
+			}
+
+			case "resume_browser_run": {
+				if (typeof command.runId !== "string") {
+					return error(id, "resume_browser_run", "A browser run id is required.", "INVALID_BROWSER_RUN");
+				}
+				try {
+					const state = await getBrowserCoordinator().resume(command.runId);
+					return success(id, "resume_browser_run", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"resume_browser_run",
+						browserError instanceof Error ? browserError.message : "Browser run could not be resumed.",
+						"BROWSER_RESUME_FAILED",
 					);
 				}
 			}
@@ -5122,6 +5174,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
+		await Promise.all(
+			[...browserCoordinators.values()].map((coordinator) => coordinator.close().catch(() => undefined)),
+		);
+		browserCoordinators.clear();
 		await closeCodingHarnessSessions();
 		unsubscribe?.();
 		unsubscribeBackpressure?.();

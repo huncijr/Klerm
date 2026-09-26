@@ -74,7 +74,7 @@ export interface BrowserWorkerCommandAcceptedEvent extends WorkerEventBase, Work
 	event: "command_accepted";
 	status: "accepted";
 	request_id: string;
-	command: "start" | "stop";
+	command: "start" | "stop" | "takeover" | "resume";
 }
 
 export interface BrowserWorkerOriginApprovalRequiredEvent extends WorkerEventBase, WorkerRunFields {
@@ -120,6 +120,18 @@ export interface BrowserWorkerRunStoppedEvent extends WorkerEventBase, WorkerRun
 	status: "stopped";
 }
 
+export interface BrowserWorkerControlGrantedEvent extends WorkerEventBase, WorkerRunFields {
+	event: "control_granted";
+	status: "paused";
+	reason: string;
+}
+
+export interface BrowserWorkerControlResumedEvent extends WorkerEventBase, WorkerRunFields {
+	event: "control_resumed";
+	status: "running";
+	reason: string;
+}
+
 export interface BrowserWorkerShutdownEvent extends WorkerEventBase {
 	event: "shutdown";
 	status: "completed";
@@ -143,6 +155,8 @@ export type BrowserWorkerEvent =
 	| BrowserWorkerRunCompletedEvent
 	| BrowserWorkerRunFailedEvent
 	| BrowserWorkerRunStoppedEvent
+	| BrowserWorkerControlGrantedEvent
+	| BrowserWorkerControlResumedEvent
 	| BrowserWorkerShutdownEvent
 	| BrowserWorkerCommandRejectedEvent;
 
@@ -255,7 +269,12 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 			exactFields(value, [...baseFields, "request_id", "command", ...runFields]);
 			validateEnvelope(value, "accepted");
 			identifierField(value, "request_id");
-			if (value.command !== "start" && value.command !== "stop") {
+			if (
+				value.command !== "start" &&
+				value.command !== "stop" &&
+				value.command !== "takeover" &&
+				value.command !== "resume"
+			) {
 				throw new Error("Invalid browser worker command acknowledgement.");
 			}
 			validateRunFields(value);
@@ -333,6 +352,18 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 			exactFields(value, [...baseFields, ...runFields]);
 			validateEnvelope(value, "stopped");
 			validateRunFields(value);
+			break;
+		case "control_granted":
+			exactFields(value, [...baseFields, ...runFields, "reason"]);
+			validateEnvelope(value, "paused");
+			validateRunFields(value);
+			stringField(value, "reason", 500);
+			break;
+		case "control_resumed":
+			exactFields(value, [...baseFields, ...runFields, "reason"]);
+			validateEnvelope(value, "running");
+			validateRunFields(value);
+			stringField(value, "reason", 500);
 			break;
 		case "shutdown":
 			exactFields(value, [...baseFields, "request_id"]);
@@ -511,8 +542,8 @@ function validateStartRequest(request: BrowserWorkerStartRequest): void {
 	if (!request.prompt || request.prompt.length > 32_768) throw new Error("Invalid browser worker prompt.");
 	if (!request.model || request.model.length > 256) throw new Error("Invalid browser worker model.");
 	if (!request.token || request.token.length > 8192) throw new Error("Invalid browser worker token.");
-	if (request.allowedOrigins.length < 1 || request.allowedOrigins.length > 64) {
-		throw new Error("A browser run requires 1 to 64 allowed origins.");
+	if (request.allowedOrigins.length > 64) {
+		throw new Error("A browser run accepts at most 64 allowed origins.");
 	}
 	for (const origin of request.allowedOrigins) {
 		if (!validateBrowserOrigin(origin).allowed) throw new Error("Invalid browser worker allowed origin.");
@@ -576,7 +607,6 @@ export class BrowserWorkerRunner {
 	private stdoutBuffer = Buffer.alloc(0);
 	private sequence = 0;
 	private failure?: Error;
-	private startAttempted = false;
 	private activeRunId?: string;
 	private runTerminal = false;
 	private shutdownRequested = false;
@@ -623,9 +653,8 @@ export class BrowserWorkerRunner {
 	}
 
 	async start(request: BrowserWorkerStartRequest): Promise<void> {
-		if (this.startAttempted) throw new Error("A BrowserWorkerRunner can start only one run.");
+		if (this.activeRunId && !this.runTerminal) throw new Error("A browser run is already active.");
 		if (this.shutdownRequested) throw new Error("The browser worker runner is shut down.");
-		this.startAttempted = true;
 		validateStartRequest(request);
 		await this.ensureProcess();
 		this.activeRunId = request.runId;
@@ -725,6 +754,52 @@ export class BrowserWorkerRunner {
 			await this.forceTerminate();
 			throw error;
 		}
+	}
+
+	async takeover(runId: string, reason?: string): Promise<void> {
+		this.assertActiveRun(runId);
+		if (this.runTerminal) throw new Error("Browser run is not active.");
+		if (reason !== undefined && (reason.length < 1 || reason.length > 500)) {
+			throw new Error("Browser takeover reason must be 1 through 500 characters.");
+		}
+		const requestId = randomUUID();
+		const response = this.waitForEvent(
+			(event) =>
+				(event.event === "command_accepted" && event.command === "takeover" && event.request_id === requestId) ||
+				(event.event === "command_rejected" && event.request_id === requestId),
+			this.commandTimeoutMs,
+			"Browser worker did not acknowledge takeover.",
+		);
+		await this.writeCommand({
+			version: BROWSER_WORKER_PROTOCOL_VERSION,
+			command: "takeover",
+			request_id: requestId,
+			run_id: runId,
+			...(reason === undefined ? {} : { reason }),
+		});
+		const event = await response;
+		if (event.event === "command_rejected") throw new Error(event.error);
+	}
+
+	async resume(runId: string): Promise<void> {
+		this.assertActiveRun(runId);
+		if (this.runTerminal) throw new Error("Browser run is not active.");
+		const requestId = randomUUID();
+		const response = this.waitForEvent(
+			(event) =>
+				(event.event === "command_accepted" && event.command === "resume" && event.request_id === requestId) ||
+				(event.event === "command_rejected" && event.request_id === requestId),
+			this.commandTimeoutMs,
+			"Browser worker did not acknowledge resume.",
+		);
+		await this.writeCommand({
+			version: BROWSER_WORKER_PROTOCOL_VERSION,
+			command: "resume",
+			request_id: requestId,
+			run_id: runId,
+		});
+		const event = await response;
+		if (event.event === "command_rejected") throw new Error(event.error);
 	}
 
 	async shutdown(): Promise<void> {

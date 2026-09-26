@@ -4,7 +4,14 @@ import json
 import io
 import unittest
 
-from klerm_browser_worker.protocol import EventWriter, ProtocolError, StartCommand, parse_command
+from klerm_browser_worker.protocol import (
+    EventWriter,
+    ProtocolError,
+    ResumeCommand,
+    StartCommand,
+    TakeoverCommand,
+    parse_command,
+)
 
 
 def valid_start(**changes: object) -> str:
@@ -53,9 +60,10 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "unsupported"):
             parse_command(valid_start(version=2))
 
-    def test_rejects_empty_origin_allowlist(self) -> None:
-        with self.assertRaisesRegex(ProtocolError, "allowed_origins"):
-            parse_command(valid_start(allowed_origins=[]))
+    def test_accepts_empty_origin_allowlist_for_blank_start(self) -> None:
+        command = parse_command(valid_start(allowed_origins=[]))
+        self.assertIsInstance(command, StartCommand)
+        self.assertEqual(command.allowed_origins, ())
 
     def test_events_have_monotonic_sequence_and_required_envelope(self) -> None:
         output = io.StringIO()
@@ -67,6 +75,63 @@ class ProtocolTests(unittest.TestCase):
         for event in events:
             self.assertEqual(event["version"], 1)
             self.assertIn("timestamp", event)
+
+    def test_parses_takeover_with_default_reason(self) -> None:
+        command = parse_command(
+            json.dumps({"version": 1, "command": "takeover", "request_id": "r", "run_id": "run-1"})
+        )
+        self.assertIsInstance(command, TakeoverCommand)
+        assert isinstance(command, TakeoverCommand)
+        self.assertEqual(command.reason, "Human takeover requested")
+
+    def test_parses_takeover_with_explicit_reason(self) -> None:
+        command = parse_command(
+            json.dumps(
+                {
+                    "version": 1,
+                    "command": "takeover",
+                    "request_id": "r",
+                    "run_id": "run-1",
+                    "reason": "CAPTCHA handoff",
+                }
+            )
+        )
+        assert isinstance(command, TakeoverCommand)
+        self.assertEqual(command.reason, "CAPTCHA handoff")
+
+    def test_rejects_takeover_with_oversized_reason(self) -> None:
+        with self.assertRaisesRegex(ProtocolError, "reason"):
+            parse_command(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "command": "takeover",
+                        "request_id": "r",
+                        "run_id": "run-1",
+                        "reason": "x" * 501,
+                    }
+                )
+            )
+
+    def test_rejects_takeover_with_unknown_fields(self) -> None:
+        with self.assertRaisesRegex(ProtocolError, "unknown field"):
+            parse_command(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "command": "takeover",
+                        "request_id": "r",
+                        "run_id": "run-1",
+                        "scope": "current_run",
+                    }
+                )
+            )
+
+    def test_parses_resume(self) -> None:
+        command = parse_command(
+            json.dumps({"version": 1, "command": "resume", "request_id": "r", "run_id": "run-1"})
+        )
+        self.assertIsInstance(command, ResumeCommand)
 
 
 if __name__ == "__main__":

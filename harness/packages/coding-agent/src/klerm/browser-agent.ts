@@ -60,13 +60,18 @@ export type BrowserEventType =
 	| "ACTION"
 	| "APPROVAL_REQUESTED"
 	| "APPROVAL_RESOLVED"
+	| "CONTROL_PAUSE_REQUESTED"
+	| "CONTROL_GRANTED"
+	| "CONTROL_RESUMED"
 	| "RUN_COMPLETED"
 	| "RUN_FAILED"
-	| "RUN_CANCELLED";
+	| "RUN_CANCELLED"
+	| "BROWSER_RESET";
 
 export interface BrowserEventInput {
 	event: BrowserEventType;
 	runId: string;
+	sessionId?: string;
 	taskId?: string;
 	correlationId?: string;
 	agentId?: string;

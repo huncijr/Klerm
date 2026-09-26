@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib
 import inspect
 import logging
 import os
-import tempfile
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -20,6 +20,7 @@ from .policy import (
     RunStopped,
     browser_allowed_domains,
     extract_actions,
+    origin_from_url,
 )
 from .protocol import EventWriter, StartCommand
 from .redaction import redact_text
@@ -77,21 +78,31 @@ class ActiveRuntime:
     policy: OriginPolicy
     event_writer: EventWriter
     on_finished: Callable[[], None]
+    profile_dir: str = ""
     agent: Any = None
     browser: Any = None
     stopped: bool = False
+    terminal_emitted: bool = False
     once_domains_to_remove: set[str] = field(default_factory=set)
+    takeover_reason: str | None = None
+    control_granted: bool = False
+    resume_signal: asyncio.Event = field(default_factory=asyncio.Event)
+    stop_signal: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def run(self) -> None:
         try:
-            with tempfile.TemporaryDirectory(prefix="klerm-browser-") as profile_dir:
-                await self._run_agent(profile_dir)
+            await self._run_agent(self.profile_dir)
         except RunStopped:
+            self.terminal_emitted = True
             self.event_writer.emit("run_stopped", "stopped", **self._run_fields())
         except BaseException as error:
             if self.stopped:
+                self.terminal_emitted = True
                 self.event_writer.emit("run_stopped", "stopped", **self._run_fields())
             else:
+                await self._close_browser()
+                self.browser = None
+                self.terminal_emitted = True
                 self.event_writer.emit(
                     "run_failed",
                     "failed",
@@ -99,7 +110,6 @@ class ActiveRuntime:
                     error=safe_runtime_error(error, (self.command.token, self.command.task)),
                 )
         finally:
-            await self._close_browser()
             self.on_finished()
 
     async def _run_agent(self, profile_dir: str) -> None:
@@ -115,6 +125,7 @@ class ActiveRuntime:
         profile_kwargs: dict[str, object] = {
             _require_field(profile_fields, "headless"): False,
             _require_field(profile_fields, "user_data_dir"): profile_dir,
+            _require_field(profile_fields, "keep_alive"): True,
             _require_field(profile_fields, "disable_security"): False,
             _require_field(profile_fields, "enable_default_extensions"): False,
             _require_field(profile_fields, "permissions"): [],
@@ -135,11 +146,19 @@ class ActiveRuntime:
             profile_kwargs["allow_downloads"] = False
         else:
             raise RuntimeConfigurationError("browser-use lacks required security setting: downloads")
-        profile = BrowserProfile(**profile_kwargs)
-
-        browser_fields = _field_names(Browser)
-        profile_field = _require_field(browser_fields, "browser_profile", "profile")
-        self.browser = Browser(**{profile_field: profile})
+        if self.browser is None:
+            profile = BrowserProfile(**profile_kwargs)
+            browser_fields = _field_names(Browser)
+            profile_field = _require_field(browser_fields, "browser_profile", "profile")
+            self.browser = Browser(**{profile_field: profile})
+        else:
+            profile = getattr(self.browser, "browser_profile", None)
+            if profile is None or not isinstance(getattr(profile, "allowed_domains", None), list):
+                raise RuntimeConfigurationError("browser profile cannot reset origin permissions")
+            current_url = await self.browser.get_current_page_url()
+            if current_url.startswith(("http://", "https://")):
+                self.policy.allowed_for_run.add(origin_from_url(current_url))
+            profile.allowed_domains[:] = browser_allowed_domains(self.policy.allowed_for_run)
 
         llm_fields = _field_names(ChatOpenAI)
         llm_kwargs = {
@@ -180,6 +199,7 @@ class ActiveRuntime:
         with suppress(Exception):
             final_result = history.final_result()
         result_text = final_result if isinstance(final_result, str) else ""
+        self.terminal_emitted = True
         self.event_writer.emit(
             "run_completed",
             "completed",
@@ -220,6 +240,9 @@ class ActiveRuntime:
     async def _step_callback(self, *args: object, **_kwargs: object) -> None:
         if self.stopped:
             raise RunStopped
+        await self._drain_takeover()
+        if self.stopped:
+            raise RunStopped
         self._remove_consumed_once_domains()
         model_output = next(
             (
@@ -247,8 +270,68 @@ class ActiveRuntime:
             actions=action_names,
         )
 
+    async def _drain_takeover(self) -> None:
+        """Pause AI stepping while a human owns the browser.
+
+        A dispatched browser action cannot be retroactively cancelled, so a
+        takeover takes effect at the next step boundary: the in-flight action
+        drains, then `control_granted` is emitted and the agent waits. Resume
+        arriving before the grant is consumed immediately so the wire order
+        stays granted-before-resumed or resumed-only, never a stale grant.
+        """
+        if self.takeover_reason is None:
+            return
+        if self.resume_signal.is_set():
+            reason = self.takeover_reason
+            self._clear_takeover()
+            self.event_writer.emit("control_resumed", "running", **self._run_fields(), reason=reason)
+            return
+        if not self.control_granted:
+            self.control_granted = True
+            self.event_writer.emit(
+                "control_granted", "paused", **self._run_fields(), reason=self.takeover_reason
+            )
+        resume_task = asyncio.create_task(self.resume_signal.wait())
+        stop_task = asyncio.create_task(self.stop_signal.wait())
+        done, pending = await asyncio.wait(
+            {resume_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if stop_task in done or self.stopped:
+            raise RunStopped
+        reason = self.takeover_reason or ""
+        self._clear_takeover()
+        self.event_writer.emit("control_resumed", "running", **self._run_fields(), reason=reason)
+
+    def _clear_takeover(self) -> None:
+        self.takeover_reason = None
+        self.control_granted = False
+        self.resume_signal.clear()
+
+    def request_takeover(self, reason: str) -> bool:
+        """Request human control. Returns True on a new request, False if already held."""
+        if self.stopped:
+            raise PolicyError("browser run is stopping")
+        if self.takeover_reason is not None:
+            return False
+        if not reason or len(reason) > 500:
+            raise PolicyError("takeover reason must be 1 through 500 characters")
+        self.takeover_reason = reason
+        return True
+
+    def resume(self) -> None:
+        """Return control to the agent. The next step re-observes the page."""
+        if self.stopped:
+            raise PolicyError("browser run is stopping")
+        if self.takeover_reason is None:
+            raise PolicyError("no human takeover is active")
+        self.resume_signal.set()
+
     async def stop(self) -> None:
         self.stopped = True
+        self.stop_signal.set()
+        self.resume_signal.set()
         self.policy.stop()
         if self.agent is not None:
             for method_name in ("stop", "pause"):
@@ -264,7 +347,7 @@ class ActiveRuntime:
     async def _close_browser(self) -> None:
         if self.browser is None:
             return
-        for method_name in ("stop", "close", "kill"):
+        for method_name in ("kill", "close", "stop"):
             method = getattr(self.browser, method_name, None)
             if method is None:
                 continue

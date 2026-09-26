@@ -278,7 +278,7 @@ export type RpcCommand =
 			type: "start_browser_run";
 			model: string;
 			prompt: string;
-			startUrl: string;
+			startUrl?: string;
 			maxSteps?: number;
 	  }
 	| {
@@ -290,6 +290,13 @@ export type RpcCommand =
 			scope?: "allow_once" | "current_run";
 	  }
 	| { id?: string; type: "stop_browser_run"; runId: string }
+	| {
+			id?: string;
+			type: "request_browser_takeover";
+			runId: string;
+			reason?: string;
+	  }
+	| { id?: string; type: "resume_browser_run"; runId: string }
 	| { id?: string; type: "get_personal_bots" }
 	| { id?: string; type: "upsert_personal_bot"; bot: PersonalBot }
 	| { id?: string; type: "generate_personal_bot_profile"; botId: string; brief: string; style?: string }

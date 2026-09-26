@@ -216,6 +216,7 @@ describe("Klerm desktop RPC contract", () => {
 			agentId: "browser-agent",
 			model: "faux/test",
 			status: "running",
+			control: "ai",
 			requestedAt: "2026-09-23T10:00:00.000Z",
 			updatedAt: "2026-09-23T10:00:01.000Z",
 			startUrl: "https://example.com/docs",
@@ -223,6 +224,8 @@ describe("Klerm desktop RPC contract", () => {
 		};
 		const browserStart = vi.fn(async () => browserState);
 		const browserApprove = vi.fn(async () => browserState);
+		const browserTakeover = vi.fn(async () => browserState);
+		const browserResume = vi.fn(async () => browserState);
 		const browserStop = vi.fn(async () => ({ ...browserState, status: "cancelled" as const }));
 		const browserClose = vi.fn(async () => undefined);
 		const createBrowserRunCoordinator = vi.fn((_options: BrowserRunCoordinatorOptions) => ({
@@ -230,6 +233,8 @@ describe("Klerm desktop RPC contract", () => {
 			state: () => browserState,
 			start: browserStart,
 			approve: browserApprove,
+			takeover: browserTakeover,
+			resume: browserResume,
 			stop: browserStop,
 			close: browserClose,
 		}));
@@ -326,6 +331,8 @@ describe("Klerm desktop RPC contract", () => {
 							"start_browser_run",
 							"resolve_browser_origin",
 							"stop_browser_run",
+							"request_browser_takeover",
+							"resume_browser_run",
 						]),
 						events: expect.arrayContaining([
 							"model_select",
@@ -833,6 +840,30 @@ describe("Klerm desktop RPC contract", () => {
 				data: { status: "cancelled" },
 			});
 			expect(browserStop).toHaveBeenCalledWith("browser-run-1");
+			expect(
+				await send({
+					id: "browser-takeover",
+					type: "request_browser_takeover",
+					runId: "browser-run-1",
+					reason: "CAPTCHA handoff",
+				}),
+			).toMatchObject({ success: true, data: browserState });
+			expect(browserTakeover).toHaveBeenCalledWith({ runId: "browser-run-1", reason: "CAPTCHA handoff" });
+			expect(
+				await send({
+					id: "browser-takeover-bad",
+					type: "request_browser_takeover",
+					runId: "browser-run-1",
+					reason: "",
+				}),
+			).toMatchObject({ success: false, code: "INVALID_BROWSER_TAKEOVER" });
+			expect(await send({ id: "browser-resume", type: "resume_browser_run", runId: "browser-run-1" })).toMatchObject(
+				{
+					success: true,
+					data: browserState,
+				},
+			);
+			expect(browserResume).toHaveBeenCalledWith("browser-run-1");
 			expect(
 				await send({ id: "personal-bot-delete", type: "delete_personal_bot", botId: "bot-reviewer" }),
 			).toMatchObject({

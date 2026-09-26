@@ -449,7 +449,7 @@
 	async function startBrowserRun(input: {
 		model: string;
 		prompt: string;
-		startUrl: string;
+		startUrl?: string;
 	}): Promise<BrowserRunState> {
 		if (!supportsCommand("start_browser_run")) throw new Error("Restart Klerm to upgrade the desktop backend.");
 		browserActivity = [];
@@ -475,6 +475,26 @@
 	async function stopBrowserRun(): Promise<void> {
 		if (!browserRun || !["queued", "running", "waiting-approval"].includes(browserRun.status)) return;
 		browserRun = await bridge.send<BrowserRunState>("stop_browser_run", { runId: browserRun.runId }, 30_000);
+	}
+
+	async function requestBrowserTakeover(reason?: string): Promise<void> {
+		if (!browserRun || !["queued", "running", "waiting-approval"].includes(browserRun.status)) return;
+		if (browserRun.control !== "ai") return;
+		browserRun = await bridge.send<BrowserRunState>(
+			"request_browser_takeover",
+			{ runId: browserRun.runId, ...(reason ? { reason } : {}) },
+			30_000,
+		);
+	}
+
+	async function resumeBrowserRun(): Promise<void> {
+		if (!browserRun) return;
+		if (browserRun.control !== "human" && browserRun.control !== "pausing") return;
+		browserRun = await bridge.send<BrowserRunState>(
+			"resume_browser_run",
+			{ runId: browserRun.runId },
+			30_000,
+		);
 	}
 
 	function closeBrowserWorkspace(): void {
@@ -3210,6 +3230,8 @@
 				onstart={startBrowserRun}
 				onresolveorigin={resolveBrowserOrigin}
 				onstop={stopBrowserRun}
+				ontakeover={requestBrowserTakeover}
+				onresume={resumeBrowserRun}
 				onclose={closeBrowserWorkspace}
 			/>
 		{:else if selectedProject}

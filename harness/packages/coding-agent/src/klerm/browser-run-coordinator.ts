@@ -63,11 +63,18 @@ for (const [network, prefix] of [
 
 type BrowserCoordinatorModelRuntime = Pick<ModelRuntime, "completeSimple" | "getAvailableSnapshot">;
 
+export type BrowserControlOwner = "ai" | "pausing" | "human";
+
 export interface BrowserRunStartInput {
 	model: string;
 	prompt: string;
-	startUrl: string;
+	startUrl?: string;
 	maxSteps?: number;
+}
+
+export interface BrowserRunTakeoverInput {
+	runId: string;
+	reason?: string;
 }
 
 export interface BrowserRunApprovalInput {
@@ -91,16 +98,20 @@ export interface BrowserRunResultMetadata {
 
 export interface BrowserRunPublicState {
 	runId: string;
+	sessionId?: string;
 	taskId: string;
 	correlationId: string;
 	agentId: string;
 	model: string;
 	status: BrowserRunStatus;
+	browserReset?: boolean;
+	control: BrowserControlOwner;
+	controlReason?: string;
 	requestedAt: string;
 	updatedAt: string;
 	startedAt?: string;
 	settledAt?: string;
-	startUrl: string;
+	startUrl?: string;
 	pendingApproval?: BrowserPendingOriginApproval;
 	lastActions: readonly string[];
 	resultSummary?: string;
@@ -119,12 +130,15 @@ export interface BrowserRunCoordinatorRunner {
 	subscribeFailure(listener: BrowserWorkerFailureListener): () => void;
 	start(request: BrowserWorkerStartRequest): Promise<void>;
 	approve(decision: BrowserWorkerApprovalDecision): Promise<void>;
+	takeover(runId: string, reason?: string): Promise<void>;
+	resume(runId: string): Promise<void>;
 	stop(runId: string): Promise<void>;
 	shutdown(): Promise<void>;
 }
 
 export interface BrowserRunCoordinatorOptions {
 	cwd: string;
+	sessionId?: string;
 	modelRuntime: BrowserCoordinatorModelRuntime;
 	onEvent?: (update: BrowserRunCoordinatorUpdate) => void | Promise<void>;
 	createRunner?: () => BrowserRunCoordinatorRunner;
@@ -140,6 +154,8 @@ export interface BrowserRunCoordinatorApi {
 	state(): BrowserRunPublicState | undefined;
 	start(input: BrowserRunStartInput): Promise<BrowserRunPublicState>;
 	approve(decision: BrowserRunApprovalInput): Promise<BrowserRunPublicState>;
+	takeover(input: BrowserRunTakeoverInput): Promise<BrowserRunPublicState>;
+	resume(runId: string): Promise<BrowserRunPublicState>;
 	stop(runId: string): Promise<BrowserRunPublicState>;
 	close(): Promise<void>;
 }
@@ -161,6 +177,7 @@ function cloneState(state: BrowserRunPublicState): BrowserRunPublicState {
 	return {
 		...state,
 		lastActions: [...state.lastActions],
+		...(state.controlReason === undefined ? {} : { controlReason: state.controlReason }),
 		...(state.pendingApproval ? { pendingApproval: { ...state.pendingApproval } } : {}),
 		...(state.resultMetadata ? { resultMetadata: { ...state.resultMetadata } } : {}),
 	};
@@ -168,6 +185,7 @@ function cloneState(state: BrowserRunPublicState): BrowserRunPublicState {
 
 export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 	private readonly cwd: string;
+	private readonly sessionId?: string;
 	private readonly modelRuntime: BrowserCoordinatorModelRuntime;
 	private readonly onEvent?: (update: BrowserRunCoordinatorUpdate) => void | Promise<void>;
 	private readonly createRunner: () => BrowserRunCoordinatorRunner;
@@ -182,10 +200,13 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 	private eventError = false;
 	private current?: BrowserRunPublicState;
 	private active?: ActiveRun;
+	private browserRunner?: BrowserRunCoordinatorRunner;
+	private unsubscribeIdleFailure?: () => void;
 	private closed = false;
 
 	constructor(options: BrowserRunCoordinatorOptions) {
 		this.cwd = options.cwd;
+		this.sessionId = options.sessionId;
 		this.modelRuntime = options.modelRuntime;
 		this.onEvent = options.onEvent;
 		this.createRunner = options.createRunner ?? (() => new BrowserWorkerRunner());
@@ -235,6 +256,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 
 	start(input: BrowserRunStartInput): Promise<BrowserRunPublicState> {
 		return this.exclusive(async () => {
+			await this.flushEvents();
 			if (this.closed) throw new Error("The browser run coordinator is closed.");
 			if (this.active) throw new Error("A browser run is already active.");
 			if (!input.prompt || input.prompt.length > 32_000) throw new Error("Invalid browser prompt.");
@@ -246,10 +268,12 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				throw new Error("Browser maxSteps must be an integer from 1 to 100.");
 			}
 
-			const url = validateBrowserUrl(input.startUrl);
-			if (!url.allowed) throw new Error(url.reason);
-			await this.assertPublicOrigin(url.origin);
-			if (url.url.length > 2_048) throw new Error("Browser startUrl must not exceed 2048 characters.");
+			const url = input.startUrl?.trim() ? validateBrowserUrl(input.startUrl.trim()) : undefined;
+			if (url && !url.allowed) throw new Error(url.reason);
+			if (url?.allowed) {
+				await this.assertPublicOrigin(url.origin);
+				if (url.url.length > 2_048) throw new Error("Browser startUrl must not exceed 2048 characters.");
+			}
 			const models = this.modelRuntime
 				.getAvailableSnapshot()
 				.filter((model) => input.model === model.id || input.model === modelReference(model));
@@ -260,19 +284,25 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				taskId: this.generatedId("task"),
 				correlationId: this.generatedId("correlation"),
 			};
+			await this.flushEvents();
 			const requestedAt = this.timestamp();
 			this.current = {
 				...ids,
+				...(this.sessionId ? { sessionId: this.sessionId } : {}),
 				agentId: BROWSER_AGENT_ID,
 				model: modelReference(pinnedModel),
 				status: "queued",
+				control: "ai",
 				requestedAt,
 				updatedAt: requestedAt,
-				startUrl: url.url,
+				...(url?.allowed ? { startUrl: url.url } : {}),
 				lastActions: [],
 			};
 
-			const runner = this.createRunner();
+			const runner = this.browserRunner ?? this.createRunner();
+			this.unsubscribeIdleFailure?.();
+			this.unsubscribeIdleFailure = undefined;
+			this.browserRunner = undefined;
 			const active: ActiveRun = {
 				runner,
 				unsubscribeEvent: () => undefined,
@@ -284,7 +314,12 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			this.active = active;
 
 			await this.queueEvent(async () => {
-				await this.record("RUN_REQUESTED", "Browser run requested.", "queued", { url: url.url });
+				await this.record(
+					"RUN_REQUESTED",
+					"Browser run requested.",
+					"queued",
+					url?.allowed ? { url: url.url } : undefined,
+				);
 			});
 			try {
 				active.gateway = await this.startGateway({ modelRuntime: this.modelRuntime, pinnedModel });
@@ -293,10 +328,10 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					agentId: BROWSER_AGENT_ID,
 					prompt: input.prompt,
 					model: modelReference(pinnedModel),
-					startUrl: url.url,
+					...(url?.allowed ? { startUrl: url.url } : {}),
 					baseUrl: active.gateway.url,
 					token: active.gateway.token,
-					allowedOrigins: [url.origin],
+					allowedOrigins: url?.allowed ? [url.origin] : [],
 					...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
 				});
 				await this.flushEvents();
@@ -368,6 +403,60 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		});
 	}
 
+	takeover(input: BrowserRunTakeoverInput): Promise<BrowserRunPublicState> {
+		return this.exclusive(async () => {
+			const active = this.requireActive(input.runId);
+			if (this.current?.control !== "ai") throw new Error("Browser run is already under human control.");
+			if (input.reason !== undefined && (input.reason.length < 1 || input.reason.length > 500)) {
+				throw new Error("Browser takeover reason must be 1 through 500 characters.");
+			}
+			const reason = input.reason ?? "Human takeover requested.";
+			try {
+				await active.runner.takeover(input.runId, reason);
+				await this.flushEvents();
+			} catch {
+				await this.queueEvent(() =>
+					this.failActive(active, "Browser worker process failed.", "Browser worker failed on takeover."),
+				);
+				await this.flushEvents();
+				throw new Error("Browser takeover failed.");
+			}
+			await this.queueEvent(async () => {
+				if (this.active !== active || active.settled) return;
+				this.current = { ...this.requiredState(), control: "pausing", controlReason: reason };
+				await this.record("CONTROL_PAUSE_REQUESTED", "Human control was requested.", "running", { reason });
+			});
+			await this.flushEvents();
+			return this.requiredState();
+		});
+	}
+
+	resume(runId: string): Promise<BrowserRunPublicState> {
+		return this.exclusive(async () => {
+			const active = this.requireActive(runId);
+			if (this.current?.control === "ai") throw new Error("Browser run is not paused for human control.");
+			try {
+				await active.runner.resume(runId);
+				await this.flushEvents();
+			} catch {
+				await this.queueEvent(() =>
+					this.failActive(active, "Browser worker process failed.", "Browser worker failed on resume."),
+				);
+				await this.flushEvents();
+				throw new Error("Browser resume failed.");
+			}
+			await this.queueEvent(async () => {
+				if (this.active !== active || active.settled) return;
+				if (this.requiredState().control === "ai") return;
+				const { controlReason: _dropped, ...rest } = this.requiredState();
+				this.current = { ...rest, control: "ai" };
+				await this.record("CONTROL_RESUMED", "Human returned control to the agent.", "running");
+			});
+			await this.flushEvents();
+			return this.requiredState();
+		});
+	}
+
 	stop(runId: string): Promise<BrowserRunPublicState> {
 		return this.exclusive(async () => {
 			if (this.current?.runId !== runId) throw new Error("Browser run is not active.");
@@ -389,10 +478,17 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 
 	close(): Promise<void> {
 		return this.exclusive(async () => {
-			if (this.closed && !this.active) return;
+			if (this.closed && !this.active && !this.browserRunner) return;
 			this.closed = true;
 			const active = this.active;
-			if (!active) return;
+			if (!active) {
+				this.unsubscribeIdleFailure?.();
+				this.unsubscribeIdleFailure = undefined;
+				const runner = this.browserRunner;
+				this.browserRunner = undefined;
+				await runner?.shutdown();
+				return;
+			}
 			if (!active.settled) {
 				try {
 					await active.runner.stop(this.requiredState().runId);
@@ -415,10 +511,17 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 	}
 
 	private queueWorkerFailure(active: ActiveRun, failure: BrowserWorkerFailure): void {
-		void this.queueEvent(() => {
+		void this.queueEvent(async () => {
+			if (this.active !== active || active.settled) return;
 			const message =
 				failure.reason === "protocol-failed" ? "Browser worker protocol failed." : "Browser worker process failed.";
-			return this.failActive(active, message, message);
+			await this.failActive(active, message, message);
+			this.current = { ...this.requiredState(), browserReset: true };
+			await this.record(
+				"BROWSER_RESET",
+				"Browser worker crashed; the next task starts with a blank page.",
+				"failed",
+			);
 		});
 	}
 
@@ -528,6 +631,32 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			case "run_stopped":
 				await this.cancelActive(active, "Browser run stopped.");
 				break;
+			case "control_granted": {
+				if (this.requiredState().control === "human") break;
+				this.current = {
+					...this.requiredState(),
+					control: "human",
+					controlReason: event.reason,
+				};
+				await this.record(
+					"CONTROL_GRANTED",
+					"Human control is now active; the agent waits.",
+					this.requiredState().status,
+					{ reason: event.reason },
+				);
+				break;
+			}
+			case "control_resumed": {
+				if (this.requiredState().control === "ai") break;
+				const { controlReason: _dropped, ...rest } = this.requiredState();
+				this.current = { ...rest, control: "ai" };
+				await this.record(
+					"CONTROL_RESUMED",
+					"Human returned control; the agent re-observes the page.",
+					this.requiredState().status,
+				);
+				break;
+			}
 			case "command_rejected":
 				await this.failActive(active, "Browser worker rejected the command.", "Browser worker rejected a command.");
 				break;
@@ -554,7 +683,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				result: this.current.resultMetadata,
 			});
 		} finally {
-			await this.cleanup(active);
+			await this.cleanup(active, true);
 		}
 	}
 
@@ -588,7 +717,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		try {
 			await this.record("RUN_CANCELLED", reason, "cancelled");
 		} finally {
-			await this.cleanup(active);
+			await this.cleanup(active, true);
 		}
 	}
 
@@ -604,6 +733,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			runId: state.runId,
 			taskId: state.taskId,
 			correlationId: state.correlationId,
+			...(state.sessionId ? { sessionId: state.sessionId } : {}),
 			agentId: state.agentId,
 			status,
 			reason,
@@ -620,12 +750,32 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		}
 	}
 
-	private cleanup(active: ActiveRun): Promise<void> {
+	private cleanup(active: ActiveRun, retainBrowser = false): Promise<void> {
 		if (active.cleanup) return active.cleanup;
 		active.unsubscribeEvent();
 		active.unsubscribeFailure();
 		active.cleanup = (async () => {
-			await Promise.allSettled([active.gateway?.close() ?? Promise.resolve(), active.runner.shutdown()]);
+			await active.gateway?.close().catch(() => undefined);
+			if (retainBrowser && !this.closed) {
+				this.browserRunner = active.runner;
+				this.unsubscribeIdleFailure = active.runner.subscribeFailure(() => {
+					if (this.browserRunner !== active.runner) return;
+					this.unsubscribeIdleFailure?.();
+					this.unsubscribeIdleFailure = undefined;
+					this.browserRunner = undefined;
+					void this.queueEvent(async () => {
+						this.current = { ...this.requiredState(), browserReset: true };
+						await this.record(
+							"BROWSER_RESET",
+							"Browser worker crashed; the next task starts with a blank page.",
+							this.requiredState().status,
+						);
+					});
+					void active.runner.shutdown().catch(() => undefined);
+				});
+			} else {
+				await active.runner.shutdown().catch(() => undefined);
+			}
 			if (this.active === active) this.active = undefined;
 		})();
 		return active.cleanup;

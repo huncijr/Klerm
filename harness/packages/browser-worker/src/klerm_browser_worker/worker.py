@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from typing import TextIO
 
 from . import __version__
@@ -13,9 +14,11 @@ from .protocol import (
     Command,
     EventWriter,
     ProtocolError,
+    ResumeCommand,
     ShutdownCommand,
     StartCommand,
     StopCommand,
+    TakeoverCommand,
     parse_command,
 )
 from .redaction import redact_text
@@ -29,6 +32,8 @@ class Worker:
         self.active: ActiveRuntime | None = None
         self.run_task: asyncio.Task[None] | None = None
         self.shutting_down = False
+        self.profile = tempfile.TemporaryDirectory(prefix="klerm-browser-")
+        self.browser: object | None = None
 
     async def serve(self) -> None:
         self.events.emit(
@@ -55,6 +60,8 @@ class Worker:
 
     async def _dispatch(self, command: Command) -> None:
         if isinstance(command, StartCommand):
+            if self.active is not None and self.active.terminal_emitted and self.run_task is not None:
+                await self.run_task
             if self.active is not None:
                 self._reject(command.request_id, "a browser run is already active")
                 return
@@ -71,10 +78,15 @@ class Worker:
             policy = OriginPolicy(command.allowed_origins, approval_required)
 
             def finished() -> None:
+                if self.active is not None:
+                    self.browser = self.active.browser
+                    if self.browser is None:
+                        self.profile.cleanup()
+                        self.profile = tempfile.TemporaryDirectory(prefix="klerm-browser-")
                 self.active = None
                 self.run_task = None
 
-            self.active = ActiveRuntime(command, policy, self.events, finished)
+            self.active = ActiveRuntime(command, policy, self.events, finished, self.profile.name, browser=self.browser)
             self.events.emit(
                 "command_accepted",
                 "accepted",
@@ -111,6 +123,40 @@ class Worker:
             )
             await active.stop()
             return
+        if isinstance(command, TakeoverCommand):
+            active = self._matching_run(command.request_id, command.run_id)
+            if active is None:
+                return
+            try:
+                active.request_takeover(command.reason)
+            except PolicyError as error:
+                self._reject(command.request_id, redact_text(error))
+                return
+            self.events.emit(
+                "command_accepted",
+                "accepted",
+                request_id=command.request_id,
+                command="takeover",
+                **self._run_fields(active.command),
+            )
+            return
+        if isinstance(command, ResumeCommand):
+            active = self._matching_run(command.request_id, command.run_id)
+            if active is None:
+                return
+            try:
+                active.resume()
+            except PolicyError as error:
+                self._reject(command.request_id, redact_text(error))
+                return
+            self.events.emit(
+                "command_accepted",
+                "accepted",
+                request_id=command.request_id,
+                command="resume",
+                **self._run_fields(active.command),
+            )
+            return
         if isinstance(command, ShutdownCommand):
             await self._shutdown(command.request_id)
 
@@ -129,6 +175,18 @@ class Worker:
                 await asyncio.wait_for(self.run_task, timeout=10)
             except TimeoutError:
                 self.run_task.cancel()
+        try:
+            if self.browser is not None:
+                runtime = self.active
+                if runtime is not None:
+                    await runtime._close_browser()
+                else:
+                    close = getattr(self.browser, "kill", None)
+                    if callable(close):
+                        await close()
+                self.browser = None
+        finally:
+            self.profile.cleanup()
         self.events.emit("shutdown", "completed", request_id=request_id)
 
     def _reject(self, request_id: str | None, reason: str) -> None:

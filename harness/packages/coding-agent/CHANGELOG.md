@@ -42,6 +42,7 @@
 
 ### Changed
 
+- Changed Browser Task to accept an optional start URL and reuse one headed browser per Klerm conversation session across follow-up questions; worker failure resets the next run to a blank profile, and human takeover/Continue use explicit audited control events. Native in-app CEF hosting remains pending.
 - Changed desktop Memory settings to make the shared team prompt the only Klerm-owned harness memory and show the exact active shared prompt sent to external agents; Personal Bots remain standalone chats.
 - Removed Personal Bot and memory-profile assignment from coding-harness slots, including legacy persisted-field normalization and desktop model-menu controls.
 - Removed automatic Personal Bot summary generation and the desktop summary history, cadence, pending-task, and summary-state controls.

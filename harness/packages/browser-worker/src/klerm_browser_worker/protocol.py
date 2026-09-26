@@ -80,12 +80,28 @@ class StopCommand:
     run_id: str
 
 
+DEFAULT_TAKEOVER_REASON = "Human takeover requested"
+
+
+@dataclass(frozen=True)
+class TakeoverCommand:
+    request_id: str
+    run_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ResumeCommand:
+    request_id: str
+    run_id: str
+
+
 @dataclass(frozen=True)
 class ShutdownCommand:
     request_id: str
 
 
-Command = StartCommand | ApproveOriginCommand | StopCommand | ShutdownCommand
+Command = StartCommand | ApproveOriginCommand | StopCommand | TakeoverCommand | ResumeCommand | ShutdownCommand
 
 
 def parse_command(line: str) -> Command:
@@ -119,7 +135,7 @@ def parse_command(line: str) -> Command:
         }
         _strict_fields(payload, required, {"max_steps"})
         origins = payload["allowed_origins"]
-        if not isinstance(origins, list) or not 1 <= len(origins) <= 64 or not all(isinstance(item, str) for item in origins):
+        if not isinstance(origins, list) or len(origins) > 64 or not all(isinstance(item, str) for item in origins):
             raise ProtocolError("invalid field: allowed_origins")
         max_steps = payload.get("max_steps", 25)
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 100:
@@ -163,6 +179,22 @@ def parse_command(line: str) -> Command:
     if command == "stop":
         _strict_fields(payload, {"version", "command", "request_id", "run_id"})
         return StopCommand(
+            request_id=_identifier(payload, "request_id"),
+            run_id=_identifier(payload, "run_id"),
+        )
+    if command == "takeover":
+        _strict_fields(payload, {"version", "command", "request_id", "run_id"}, {"reason"})
+        reason = payload.get("reason", DEFAULT_TAKEOVER_REASON)
+        if not isinstance(reason, str) or not reason or len(reason) > 500:
+            raise ProtocolError("invalid field: reason")
+        return TakeoverCommand(
+            request_id=_identifier(payload, "request_id"),
+            run_id=_identifier(payload, "run_id"),
+            reason=reason,
+        )
+    if command == "resume":
+        _strict_fields(payload, {"version", "command", "request_id", "run_id"})
+        return ResumeCommand(
             request_id=_identifier(payload, "request_id"),
             run_id=_identifier(payload, "run_id"),
         )

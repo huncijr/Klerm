@@ -116,6 +116,30 @@ lines.on("line", (line) => {
     emit("run_stopped", "stopped", runFields());
     return;
   }
+  if (command.command === "takeover") {
+    emit("command_accepted", "accepted", {
+      request_id: command.request_id,
+      command: "takeover",
+      ...runFields(),
+    });
+    emit("control_granted", "paused", {
+      ...runFields(),
+      reason: command.reason ?? "Human takeover requested",
+    });
+    return;
+  }
+  if (command.command === "resume") {
+    emit("command_accepted", "accepted", {
+      request_id: command.request_id,
+      command: "resume",
+      ...runFields(),
+    });
+    emit("control_resumed", "running", {
+      ...runFields(),
+      reason: "Human takeover requested",
+    });
+    return;
+  }
   if (command.command === "shutdown") {
     emit("shutdown", "completed", { request_id: command.request_id });
     setImmediate(() => process.exit(0));
@@ -183,7 +207,14 @@ describe("BrowserWorkerRunner", () => {
 			scope: "current_run",
 		});
 		await runner.stop("run-1");
-		await expect(runner.start({ ...startRequest(), runId: "run-2" })).rejects.toThrow("only one run");
+		await runner.start({
+			...startRequest(),
+			runId: "run-2",
+			taskId: "task-2",
+			startUrl: undefined,
+			allowedOrigins: [],
+		});
+		await runner.stop("run-2");
 		await runner.shutdown();
 
 		expect(events.map((event) => event.event)).toEqual([
@@ -192,6 +223,11 @@ describe("BrowserWorkerRunner", () => {
 			"run_started",
 			"origin_approval_required",
 			"origin_approved",
+			"command_accepted",
+			"run_stopped",
+			"command_accepted",
+			"run_started",
+			"origin_approval_required",
 			"command_accepted",
 			"run_stopped",
 			"shutdown",
@@ -209,7 +245,16 @@ describe("BrowserWorkerRunner", () => {
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		expect(commands.map((command) => command.command)).toEqual(["start", "approve_origin", "stop", "shutdown"]);
+		expect(commands.map((command) => command.command)).toEqual([
+			"start",
+			"approve_origin",
+			"stop",
+			"start",
+			"stop",
+			"shutdown",
+		]);
+		expect(commands[3]?.allowed_origins).toEqual([]);
+		expect(commands[3]?.task).toBe("Read the public documentation.");
 		expect(commands[0]).toMatchObject({
 			run_id: "run-1",
 			task_id: "task-1",
@@ -218,6 +263,48 @@ describe("BrowserWorkerRunner", () => {
 			task: "Begin at this validated public URL: https://example.com/docs\n\nRequested task:\nRead the public documentation.",
 			max_steps: 10,
 		});
+	});
+
+	it("hands control to a human and back with ordered control events", async () => {
+		const fake = await fakeWorker("normal");
+		const runner = new BrowserWorkerRunner({ env: fake.env });
+		const events: BrowserWorkerEvent[] = [];
+		runner.subscribe((event) => events.push(event));
+
+		await runner.start(startRequest());
+		await runner.takeover("run-1", "CAPTCHA handoff");
+		await runner.resume("run-1");
+		await runner.shutdown();
+
+		expect(events.map((event) => event.event)).toEqual([
+			"ready",
+			"command_accepted",
+			"run_started",
+			"origin_approval_required",
+			"command_accepted",
+			"control_granted",
+			"command_accepted",
+			"control_resumed",
+			"shutdown",
+		]);
+		expect(events.find((event) => event.event === "control_granted")).toMatchObject({
+			status: "paused",
+			reason: "CAPTCHA handoff",
+		});
+		const commands = (await readFile(`${fake.capturePath}.commands`, "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(commands.map((command) => command.command)).toEqual(["start", "takeover", "resume", "shutdown"]);
+		expect(commands[1]).toMatchObject({ run_id: "run-1", reason: "CAPTCHA handoff" });
+	});
+
+	it("rejects an oversized takeover reason before contacting the worker", async () => {
+		const fake = await fakeWorker("normal");
+		const runner = new BrowserWorkerRunner({ env: fake.env });
+		await runner.start(startRequest());
+		await expect(runner.takeover("run-1", "x".repeat(501))).rejects.toThrow("1 through 500");
+		await runner.shutdown();
 	});
 
 	it.each(["malformed", "oversized", "out-of-order"])("rejects %s stdout", async (mode) => {
