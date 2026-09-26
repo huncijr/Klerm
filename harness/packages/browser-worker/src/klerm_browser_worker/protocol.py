@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TextIO
 
-from .policy import PolicyError, normalize_origin, validate_loopback_base_url
+from .policy import PolicyError, normalize_origin, origin_from_url, validate_loopback_base_url
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 1_048_576
@@ -64,6 +64,8 @@ class StartCommand:
     token: str
     allowed_origins: tuple[str, ...]
     max_steps: int
+    start_url: str | None = None
+    cdp_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,14 @@ class ApproveOriginCommand:
     run_id: str
     origin: str
     scope: str
+
+
+@dataclass(frozen=True)
+class ApproveActionCommand:
+    request_id: str
+    run_id: str
+    action_id: str
+    decision: str
 
 
 @dataclass(frozen=True)
@@ -101,7 +111,7 @@ class ShutdownCommand:
     request_id: str
 
 
-Command = StartCommand | ApproveOriginCommand | StopCommand | TakeoverCommand | ResumeCommand | ShutdownCommand
+Command = StartCommand | ApproveOriginCommand | ApproveActionCommand | StopCommand | TakeoverCommand | ResumeCommand | ShutdownCommand
 
 
 def parse_command(line: str) -> Command:
@@ -133,7 +143,7 @@ def parse_command(line: str) -> Command:
             "token",
             "allowed_origins",
         }
-        _strict_fields(payload, required, {"max_steps"})
+        _strict_fields(payload, required, {"max_steps", "start_url", "cdp_url"})
         origins = payload["allowed_origins"]
         if not isinstance(origins, list) or len(origins) > 64 or not all(isinstance(item, str) for item in origins):
             raise ProtocolError("invalid field: allowed_origins")
@@ -143,6 +153,17 @@ def parse_command(line: str) -> Command:
         try:
             normalized_origins = tuple(dict.fromkeys(normalize_origin(item) for item in origins))
             base_url = validate_loopback_base_url(_string(payload, "base_url", maximum=2048))
+            cdp_url = _string(payload, "cdp_url", maximum=100) if "cdp_url" in payload else None
+            if cdp_url is not None:
+                try:
+                    cdp_url = validate_loopback_base_url(cdp_url)
+                except PolicyError as error:
+                    raise PolicyError("CDP endpoint must target loopback") from error
+            if cdp_url is not None and not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}", cdp_url):
+                raise PolicyError("CDP endpoint must be a local CEF browser")
+            start_url = _string(payload, "start_url", maximum=2048) if "start_url" in payload else None
+            if start_url is not None and origin_from_url(start_url) not in normalized_origins:
+                raise PolicyError("start URL origin was not approved")
         except PolicyError as error:
             raise ProtocolError(str(error)) from error
         return StartCommand(
@@ -157,6 +178,8 @@ def parse_command(line: str) -> Command:
             token=_string(payload, "token", maximum=8192),
             allowed_origins=normalized_origins,
             max_steps=max_steps,
+            start_url=start_url,
+            cdp_url=cdp_url,
         )
     if command == "approve_origin":
         _strict_fields(
@@ -175,6 +198,17 @@ def parse_command(line: str) -> Command:
             run_id=_identifier(payload, "run_id"),
             origin=origin,
             scope=scope,
+        )
+    if command == "approve_action":
+        _strict_fields(payload, {"version", "command", "request_id", "run_id", "action_id", "decision"})
+        decision = _string(payload, "decision", maximum=8)
+        if decision not in {"approved", "denied"}:
+            raise ProtocolError("invalid field: decision")
+        return ApproveActionCommand(
+            request_id=_identifier(payload, "request_id"),
+            run_id=_identifier(payload, "run_id"),
+            action_id=_identifier(payload, "action_id"),
+            decision=decision,
         )
     if command == "stop":
         _strict_fields(payload, {"version", "command", "request_id", "run_id"})

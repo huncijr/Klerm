@@ -46,9 +46,11 @@ duplicate JSON keys, malformed identifiers, non-loopback model endpoints, and
 oversized input are rejected. One browser run may be active at a time; follow-up
 starts on the same worker reuse its browser until shutdown. An empty
 `allowed_origins` list starts without a chosen URL and requires approval for
-the first navigation origin.
+the first navigation origin. The desktop may supply `cdp_url` for its native
+CEF browser and `start_url` for an explicitly requested, approved navigation;
+the worker navigates before calling the model and emits a `navigation` event.
 
-Start a read-only run:
+Start a guarded browser run:
 
 ```json
 {"version":1,"command":"start","request_id":"req-1","run_id":"run-1","task_id":"task-1","correlation_id":"corr-1","agent_id":"agent-1","task":"Summarize the public documentation at the approved origin.","model":"local-model","base_url":"http://127.0.0.1:8080/v1","token":"local-token","allowed_origins":["https://example.com"],"max_steps":25}
@@ -62,6 +64,16 @@ Approve an origin requested by `origin_approval_required`:
 
 Use `current_run` instead of `allow_once` to allow the exact origin for the
 remainder of this run. No approval is persisted.
+
+Approve one action requested by `action_approval_required` (or use `denied`):
+
+```json
+{"version":1,"command":"approve_action","request_id":"req-5","run_id":"run-1","action_id":"action-1","decision":"approved"}
+```
+
+The request identifies the action, target type, and origin without echoing
+field contents or keyboard input. An approved decision applies only to that
+pending action, not to later actions.
 
 Stop the active run:
 
@@ -90,6 +102,8 @@ SHA-256 metadata.
   runs in its Klerm conversation session. It is removed on worker shutdown or
   replaced after a runtime failure; approval scope is reset between runs,
   except for the origin already open in the reused page.
+- In desktop mode the CEF host owns the Chromium process and page. The worker
+  connects through loopback CDP and detaches without killing the host.
 - Chromium is headed, sandboxing remains enabled, browser security remains
   enabled, default extensions are disabled, and permissions are empty.
 - Downloads and automatic PDF downloads are disabled.
@@ -102,10 +116,12 @@ SHA-256 metadata.
 - Browser navigation is limited to explicitly supplied origins and origins
   approved for the current run. Planned new-origin actions pause in the
   browser-use pre-action step callback.
-- The worker excludes known click, input, upload, download, form submission,
-  credential, account-changing, purchase, publish, delete, clipboard, and file
-  actions. A second pre-action allowlist rejects unknown or non-read-only action
-  names.
+- The worker permits known indexed HTTP links and recognized search fields;
+  other indexed clicks/inputs, dropdown selections, and keypresses wait for
+  user approval before execution. Only one validated action runs per observed
+  browser step. Unknown actions and uploads, downloads, clipboard and file
+  actions remain excluded. Labeled credential fields and human-verification
+  controls require manual takeover.
 - CAPTCHA, anti-bot, paywall, and other access-control bypass is prohibited in
   the enforced task instruction.
 - Required browser-use security fields and hooks are checked at runtime. The run
@@ -123,6 +139,18 @@ uv run --frozen python -m unittest discover -s tests -v
 From the repository root, `npm run check` also verifies the TypeScript
 coordinator, RPC contract, and desktop types.
 
+For the Linux desktop CEF host, after building the native host:
+
+```bash
+cd harness/packages/desktop
+node scripts/build-browser-host.mjs
+node scripts/smoke-cef-host.mjs
+```
+
+The native smoke serves an isolated local fixture and verifies off-screen paint,
+click-to-DOM delivery, and the same page's CDP endpoint. The first host build
+downloads the pinned CEF distribution; no provider or model is needed.
+
 ## Limitations
 
 - The TypeScript owner writes backend-global ordered events to the active
@@ -131,15 +159,18 @@ coordinator, RPC contract, and desktop types.
 - Final browser-use text and page bodies are deliberately not emitted. Only
   result metadata is available until Klerm defines a separate reviewed content
   channel.
-- Read-only mode excludes clicks and keyboard input, so sites that require UI
-  interaction cannot be researched by this first worker.
+- Approval is based on the current DOM snapshot and action kind; opaque event
+  handlers and redirects cannot always be classified before a click. Use human
+  takeover for verification challenges and credential entry. Real-model desktop
+  interaction still needs a manual smoke test.
 - Origin approval depends on browser-use's pre-action callback plus its
   `allowed_domains` browser control. Redirect handling remains fail-closed at
   the browser layer, but a blocked redirect may fail the step without producing
   an approval request.
-- A real headed run still needs a human smoke test with a usable Chromium and an
-  authenticated Klerm model. Automated tests do not validate window-manager or
-  Chromium packaging behavior.
-- The Chromium window is still separate from the Tauri application. Native CEF
-  hosting, in-app input forwarding, and browser-crash detection beyond worker
-  failure are not implemented yet.
+- The native Linux CEF host renders off-screen paint in the Tauri Browser view,
+  forwards human input and exposes the same page to browser-use via CDP. A
+  no-model smoke checked YouTube navigation, paint, a native click and keyboard
+  input, plus browser-use attachment. A full Tauri UI/model smoke is pending.
+- Release bundling of CEF's runtime and third-party notices, non-Linux hosting,
+  and page-only crash detection remain pending. The loopback CDP endpoint has
+  no authentication broker; it is not an authenticated capability.

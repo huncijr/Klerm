@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import inspect
 import logging
+import math
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -14,11 +15,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .policy import (
-    READ_ONLY_ACTIONS,
+    ALLOWED_ACTIONS,
     OriginPolicy,
     PolicyError,
     RunStopped,
     browser_allowed_domains,
+    check_interactive_target,
     extract_actions,
     origin_from_url,
 )
@@ -88,6 +90,10 @@ class ActiveRuntime:
     control_granted: bool = False
     resume_signal: asyncio.Event = field(default_factory=asyncio.Event)
     stop_signal: asyncio.Event = field(default_factory=asyncio.Event)
+    pending_action_id: str | None = None
+    action_signal: asyncio.Event = field(default_factory=asyncio.Event)
+    action_decision: str | None = None
+    action_sequence: int = 0
 
     async def run(self) -> None:
         try:
@@ -140,6 +146,8 @@ class ActiveRuntime:
         }
         sandbox_field = _require_field(profile_fields, "chromium_sandbox", "sandbox")
         profile_kwargs[sandbox_field] = True
+        if self.command.cdp_url is not None:
+            profile_kwargs[_require_field(profile_fields, "cdp_url")] = self.command.cdp_url
         if "downloads_path" in profile_fields:
             profile_kwargs["downloads_path"] = None
         elif "allow_downloads" in profile_fields:
@@ -157,7 +165,7 @@ class ActiveRuntime:
                 raise RuntimeConfigurationError("browser profile cannot reset origin permissions")
             current_url = await self.browser.get_current_page_url()
             if current_url.startswith(("http://", "https://")):
-                self.policy.allowed_for_run.add(origin_from_url(current_url))
+                await self.policy.require(current_url)
             profile.allowed_domains[:] = browser_allowed_domains(self.policy.allowed_for_run)
 
         llm_fields = _field_names(ChatOpenAI)
@@ -174,7 +182,7 @@ class ActiveRuntime:
 
         agent_fields = _field_names(Agent)
         agent_kwargs: dict[str, object] = {
-            _require_field(agent_fields, "task"): self._read_only_task(),
+            _require_field(agent_fields, "task"): self._browser_task(),
             _require_field(agent_fields, "llm"): llm,
             _require_field(agent_fields, "browser", "browser_session"): self.browser,
             _require_field(agent_fields, "use_vision"): False,
@@ -188,6 +196,18 @@ class ActiveRuntime:
         self.agent = Agent(**agent_kwargs)
 
         self.event_writer.emit("run_started", "running", **self._run_fields())
+        if self.command.cdp_url is not None and self.command.start_url is None:
+            await self.browser.start()
+            current_url = await self.browser.get_current_page_url()
+            if current_url.startswith(("http://", "https://")):
+                await self.policy.require(current_url)
+                self.browser.browser_profile.allowed_domains[:] = browser_allowed_domains(self.policy.allowed_for_run)
+        if self.command.start_url is not None:
+            await self.browser.start()
+            await self.browser.navigate_to(self.command.start_url)
+            self.event_writer.emit(
+                "navigation", "running", **self._run_fields(), origin=origin_from_url(self.command.start_url)
+            )
         run_fields = _field_names(self.agent.run)
         run_kwargs: dict[str, object] = {}
         if "max_steps" in run_fields:
@@ -230,19 +250,53 @@ class ActiveRuntime:
         if not isinstance(actions, dict) or not callable(exclude_action):
             raise RuntimeConfigurationError("browser-use cannot enforce a read-only action allowlist")
         for action_name in tuple(actions):
-            if action_name not in READ_ONLY_ACTIONS:
+            if action_name not in ALLOWED_ACTIONS:
                 exclude_action(action_name)
         remaining = set(actions)
-        if not {"navigate", "done"}.issubset(remaining) or not remaining.issubset(READ_ONLY_ACTIONS):
+        if not {"navigate", "done", "click", "input", "send_keys", "select_dropdown"}.issubset(remaining) or not remaining.issubset(ALLOWED_ACTIONS):
             raise RuntimeConfigurationError("browser-use read-only action allowlist is incomplete")
+        original_act = getattr(tools, "act", None)
+        if not callable(original_act):
+            raise RuntimeConfigurationError("browser-use lacks an observable action executor")
+
+        async def traced_act(action: object, *args: object, **kwargs: object) -> object:
+            data = action.model_dump(exclude_none=True) if hasattr(action, "model_dump") else None
+            names = [name for name in data if data[name] is not None] if isinstance(data, dict) else []
+            if len(names) != 1 or names[0] not in ALLOWED_ACTIONS:
+                raise PolicyError("browser attempted an unvalidated action")
+            name = names[0]
+            self.event_writer.emit("action_dispatched", "running", **self._run_fields(), action=name)
+            try:
+                result = await original_act(action, *args, **kwargs)
+            except BaseException:
+                self.event_writer.emit("action_settled", "failed", **self._run_fields(), action=name)
+                raise
+            self.event_writer.emit("action_settled", "failed" if getattr(result, "error", None) else "completed",
+                                   **self._run_fields(), action=name)
+            return result
+
+        tools.act = traced_act
         agent_kwargs["tools"] = tools
 
     async def _step_callback(self, *args: object, **_kwargs: object) -> None:
         if self.stopped:
             raise RunStopped
-        await self._drain_takeover()
+        resumed = await self._drain_takeover()
         if self.stopped:
             raise RunStopped
+        if resumed:
+            model_output = next(
+                (arg for arg in args if getattr(arg, "action", None) is not None
+                 or (isinstance(arg, dict) and arg.get("action") is not None)),
+                None,
+            )
+            if isinstance(model_output, dict):
+                model_output["action"] = []
+            elif model_output is not None:
+                model_output.action = []
+            # The already-produced model plan was made against the old page.
+            # browser-use now runs an empty batch and observes again next step.
+            return
         self._remove_consumed_once_domains()
         model_output = next(
             (
@@ -255,22 +309,131 @@ class ActiveRuntime:
         )
         if model_output is None:
             return
+        raw_actions = getattr(model_output, "action", None)
+        if isinstance(model_output, dict):
+            raw_actions = model_output.get("action")
+        # Only one validated operation can execute before the next DOM observation.
+        if isinstance(raw_actions, list) and len(raw_actions) > 1:
+            if isinstance(model_output, dict):
+                model_output["action"] = raw_actions[:1]
+            else:
+                model_output.action = raw_actions[:1]
         actions = extract_actions(model_output)
+        state = args[0] if args else None
+        selector_map = getattr(getattr(state, "dom_state", None), "selector_map", None)
         action_names: list[str] = []
-        for action_name, urls in actions:
-            if action_name not in READ_ONLY_ACTIONS:
-                raise PolicyError("browser proposed a non-read-only action")
+        approval_kind: str | None = None
+        for index, (action_name, urls) in enumerate(actions):
+            if action_name not in ALLOWED_ACTIONS:
+                raise PolicyError("browser proposed an unsupported action")
             action_names.append(action_name)
+            if action_name in {"click", "input"}:
+                proposed = raw_actions[index] if isinstance(raw_actions, list) else None
+                if hasattr(proposed, "model_dump"):
+                    proposed = proposed.model_dump(exclude_none=True)
+                params = proposed.get(action_name) if isinstance(proposed, dict) else None
+                if not isinstance(params, dict):
+                    raise PolicyError("browser interaction arguments are invalid")
+                node = selector_map.get(params.get("index")) if isinstance(selector_map, dict) and type(params.get("index")) is int else None
+                attributes = getattr(node, "attributes", {})
+                if isinstance(attributes, dict):
+                    hint = " ".join(str(attributes.get(key, "")) for key in ("id", "name", "aria-label", "href", "type")).lower()
+                    if any(word in hint for word in ("captcha", "recaptcha", "verify human", "not a robot")):
+                        self.request_takeover("Human verification requires manual control.")
+                        if isinstance(model_output, dict):
+                            model_output["action"] = []
+                        else:
+                            model_output.action = []
+                        await self._drain_takeover()
+                        return
+                    if any(word in hint for word in ("upload", "download", "password", "secret", "token", "credit card")):
+                        raise PolicyError("this browser control requires human takeover")
+                    if action_name == "click" and str(getattr(node, "node_name", "")).lower() == "a":
+                        href = attributes.get("href")
+                        if isinstance(href, str) and href.strip().lower().startswith(("javascript:", "data:", "file:", "blob:")):
+                            raise PolicyError("non-HTTP links require human takeover")
+                try:
+                    target_url = check_interactive_target(action_name, params, selector_map, getattr(state, "url", ""))
+                    if target_url is not None:
+                        urls.append(target_url)
+                except PolicyError:
+                    if not isinstance(selector_map, dict) or type(params.get("index")) is not int or params["index"] not in selector_map:
+                        raise
+                    approval_kind = action_name
+            elif action_name in {"select_dropdown", "send_keys"}:
+                approval_kind = action_name
             for url in urls:
                 await self.policy.require(url)
+        if approval_kind:
+            self.action_sequence += 1
+            action_id = f"action-{self.action_sequence}"
+            target = "focused page"
+            first = raw_actions[0] if isinstance(raw_actions, list) and raw_actions else None
+            if hasattr(first, "model_dump"):
+                first = first.model_dump(exclude_none=True)
+            params = first.get(approval_kind) if isinstance(first, dict) else None
+            index = params.get("index") if isinstance(params, dict) else None
+            if type(index) is int and isinstance(selector_map, dict):
+                node = selector_map.get(index)
+                if node is not None:
+                    tag = str(getattr(node, "node_name", "element")).lower()
+                    attributes = getattr(node, "attributes", {})
+                    input_type = attributes.get("type") if isinstance(attributes, dict) else None
+                    if tag in {"input", "button", "select", "a", "textarea"}:
+                        target = f"input:{input_type}" if tag == "input" and input_type in {"password", "text", "search", "email"} else tag
+            self.pending_action_id = action_id
+            self.action_signal.clear()
+            self.action_decision = None
+            self.event_writer.emit("action_approval_required", "paused", **self._run_fields(), action_id=action_id,
+                                   action=approval_kind, target=target[:40],
+                                   origin=origin_from_url(getattr(state, "url", "")) if getattr(state, "url", "").startswith(("http://", "https://")) else None)
+            approval_wait = asyncio.create_task(self.action_signal.wait())
+            stop_wait = asyncio.create_task(self.stop_signal.wait())
+            done, pending = await asyncio.wait({approval_wait, stop_wait}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            if stop_wait in done or self.stopped:
+                raise RunStopped
+            approved = self.action_decision == "approved"
+            self.pending_action_id = None
+            self.action_decision = None
+            self.action_signal.clear()
+            if not approved:
+                if isinstance(model_output, dict):
+                    model_output["action"] = []
+                else:
+                    model_output.action = []
+                await self._drain_takeover()
+                return
+        cursor = None
+        if actions:
+            first = raw_actions[0] if isinstance(raw_actions, list) and raw_actions else None
+            if hasattr(first, "model_dump"):
+                first = first.model_dump(exclude_none=True)
+            if isinstance(first, dict) and len(first) == 1:
+                name, params = next(iter(first.items()))
+                if name in {"click", "input", "select_dropdown"} and isinstance(params, dict):
+                    x, y = params.get("coordinate_x"), params.get("coordinate_y")
+                    index = params.get("index")
+                    if (not isinstance(x, (int, float)) or not isinstance(y, (int, float))) and type(index) is int:
+                        state = args[0] if args else None
+                        selector_map = getattr(getattr(state, "dom_state", None), "selector_map", None)
+                        node = selector_map.get(index) if isinstance(selector_map, dict) else None
+                        rect = getattr(getattr(node, "snapshot_node", None), "clientRects", None)
+                        if rect is not None:
+                            x = rect.x + rect.width / 2
+                            y = rect.y + rect.height / 2
+                    if all(isinstance(point, (int, float)) and math.isfinite(point) and 0 <= point <= 10000 for point in (x, y)):
+                        cursor = {"x": round(x), "y": round(y), "action": name}
         self.event_writer.emit(
             "step_planned",
             "running",
             **self._run_fields(),
             actions=action_names,
+            cursor=cursor,
         )
 
-    async def _drain_takeover(self) -> None:
+    async def _drain_takeover(self) -> bool:
         """Pause AI stepping while a human owns the browser.
 
         A dispatched browser action cannot be retroactively cancelled, so a
@@ -280,12 +443,13 @@ class ActiveRuntime:
         stays granted-before-resumed or resumed-only, never a stale grant.
         """
         if self.takeover_reason is None:
-            return
+            return False
         if self.resume_signal.is_set():
             reason = self.takeover_reason
             self._clear_takeover()
             self.event_writer.emit("control_resumed", "running", **self._run_fields(), reason=reason)
-            return
+            await self._verify_human_page()
+            return True
         if not self.control_granted:
             self.control_granted = True
             self.event_writer.emit(
@@ -303,6 +467,20 @@ class ActiveRuntime:
         reason = self.takeover_reason or ""
         self._clear_takeover()
         self.event_writer.emit("control_resumed", "running", **self._run_fields(), reason=reason)
+        await self._verify_human_page()
+        return True
+
+    async def _verify_human_page(self) -> None:
+        if self.browser is None:
+            return
+        url = await self.browser.get_current_page_url()
+        if not url.startswith(("http://", "https://")):
+            return
+        await self.policy.require(url)
+        profile = getattr(self.browser, "browser_profile", None)
+        if profile is None or not isinstance(getattr(profile, "allowed_domains", None), list):
+            raise RuntimeConfigurationError("browser profile cannot allow the human-selected page")
+        profile.allowed_domains[:] = browser_allowed_domains(self.policy.allowed_for_run)
 
     def _clear_takeover(self) -> None:
         self.takeover_reason = None
@@ -318,7 +496,18 @@ class ActiveRuntime:
         if not reason or len(reason) > 500:
             raise PolicyError("takeover reason must be 1 through 500 characters")
         self.takeover_reason = reason
+        if self.pending_action_id is not None:
+            self.action_decision = "denied"
+            self.action_signal.set()
         return True
+
+    def approve_action(self, action_id: str, decision: str) -> None:
+        if self.pending_action_id != action_id or self.action_signal.is_set():
+            raise PolicyError("browser action is not awaiting approval")
+        if decision not in {"approved", "denied"}:
+            raise PolicyError("invalid browser action decision")
+        self.action_decision = decision
+        self.action_signal.set()
 
     def resume(self) -> None:
         """Return control to the agent. The next step re-observes the page."""
@@ -331,6 +520,7 @@ class ActiveRuntime:
     async def stop(self) -> None:
         self.stopped = True
         self.stop_signal.set()
+        self.action_signal.set()
         self.resume_signal.set()
         self.policy.stop()
         if self.agent is not None:
@@ -347,7 +537,8 @@ class ActiveRuntime:
     async def _close_browser(self) -> None:
         if self.browser is None:
             return
-        for method_name in ("kill", "close", "stop"):
+        methods = ("stop",) if self.command.cdp_url is not None else ("kill", "close", "stop")
+        for method_name in methods:
             method = getattr(self.browser, method_name, None)
             if method is None:
                 continue
@@ -388,12 +579,13 @@ class ActiveRuntime:
             ]
         self.once_domains_to_remove.clear()
 
-    def _read_only_task(self) -> str:
+    def _browser_task(self) -> str:
         return (
-            "Operate in strict read-only mode. Use only direct navigation, tab management, "
-            "scrolling, text extraction, waiting, and completion. Never click controls, fill "
-            "or submit forms, upload or download files, read the clipboard, handle credentials, "
-            "change an account, purchase, publish, delete, or bypass access controls.\n\n"
+            "You may navigate, scroll, inspect pages, follow ordinary links and type into search fields. "
+            "Other clicks, field input, dropdown selection, and keypresses pause for explicit user approval "
+            "before they execute; if denied, re-observe the page and choose another path. "
+            "Never upload or download files, read the clipboard, solve human-verification challenges, "
+            "or bypass access controls. Ask the human to take control for those actions.\n\n"
             f"Requested task:\n{self.command.task}"
         )
 

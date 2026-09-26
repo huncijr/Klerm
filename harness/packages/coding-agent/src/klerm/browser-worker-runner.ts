@@ -31,6 +31,7 @@ export interface BrowserWorkerStartRequest extends BrowserRunRequest {
 	baseUrl: string;
 	token: string;
 	allowedOrigins: readonly string[];
+	cdpUrl?: string;
 	maxSteps?: number;
 }
 
@@ -92,15 +93,45 @@ export interface BrowserWorkerOriginApprovedEvent extends WorkerEventBase, Worke
 	scope: "allow_once" | "current_run";
 }
 
+export interface BrowserWorkerActionApprovalRequiredEvent extends WorkerEventBase, WorkerRunFields {
+	event: "action_approval_required";
+	status: "paused";
+	action_id: string;
+	action: "click" | "input" | "select_dropdown" | "send_keys";
+	target: string;
+	origin: string | null;
+}
+
+export interface BrowserWorkerActionApprovalResolvedEvent extends WorkerEventBase, WorkerRunFields {
+	event: "action_approval_resolved";
+	status: "accepted";
+	request_id: string;
+	action_id: string;
+	decision: "approved" | "denied";
+}
+
 export interface BrowserWorkerRunStartedEvent extends WorkerEventBase, WorkerRunFields {
 	event: "run_started";
 	status: "running";
+}
+
+export interface BrowserWorkerNavigationEvent extends WorkerEventBase, WorkerRunFields {
+	event: "navigation";
+	status: "running";
+	origin: string;
 }
 
 export interface BrowserWorkerStepPlannedEvent extends WorkerEventBase, WorkerRunFields {
 	event: "step_planned";
 	status: "running";
 	actions: string[];
+	cursor?: { x: number; y: number; action: string } | null;
+}
+
+export interface BrowserWorkerActionExecutionEvent extends WorkerEventBase, WorkerRunFields {
+	event: "action_dispatched" | "action_settled";
+	status: "running" | "completed" | "failed";
+	action: string;
 }
 
 export interface BrowserWorkerRunCompletedEvent extends WorkerEventBase, WorkerRunFields {
@@ -150,8 +181,12 @@ export type BrowserWorkerEvent =
 	| BrowserWorkerCommandAcceptedEvent
 	| BrowserWorkerOriginApprovalRequiredEvent
 	| BrowserWorkerOriginApprovedEvent
+	| BrowserWorkerActionApprovalRequiredEvent
+	| BrowserWorkerActionApprovalResolvedEvent
 	| BrowserWorkerRunStartedEvent
+	| BrowserWorkerNavigationEvent
 	| BrowserWorkerStepPlannedEvent
+	| BrowserWorkerActionExecutionEvent
 	| BrowserWorkerRunCompletedEvent
 	| BrowserWorkerRunFailedEvent
 	| BrowserWorkerRunStoppedEvent
@@ -305,13 +340,43 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 				throw new Error("Invalid browser worker approval scope.");
 			}
 			break;
+		case "action_approval_required":
+			exactFields(value, [...baseFields, ...runFields, "action_id", "action", "target", "origin"]);
+			validateEnvelope(value, "paused");
+			validateRunFields(value);
+			identifierField(value, "action_id");
+			if (!["click", "input", "select_dropdown", "send_keys"].includes(String(value.action)))
+				throw new Error("Invalid browser action.");
+			stringField(value, "target", 40);
+			if (value.origin !== null) validateOrigin(value);
+			break;
+		case "action_approval_resolved":
+			exactFields(value, [...baseFields, ...runFields, "request_id", "action_id", "decision"]);
+			validateEnvelope(value, "accepted");
+			validateRunFields(value);
+			identifierField(value, "request_id");
+			identifierField(value, "action_id");
+			if (value.decision !== "approved" && value.decision !== "denied")
+				throw new Error("Invalid browser action decision.");
+			break;
 		case "run_started":
 			exactFields(value, [...baseFields, ...runFields]);
 			validateEnvelope(value, "running");
 			validateRunFields(value);
 			break;
+		case "navigation":
+			exactFields(value, [...baseFields, ...runFields, "origin"]);
+			validateEnvelope(value, "running");
+			validateRunFields(value);
+			validateOrigin(value);
+			break;
 		case "step_planned": {
-			exactFields(value, [...baseFields, ...runFields, "actions"]);
+			exactFields(value, [
+				...baseFields,
+				...runFields,
+				"actions",
+				...(value.cursor === undefined ? [] : ["cursor"]),
+			]);
 			validateEnvelope(value, "running");
 			validateRunFields(value);
 			const actions = value.actions;
@@ -322,8 +387,34 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 			) {
 				throw new Error("Invalid browser worker actions.");
 			}
+			if (value.cursor !== null && value.cursor !== undefined) {
+				const cursor = record(value.cursor);
+				if (
+					!cursor ||
+					Object.keys(cursor).sort().join() !== "action,x,y" ||
+					typeof cursor.action !== "string" ||
+					!["click", "input", "select_dropdown"].includes(cursor.action) ||
+					!Number.isInteger(cursor.x) ||
+					!Number.isInteger(cursor.y) ||
+					(cursor.x as number) < 0 ||
+					(cursor.x as number) > 10000 ||
+					(cursor.y as number) < 0 ||
+					(cursor.y as number) > 10000
+				) {
+					throw new Error("Invalid browser worker cursor.");
+				}
+			}
 			break;
 		}
+		case "action_dispatched":
+		case "action_settled":
+			exactFields(value, [...baseFields, ...runFields, "action"]);
+			validateEnvelope(value, event === "action_dispatched" ? "running" : String(value.status));
+			if (event === "action_settled" && value.status !== "completed" && value.status !== "failed")
+				throw new Error("Invalid browser action status.");
+			validateRunFields(value);
+			stringField(value, "action", 128);
+			break;
 		case "run_completed": {
 			exactFields(value, [...baseFields, ...runFields, "result"]);
 			validateEnvelope(value, "completed");
@@ -542,6 +633,9 @@ function validateStartRequest(request: BrowserWorkerStartRequest): void {
 	if (!request.prompt || request.prompt.length > 32_768) throw new Error("Invalid browser worker prompt.");
 	if (!request.model || request.model.length > 256) throw new Error("Invalid browser worker model.");
 	if (!request.token || request.token.length > 8192) throw new Error("Invalid browser worker token.");
+	if (request.cdpUrl && !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(request.cdpUrl)) {
+		throw new Error("Browser worker CDP endpoint must use loopback.");
+	}
 	if (request.allowedOrigins.length > 64) {
 		throw new Error("A browser run accepts at most 64 allowed origins.");
 	}
@@ -689,6 +783,8 @@ export class BrowserWorkerRunner {
 			base_url: request.baseUrl,
 			token: request.token,
 			allowed_origins: request.allowedOrigins,
+			...(request.startUrl === undefined ? {} : { start_url: request.startUrl }),
+			...(request.cdpUrl === undefined ? {} : { cdp_url: request.cdpUrl }),
 			...(request.maxSteps === undefined ? {} : { max_steps: request.maxSteps }),
 		});
 		const event = await response;
@@ -723,6 +819,29 @@ export class BrowserWorkerRunner {
 			run_id: decision.runId,
 			origin: origin.origin,
 			scope: decision.scope ?? "allow_once",
+		});
+		const event = await response;
+		if (event.event === "command_rejected") throw new Error(event.error);
+	}
+
+	async approveAction(runId: string, actionId: string, decision: "approved" | "denied"): Promise<void> {
+		this.assertActiveRun(runId);
+		if (this.runTerminal || !ID_PATTERN.test(actionId)) throw new Error("Browser action approval is invalid.");
+		const requestId = randomUUID();
+		const response = this.waitForEvent(
+			(event) =>
+				(event.event === "action_approval_resolved" && event.request_id === requestId) ||
+				(event.event === "command_rejected" && event.request_id === requestId),
+			this.commandTimeoutMs,
+			"Browser worker did not acknowledge action approval.",
+		);
+		await this.writeCommand({
+			version: BROWSER_WORKER_PROTOCOL_VERSION,
+			command: "approve_action",
+			request_id: requestId,
+			run_id: runId,
+			action_id: actionId,
+			decision,
 		});
 		const event = await response;
 		if (event.event === "command_rejected") throw new Error(event.error);

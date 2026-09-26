@@ -279,6 +279,8 @@ export type RpcCommand =
 			model: string;
 			prompt: string;
 			startUrl?: string;
+			currentUrl?: string;
+			cdpUrl?: string;
 			maxSteps?: number;
 	  }
 	| {
@@ -290,6 +292,8 @@ export type RpcCommand =
 			scope?: "allow_once" | "current_run";
 	  }
 	| { id?: string; type: "stop_browser_run"; runId: string }
+	| { id?: string; type: "resolve_browser_action"; runId: string; actionId: string; decision: "approved" | "denied" }
+	| { id?: string; type: "report_browser_host_crash"; runId?: string }
 	| {
 			id?: string;
 			type: "request_browser_takeover";
@@ -518,7 +522,7 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
-			command: "start_browser_run" | "resolve_browser_origin" | "stop_browser_run";
+			command: "start_browser_run" | "resolve_browser_origin" | "resolve_browser_action" | "stop_browser_run";
 			success: true;
 			data: RpcBrowserRunState;
 	  }

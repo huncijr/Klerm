@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,124 @@ impl Drop for BackendProcess {
 #[derive(Default)]
 struct BackendState {
     process: Mutex<Option<BackendProcess>>,
+}
+
+#[cfg(target_os = "linux")]
+struct BrowserHost {
+    child: Child,
+    stdin: ChildStdin,
+    port: u16,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for BrowserHost {
+    fn drop(&mut self) {
+        let _ = self.stdin.write_all(b"{\"type\":\"close\"}\n");
+        let _ = self.stdin.flush();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) { return; }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct BrowserHostState {
+    hosts: Mutex<HashMap<String, BrowserHost>>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserHostEvent {
+    session_id: String,
+    event: Value,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserHostStartResult {
+    cdp_url: String,
+}
+
+#[cfg(target_os = "linux")]
+fn valid_browser_session_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn start_browser_host(app: AppHandle, state: State<'_, BrowserHostState>, session_id: String) -> Result<BrowserHostStartResult, String> {
+    if !valid_browser_session_id(&session_id) { return Err("Invalid browser session id.".into()); }
+    let mut hosts = state.hosts.lock().map_err(|_| "Browser host state is unavailable.")?;
+    if let Some(host) = hosts.get_mut(&session_id) {
+        if matches!(host.child.try_wait(), Ok(None)) {
+            return Ok(BrowserHostStartResult { cdp_url: format!("http://127.0.0.1:{}", host.port) });
+        }
+    }
+    hosts.remove(&session_id);
+    let executable = env::current_exe().map_err(|error| format!("Browser host path unavailable: {error}"))?
+        .with_file_name("klerm-browser-host");
+    if !executable.is_file() { return Err("CEF browser host has not been built. Build the Klerm desktop browser host first.".into()); }
+    let cef_dir = executable.parent().ok_or("CEF runtime directory is unavailable.")?;
+    let mut libraries = vec![cef_dir.to_path_buf()];
+    if let Some(existing) = env::var_os("LD_LIBRARY_PATH") { libraries.extend(env::split_paths(&existing)); }
+    let library_path = env::join_paths(libraries).map_err(|_| "CEF runtime path is invalid.")?;
+    let mut child = Command::new(executable)
+        .env("LD_LIBRARY_PATH", library_path)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().map_err(|error| format!("CEF browser host did not start: {error}"))?;
+    let stdin = child.stdin.take().ok_or("CEF browser input unavailable.")?;
+    let stdout = child.stdout.take().ok_or("CEF browser output unavailable.")?;
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let reader_session = session_id.clone();
+    std::thread::spawn(move || {
+        let mut ready = Some(ready_tx);
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+            if event.get("type").and_then(Value::as_str) == Some("ready") {
+                if let Some(tx) = ready.take() {
+                    let port = event.get("port").and_then(Value::as_u64).filter(|port| (1..=65535).contains(port));
+                    let _ = tx.send(port.map(|port| port as u16));
+                }
+            }
+            let _ = app.emit("klerm://browser-host", BrowserHostEvent { session_id: reader_session.clone(), event });
+        }
+        if let Some(tx) = ready { let _ = tx.send(None); }
+        let _ = app.emit("klerm://browser-host", BrowserHostEvent {
+            session_id: reader_session,
+            event: serde_json::json!({"type":"crash"}),
+        });
+    });
+    let Some(port) = ready_rx.recv_timeout(Duration::from_secs(20)).ok().flatten() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("CEF browser did not report readiness.".into());
+    };
+    hosts.insert(session_id, BrowserHost { child, stdin, port });
+    Ok(BrowserHostStartResult { cdp_url: format!("http://127.0.0.1:{port}") })
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn browser_host_command(state: State<'_, BrowserHostState>, session_id: String, command: Value) -> Result<(), String> {
+    if !valid_browser_session_id(&session_id) { return Err("Invalid browser session id.".into()); }
+    let kind = command.get("type").and_then(Value::as_str).unwrap_or("");
+    if !["resize", "navigate", "back", "forward", "reload", "visible", "mouse", "key"].contains(&kind) {
+        return Err("Invalid browser host command.".into());
+    }
+    let mut data = serde_json::to_vec(&command).map_err(|_| "Invalid browser host command.")?;
+    if data.len() > 4096 { return Err("Browser host command is too large.".into()); }
+    data.push(b'\n');
+    let mut hosts = state.hosts.lock().map_err(|_| "Browser host state is unavailable.")?;
+    let host = hosts.get_mut(&session_id).ok_or("Browser host is not running.")?;
+    host.stdin.write_all(&data).and_then(|_| host.stdin.flush())
+        .map_err(|error| format!("CEF browser input failed: {error}"))
 }
 
 impl BackendState {
@@ -279,20 +398,24 @@ fn stop_backend(state: State<'_, BackendState>) {
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(BackendState::default())
-        .invoke_handler(tauri::generate_handler![
-            start_backend,
-            rpc_send,
-            stop_backend
-        ])
+        .manage(BackendState::default());
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(BrowserHostState::default()).invoke_handler(tauri::generate_handler![
+        start_backend, rpc_send, stop_backend, start_browser_host, browser_host_command,
+    ]);
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![start_backend, rpc_send, stop_backend]);
+    let app = builder
         .build(tauri::generate_context!())
         .expect("failed to build Klerm desktop application");
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             app_handle.state::<BackendState>().stop();
+            #[cfg(target_os = "linux")]
+            app_handle.state::<BrowserHostState>().hosts.lock().ok().map(|mut hosts| hosts.clear());
         }
     });
 }

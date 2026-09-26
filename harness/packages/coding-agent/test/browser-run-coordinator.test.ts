@@ -61,6 +61,13 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 	async start(request: BrowserWorkerStartRequest): Promise<void> {
 		this.starts.push(request);
 		this.emit({ ...this.base("run_started", "running"), ...this.runFields() });
+		if (request.startUrl) {
+			this.emit({
+				...this.base("navigation", "running"),
+				...this.runFields(),
+				origin: new URL(request.startUrl).origin,
+			});
+		}
 	}
 
 	async approve(decision: BrowserWorkerApprovalDecision): Promise<void> {
@@ -74,6 +81,16 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 				scope: decision.scope ?? "allow_once",
 			});
 		}
+	}
+
+	async approveAction(_runId: string, actionId: string, decision: "approved" | "denied"): Promise<void> {
+		this.emit({
+			...this.base("action_approval_resolved", "accepted"),
+			...this.runFields(),
+			request_id: "worker-request",
+			action_id: actionId,
+			decision,
+		});
 	}
 
 	async stop(runId: string): Promise<void> {
@@ -101,6 +118,17 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 			...this.runFields(),
 			origin,
 			choices: ["allow_once", "current_run"],
+		});
+	}
+
+	requestAction(actionId: string): void {
+		this.emit({
+			...this.base("action_approval_required", "paused"),
+			...this.runFields(),
+			action_id: actionId,
+			action: "send_keys",
+			target: "focused page",
+			origin: "https://example.com",
 		});
 	}
 
@@ -226,6 +254,20 @@ const startInput = {
 } as const;
 
 describe("BrowserRunCoordinator", () => {
+	it("requires a matching user decision for a pending action and audits it without input contents", async () => {
+		const context = setup();
+		const started = await context.coordinator.start(startInput);
+		context.runner.requestAction("action-1");
+		await waitFor(() => context.coordinator.state()?.pendingAction?.actionId === "action-1");
+		await expect(context.coordinator.approveAction(started.runId, "action-2", "approved")).rejects.toThrow(
+			"not pending",
+		);
+		const state = await context.coordinator.approveAction(started.runId, "action-1", "denied");
+		expect(state.pendingAction).toBeUndefined();
+		expect(context.audit.slice(-2).map((item) => item.event)).toEqual(["APPROVAL_REQUESTED", "APPROVAL_RESOLVED"]);
+		expect(JSON.stringify(context.audit)).not.toContain("private-search-term");
+		await context.coordinator.close();
+	});
 	it("pins one exact available model and emits ordered credential-free public state", async () => {
 		const context = setup();
 		const started = await context.coordinator.start(startInput);
@@ -256,7 +298,7 @@ describe("BrowserRunCoordinator", () => {
 		const serializedState = JSON.stringify(context.coordinator.state());
 		expect(serializedState).not.toContain("prompt-secret");
 		expect(serializedState).not.toContain("ephemeral-gateway-token");
-		expect(context.audit.map((event) => event.event)).toEqual(["RUN_REQUESTED", "RUN_STARTED"]);
+		expect(context.audit.map((event) => event.event)).toEqual(["RUN_REQUESTED", "RUN_STARTED", "NAVIGATION"]);
 		expect(context.callbacks).toEqual(context.audit);
 		for (const event of context.audit) {
 			expect(event).toMatchObject({
@@ -303,6 +345,46 @@ describe("BrowserRunCoordinator", () => {
 		await context.coordinator.close();
 	});
 
+	it("approves the visible public page without reloading it for a follow-up", async () => {
+		const context = setup();
+		const started = await context.coordinator.start({
+			model: startInput.model,
+			prompt: "What is on this page?",
+			currentUrl: "https://www.youtube.com/watch?v=123",
+			cdpUrl: "http://127.0.0.1:9321",
+		});
+		expect(started.startUrl).toBeUndefined();
+		expect(context.runner.starts[0]).toMatchObject({
+			allowedOrigins: ["https://www.youtube.com"],
+			cdpUrl: "http://127.0.0.1:9321",
+		});
+		await context.coordinator.close();
+		const blocked = setup();
+		await expect(
+			blocked.coordinator.start({
+				model: startInput.model,
+				prompt: "Read this page",
+				currentUrl: "http://127.0.0.1:8080/private",
+			}),
+		).rejects.toThrow("public DNS hostname");
+	});
+
+	it("navigates explicitly requested YouTube tasks without an arbitrary default URL", async () => {
+		const context = setup();
+		const started = await context.coordinator.start({
+			model: startInput.model,
+			prompt: "nyisd meg a youtubeot",
+		});
+		expect(started.startUrl).toBe("https://www.youtube.com/");
+		expect(context.runner.starts[0]?.allowedOrigins).toEqual(["https://www.youtube.com"]);
+		expect(context.audit.map((event) => event.event)).toEqual(["RUN_REQUESTED", "RUN_STARTED", "NAVIGATION"]);
+		expect(context.audit[2]?.details).toEqual({ origin: "https://www.youtube.com" });
+		context.runner.complete(false);
+		await waitFor(() => context.coordinator.state()?.status === "completed");
+		expect(context.coordinator.state()?.resultSummary).toBe("Browser opened https://www.youtube.com.");
+		await context.coordinator.close();
+	});
+
 	it("reports an idle browser crash and resets before the next task", async () => {
 		const context = setup();
 		await context.coordinator.start(startInput);
@@ -315,6 +397,17 @@ describe("BrowserRunCoordinator", () => {
 		const next = await context.coordinator.start({ model: startInput.model, prompt: "Open a new page" });
 		expect(next.browserReset).toBeUndefined();
 		expect(next.startUrl).toBeUndefined();
+		await context.coordinator.close();
+	});
+
+	it("fails the active run when its embedded Chromium host crashes", async () => {
+		const context = setup();
+		const started = await context.coordinator.start(startInput);
+		const crashed = await context.coordinator.browserCrashed(started.runId);
+		expect(crashed).toMatchObject({ status: "failed", browserReset: true, error: "Embedded Chromium crashed." });
+		expect(context.audit.slice(-2).map((event) => event.event)).toEqual(["RUN_FAILED", "BROWSER_RESET"]);
+		const next = await context.coordinator.start({ model: startInput.model, prompt: "Open a new page" });
+		expect(next.browserReset).toBeUndefined();
 		await context.coordinator.close();
 	});
 
@@ -416,6 +509,7 @@ describe("BrowserRunCoordinator", () => {
 		expect(context.audit.map((event) => event.event)).toEqual([
 			"RUN_REQUESTED",
 			"RUN_STARTED",
+			"NAVIGATION",
 			"CONTROL_PAUSE_REQUESTED",
 		]);
 

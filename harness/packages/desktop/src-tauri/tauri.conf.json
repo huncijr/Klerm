@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"identifier": "com.klerm.desktop",
 	"build": {
-		"beforeDevCommand": "npm --prefix ../coding-agent run build && npm run dev",
+		"beforeDevCommand": "npm --prefix ../coding-agent run build && node scripts/build-browser-host.mjs && npm run dev",
 		"devUrl": "http://localhost:1420",
 		"beforeBuildCommand": "npm --prefix ../coding-agent run build && npm run build",
 		"frontendDist": "../dist"

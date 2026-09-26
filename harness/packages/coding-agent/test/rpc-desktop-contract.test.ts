@@ -227,15 +227,18 @@ describe("Klerm desktop RPC contract", () => {
 		const browserTakeover = vi.fn(async () => browserState);
 		const browserResume = vi.fn(async () => browserState);
 		const browserStop = vi.fn(async () => ({ ...browserState, status: "cancelled" as const }));
+		const browserCrashed = vi.fn(async () => ({ ...browserState, browserReset: true }));
 		const browserClose = vi.fn(async () => undefined);
 		const createBrowserRunCoordinator = vi.fn((_options: BrowserRunCoordinatorOptions) => ({
 			availability: async () => ({ available: true as const, runtime: "test browser worker" }),
 			state: () => browserState,
 			start: browserStart,
 			approve: browserApprove,
+			approveAction: vi.fn(async () => browserState),
 			takeover: browserTakeover,
 			resume: browserResume,
 			stop: browserStop,
+			browserCrashed,
 			close: browserClose,
 		}));
 
@@ -331,6 +334,7 @@ describe("Klerm desktop RPC contract", () => {
 							"start_browser_run",
 							"resolve_browser_origin",
 							"stop_browser_run",
+							"report_browser_host_crash",
 							"request_browser_takeover",
 							"resume_browser_run",
 						]),
@@ -840,6 +844,13 @@ describe("Klerm desktop RPC contract", () => {
 				data: { status: "cancelled" },
 			});
 			expect(browserStop).toHaveBeenCalledWith("browser-run-1");
+			expect(
+				await send({ id: "browser-host-crash", type: "report_browser_host_crash", runId: "browser-run-1" }),
+			).toMatchObject({
+				success: true,
+				data: { state: { browserReset: true } },
+			});
+			expect(browserCrashed).toHaveBeenCalledWith("browser-run-1");
 			expect(
 				await send({
 					id: "browser-takeover",

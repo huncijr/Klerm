@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import unittest
+from types import SimpleNamespace
 
 from klerm_browser_worker.policy import OriginPolicy, PolicyError, RunStopped
 from klerm_browser_worker.protocol import EventWriter, StartCommand
@@ -58,7 +59,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(callback, timeout=5)
 
         names = [event.get("event") for event in read_events(output)]
-        self.assertEqual(names, ["control_granted", "control_resumed", "step_planned"])
+        self.assertEqual(names, ["control_granted", "control_resumed"])
         granted = read_events(output)[0]
         self.assertEqual(granted["status"], "paused")
         self.assertEqual(granted["reason"], "Human takeover requested")
@@ -73,7 +74,43 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(runtime._step_callback({"action": []}), timeout=5)
 
         names = [event.get("event") for event in read_events(output)]
-        self.assertEqual(names, ["control_resumed", "step_planned"])
+        self.assertEqual(names, ["control_resumed"])
+
+    async def test_resume_discards_stale_navigation_and_replans(self) -> None:
+        output = io.StringIO()
+        runtime = make_runtime(output)
+        planned = {"action": [{"navigate": {"url": "https://example.com/"}}]}
+        runtime.request_takeover("Human changed the browser page")
+        runtime.resume()
+        await runtime._step_callback(planned)
+        self.assertEqual(planned["action"], [])
+        self.assertEqual([event["event"] for event in read_events(output)], ["control_resumed"])
+
+    async def test_human_selected_origin_needs_approval_before_replanning(self) -> None:
+        output = io.StringIO()
+        runtime = make_runtime(output)
+        requested: list[str] = []
+
+        async def on_required(origin: str) -> None:
+            requested.append(origin)
+            runtime.policy.approve(origin, "current_run")
+
+        runtime.policy = OriginPolicy([], on_required)
+
+        class FakeBrowser:
+            browser_profile = SimpleNamespace(allowed_domains=[])
+
+            async def get_current_page_url(self) -> str:
+                return "https://other.example.com/new-page"
+
+        runtime.browser = FakeBrowser()
+        planned = {"action": [{"navigate": {"url": "https://old.example.com/"}}]}
+        runtime.request_takeover("Human navigation")
+        runtime.resume()
+        await runtime._step_callback(planned)
+        self.assertEqual(requested, ["https://other.example.com"])
+        self.assertEqual(runtime.browser.browser_profile.allowed_domains, ["https://other.example.com/*"])
+        self.assertEqual(planned["action"], [])
 
     async def test_resume_without_takeover_is_rejected(self) -> None:
         runtime = make_runtime(io.StringIO())

@@ -197,7 +197,7 @@ describe("BrowserWorkerRunner", () => {
 			runtime: "configured browser worker",
 			version: "fake-1.0.0",
 		});
-		await runner.start(startRequest());
+		await runner.start({ ...startRequest(), cdpUrl: "http://127.0.0.1:9321" });
 		await runner.approve({
 			approvalId: "approval-1",
 			runId: "run-1",
@@ -254,6 +254,9 @@ describe("BrowserWorkerRunner", () => {
 			"shutdown",
 		]);
 		expect(commands[3]?.allowed_origins).toEqual([]);
+		expect(commands[0]?.start_url).toBe("https://example.com/docs");
+		expect(commands[0]?.cdp_url).toBe("http://127.0.0.1:9321");
+		expect(commands[3]?.start_url).toBeUndefined();
 		expect(commands[3]?.task).toBe("Read the public documentation.");
 		expect(commands[0]).toMatchObject({
 			run_id: "run-1",

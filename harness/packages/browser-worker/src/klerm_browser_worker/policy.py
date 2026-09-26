@@ -1,4 +1,4 @@
-"""Read-only action and origin policy independent of browser-use internals."""
+"""Browser action and origin policy independent of browser-use internals."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import ipaddress
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+from urllib.parse import urljoin
 
 READ_ONLY_ACTIONS = frozenset(
     {
@@ -23,6 +24,11 @@ READ_ONLY_ACTIONS = frozenset(
         "wait",
     }
 )
+
+# Only DOM targets whose behavior can be checked before dispatch are added here.
+# Unknown controls, form submissions, credentials and downloads remain disabled.
+INTERACTIVE_ACTIONS = frozenset({"click", "input", "select_dropdown", "send_keys", "dropdown_options"})
+ALLOWED_ACTIONS = READ_ONLY_ACTIONS | INTERACTIVE_ACTIONS
 
 class PolicyError(ValueError):
     pass
@@ -131,6 +137,43 @@ def extract_actions(model_output: object) -> list[tuple[str, list[str]]]:
                 urls.append(candidate)
         actions.append((name, urls))
     return actions
+
+
+def check_interactive_target(name: str, arguments: dict[str, object], selector_map: object, page_url: str = "") -> str | None:
+    """Return a link URL for origin approval, or deny opaque/mutating controls."""
+    if not isinstance(selector_map, dict):
+        raise PolicyError("browser DOM selector map is unavailable")
+    index = arguments.get("index")
+    if type(index) is not int or index < 0:
+        raise PolicyError("browser interaction requires a DOM element index")
+    node = selector_map.get(index)
+    if node is None:
+        raise PolicyError("browser interaction target is no longer available")
+    attributes = getattr(node, "attributes", None)
+    if not isinstance(attributes, dict):
+        raise PolicyError("browser interaction target attributes are unavailable")
+    tag = str(getattr(node, "node_name", "")).lower()
+    if name == "input":
+        role = str(attributes.get("role", "")).lower()
+        input_type = str(attributes.get("type", "text")).lower()
+        label = " ".join(str(attributes.get(key, "")) for key in ("aria-label", "placeholder", "name", "id")).lower()
+        if tag != "input" or not (input_type == "search" or input_type == "text" and "search" in label or role == "searchbox"):
+            raise PolicyError("only a recognized search field can be filled automatically")
+        if not isinstance(arguments.get("text"), str) or len(arguments["text"]) > 2048:
+            raise PolicyError("invalid search field text")
+        return None
+    if name == "click":
+        if tag != "a" or getattr(node, "has_js_click_listener", False) or "download" in attributes:
+            raise PolicyError("this browser control needs human interaction")
+        href = attributes.get("href")
+        if not isinstance(href, str):
+            raise PolicyError("browser link has no HTTP target")
+        target = urljoin(page_url, href)
+        origin_from_url(target)
+        if any(word in target.lower() for word in ("logout", "delete", "remove", "purchase", "checkout", "unsubscribe")):
+            raise PolicyError("sensitive link requires human interaction")
+        return target
+    raise PolicyError("browser proposed an unsupported interactive action")
 
 
 @dataclass

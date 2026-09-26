@@ -106,8 +106,11 @@ export interface BrowserRunState {
 	startedAt?: string;
 	settledAt?: string;
 	startUrl?: string;
+	currentOrigin?: string;
 	pendingApproval?: BrowserPendingOriginApproval;
+	pendingAction?: { actionId: string; action: string; target: string; origin: string | null };
 	lastActions: readonly string[];
+	agentCursor?: { x: number; y: number; action: string };
 	resultSummary?: string;
 	resultMetadata?: { present: boolean; length: number; sha256: string | null };
 	error?: string;

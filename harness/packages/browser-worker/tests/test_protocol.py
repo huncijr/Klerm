@@ -5,6 +5,7 @@ import io
 import unittest
 
 from klerm_browser_worker.protocol import (
+    ApproveActionCommand,
     EventWriter,
     ProtocolError,
     ResumeCommand,
@@ -34,6 +35,15 @@ def valid_start(**changes: object) -> str:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_action_approval_requires_exact_identity_and_decision(self) -> None:
+        payload = {"version": 1, "command": "approve_action", "request_id": "r", "run_id": "run-1",
+                   "action_id": "action-1", "decision": "approved"}
+        self.assertIsInstance(parse_command(json.dumps(payload)), ApproveActionCommand)
+        with self.assertRaisesRegex(ProtocolError, "decision"):
+            parse_command(json.dumps({**payload, "decision": "always"}))
+        with self.assertRaisesRegex(ProtocolError, "unknown"):
+            parse_command(json.dumps({**payload, "text": "secret"}))
+
     def test_parses_valid_start_and_normalizes_origins(self) -> None:
         command = parse_command(valid_start(allowed_origins=["https://EXAMPLE.com:443/"]))
         self.assertIsInstance(command, StartCommand)
@@ -64,6 +74,18 @@ class ProtocolTests(unittest.TestCase):
         command = parse_command(valid_start(allowed_origins=[]))
         self.assertIsInstance(command, StartCommand)
         self.assertEqual(command.allowed_origins, ())
+
+    def test_start_url_requires_approved_origin(self) -> None:
+        command = parse_command(valid_start(start_url="https://example.com/watch?v=123", cdp_url="http://127.0.0.1:9321"))
+        self.assertIsInstance(command, StartCommand)
+        self.assertEqual(command.start_url, "https://example.com/watch?v=123")
+        self.assertEqual(command.cdp_url, "http://127.0.0.1:9321")
+        with self.assertRaisesRegex(ProtocolError, "not approved"):
+            parse_command(valid_start(start_url="https://other.example.com/"))
+        with self.assertRaisesRegex(ProtocolError, "navigation"):
+            parse_command(valid_start(start_url="file:///etc/passwd"))
+        with self.assertRaisesRegex(ProtocolError, "CDP endpoint"):
+            parse_command(valid_start(cdp_url="http://192.168.1.1:9222"))
 
     def test_events_have_monotonic_sequence_and_required_envelope(self) -> None:
         output = io.StringIO()

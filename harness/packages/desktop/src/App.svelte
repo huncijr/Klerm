@@ -90,6 +90,7 @@
 	} from "./lib/model.ts";
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
+	import { webToolUrl } from "./lib/web-activity.ts";
 	import Composer from "./components/Composer.svelte";
 	import AgentViews from "./components/AgentViews.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
@@ -136,6 +137,8 @@
 	let browserAvailability = $state<BrowserAvailability | undefined>(undefined);
 	let browserRun = $state<BrowserRunState | undefined>(undefined);
 	let browserActivity = $state<BrowserActivityEvent[]>([]);
+	let agentWebUrl = $state("");
+	let agentWebSession = $state("");
 	let browserStatusLoading = $state(false);
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
@@ -450,6 +453,8 @@
 		model: string;
 		prompt: string;
 		startUrl?: string;
+		currentUrl?: string;
+		cdpUrl?: string;
 	}): Promise<BrowserRunState> {
 		if (!supportsCommand("start_browser_run")) throw new Error("Restart Klerm to upgrade the desktop backend.");
 		browserActivity = [];
@@ -472,9 +477,27 @@
 		});
 	}
 
+	async function resolveBrowserAction(decision: "approved" | "denied"): Promise<void> {
+		const pending = browserRun?.pendingAction;
+		if (!browserRun || !pending) return;
+		browserRun = await bridge.send<BrowserRunState>("resolve_browser_action", {
+			runId: browserRun.runId, actionId: pending.actionId, decision,
+		});
+	}
+
 	async function stopBrowserRun(): Promise<void> {
 		if (!browserRun || !["queued", "running", "waiting-approval"].includes(browserRun.status)) return;
 		browserRun = await bridge.send<BrowserRunState>("stop_browser_run", { runId: browserRun.runId }, 30_000);
+	}
+
+	async function reportBrowserHostCrash(): Promise<void> {
+		if (!backendReady || !supportsCommand("report_browser_host_crash")) return;
+		const result = await bridge.send<{ state?: BrowserRunState }>(
+			"report_browser_host_crash",
+			{ ...(browserRun ? { runId: browserRun.runId } : {}) },
+			30_000,
+		);
+		if (result.state) browserRun = result.state;
 	}
 
 	async function requestBrowserTakeover(reason?: string): Promise<void> {
@@ -1100,6 +1123,12 @@
 		taskHadExecution = true;
 		const toolCallId = String(event.toolCallId ?? "");
 		const toolName = String(event.toolName ?? "unknown");
+		const openedUrl = webToolUrl(toolName, event.args);
+		if (openedUrl && lastState?.sessionId) {
+			agentWebSession = lastState.sessionId;
+			agentWebUrl = openedUrl;
+			workspacePanelOpen = true;
+		}
 		const described = describeToolCall(toolName, event.args);
 		const mcpMatch = resolveMcpTool(mcpServers, toolName);
 		const mcpServer = mcpMatch?.server;
@@ -3221,6 +3250,7 @@
 			/>
 		{:else if workspaceView === "browser"}
 			<BrowserWorkspace
+				sessionId={lastState?.sessionId ?? ""}
 				models={modelCatalog}
 				availability={browserAvailability}
 				run={browserRun}
@@ -3229,7 +3259,9 @@
 				onrefresh={refreshBrowserStatus}
 				onstart={startBrowserRun}
 				onresolveorigin={resolveBrowserOrigin}
+				onresolveaction={resolveBrowserAction}
 				onstop={stopBrowserRun}
+				oncrash={reportBrowserHostCrash}
 				ontakeover={requestBrowserTakeover}
 				onresume={resumeBrowserRun}
 				onclose={closeBrowserWorkspace}
@@ -3465,6 +3497,9 @@
 		<WorkspacePanel
 			bind:editDrafts={workspaceEditDrafts}
 			{workspace}
+			webUrl={agentWebSession === lastState?.sessionId ? agentWebUrl : ""}
+			webSessionId={lastState?.sessionId ?? ""}
+			oncloseweb={() => (agentWebUrl = "")}
 			{editors}
 			selectedPath={selectedFilePath}
 			diff={selectedFileDiff}

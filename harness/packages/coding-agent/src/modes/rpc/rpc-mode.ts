@@ -264,7 +264,9 @@ const DESKTOP_COMMANDS = [
 	"get_browser_run",
 	"start_browser_run",
 	"resolve_browser_origin",
+	"resolve_browser_action",
 	"stop_browser_run",
+	"report_browser_host_crash",
 	"request_browser_takeover",
 	"resume_browser_run",
 	"get_personal_bots",
@@ -3131,7 +3133,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					typeof command.model !== "string" ||
 					typeof command.prompt !== "string" ||
 					!command.prompt.trim() ||
-					(command.startUrl !== undefined && typeof command.startUrl !== "string")
+					(command.startUrl !== undefined && typeof command.startUrl !== "string") ||
+					(command.currentUrl !== undefined && typeof command.currentUrl !== "string") ||
+					(command.cdpUrl !== undefined && typeof command.cdpUrl !== "string")
 				) {
 					return error(
 						id,
@@ -3153,6 +3157,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						model: command.model,
 						prompt: command.prompt.trim(),
 						...(command.startUrl?.trim() ? { startUrl: command.startUrl.trim() } : {}),
+						...(command.currentUrl?.trim() ? { currentUrl: command.currentUrl.trim() } : {}),
+						...(command.cdpUrl ? { cdpUrl: command.cdpUrl } : {}),
 						...(command.maxSteps === undefined ? {} : { maxSteps: command.maxSteps }),
 					});
 					return success(id, "start_browser_run", state);
@@ -3197,6 +3203,35 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				}
 			}
 
+			case "resolve_browser_action": {
+				if (
+					typeof command.runId !== "string" ||
+					typeof command.actionId !== "string" ||
+					(command.decision !== "approved" && command.decision !== "denied")
+				) {
+					return error(
+						id,
+						"resolve_browser_action",
+						"A valid browser action decision is required.",
+						"INVALID_BROWSER_APPROVAL",
+					);
+				}
+				try {
+					const state = await getBrowserCoordinator().approveAction(
+						command.runId,
+						command.actionId,
+						command.decision,
+					);
+					return success(id, "resolve_browser_action", state);
+				} catch (browserError) {
+					return error(
+						id,
+						"resolve_browser_action",
+						browserError instanceof Error ? browserError.message : "Browser action approval failed.",
+						"BROWSER_APPROVAL_FAILED",
+					);
+				}
+			}
 			case "stop_browser_run": {
 				if (typeof command.runId !== "string") {
 					return error(id, "stop_browser_run", "A browser run id is required.", "INVALID_BROWSER_RUN");
@@ -3212,6 +3247,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						"BROWSER_STOP_FAILED",
 					);
 				}
+			}
+
+			case "report_browser_host_crash": {
+				if (command.runId !== undefined && typeof command.runId !== "string") {
+					return error(id, "report_browser_host_crash", "Invalid browser run id.", "INVALID_BROWSER_RUN");
+				}
+				return success(id, "report_browser_host_crash", {
+					state: await getBrowserCoordinator().browserCrashed(command.runId),
+				});
 			}
 
 			case "request_browser_takeover": {

@@ -11,6 +11,7 @@ from .policy import OriginPolicy, PolicyError
 from .protocol import (
     PROTOCOL_VERSION,
     ApproveOriginCommand,
+    ApproveActionCommand,
     Command,
     EventWriter,
     ProtocolError,
@@ -34,6 +35,7 @@ class Worker:
         self.shutting_down = False
         self.profile = tempfile.TemporaryDirectory(prefix="klerm-browser-")
         self.browser: object | None = None
+        self.external_browser = False
 
     async def serve(self) -> None:
         self.events.emit(
@@ -87,6 +89,7 @@ class Worker:
                 self.run_task = None
 
             self.active = ActiveRuntime(command, policy, self.events, finished, self.profile.name, browser=self.browser)
+            self.external_browser = command.cdp_url is not None
             self.events.emit(
                 "command_accepted",
                 "accepted",
@@ -109,6 +112,14 @@ class Worker:
                 origin=normalized,
                 scope=command.scope,
             )
+            return
+        if isinstance(command, ApproveActionCommand):
+            active = self._matching_run(command.request_id, command.run_id)
+            if active is None:
+                return
+            active.approve_action(command.action_id, command.decision)
+            self.events.emit("action_approval_resolved", "accepted", request_id=command.request_id,
+                             **self._run_fields(active.command), action_id=command.action_id, decision=command.decision)
             return
         if isinstance(command, StopCommand):
             active = self._matching_run(command.request_id, command.run_id)
@@ -181,7 +192,7 @@ class Worker:
                 if runtime is not None:
                     await runtime._close_browser()
                 else:
-                    close = getattr(self.browser, "kill", None)
+                    close = getattr(self.browser, "stop" if self.external_browser else "kill", None)
                     if callable(close):
                         await close()
                 self.browser = None

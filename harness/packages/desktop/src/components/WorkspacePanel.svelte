@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, GitBranch, RefreshCw, RotateCcw, Save, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
+	import WebActivityView from "./WebActivityView.svelte";
 	import {
 		resolveWorkspaceEditDraft,
 		setWorkspaceEditDraft,
@@ -11,6 +12,9 @@
 
 	let {
 		workspace,
+		webUrl,
+		webSessionId,
+		oncloseweb,
 		editors,
 		selectedPath,
 		diff,
@@ -33,6 +37,9 @@
 		onlogingithub,
 	}: {
 		workspace: WorkspaceStatus | undefined;
+		webUrl: string;
+		webSessionId: string;
+		oncloseweb: () => void;
 		editors: EditorInfo[];
 		selectedPath: string | undefined;
 		diff: string;
@@ -303,7 +310,7 @@
 		<span class="block h-0.5 w-8 rounded-full bg-[#4a5861]"></span>
 	</button>
 
-	<div class="flex min-h-0 flex-1 flex-col bg-[#0e151b]">
+	<div class={`flex min-h-0 flex-col bg-[#0e151b] ${webUrl ? "h-[35%] shrink-0" : "flex-1"}`}>
 		{#if selectedPath}
 			<div class="flex h-10 shrink-0 items-center border-b border-line-soft px-2">
 				<button
@@ -351,4 +358,7 @@
 			<div class="grid flex-1 place-items-center px-8 text-center"><div><FileCode2 size={24} class="mx-auto mb-3 text-[#38434b]" /><p class="text-[10px]/[1.55] text-[#68747c]">Select a changed file to inspect its diff or edit the current text.</p></div></div>
 		{/if}
 	</div>
+	{#if webUrl && webSessionId}
+		{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} onclose={oncloseweb} />{/key}
+	{/if}
 </aside>

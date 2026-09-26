@@ -69,6 +69,8 @@ export interface BrowserRunStartInput {
 	model: string;
 	prompt: string;
 	startUrl?: string;
+	currentUrl?: string;
+	cdpUrl?: string;
 	maxSteps?: number;
 }
 
@@ -88,6 +90,13 @@ export interface BrowserPendingOriginApproval {
 	approvalId: string;
 	origin: string;
 	requestedAt: string;
+}
+
+export interface BrowserPendingActionApproval {
+	actionId: string;
+	action: string;
+	target: string;
+	origin: string | null;
 }
 
 export interface BrowserRunResultMetadata {
@@ -112,8 +121,11 @@ export interface BrowserRunPublicState {
 	startedAt?: string;
 	settledAt?: string;
 	startUrl?: string;
+	currentOrigin?: string;
 	pendingApproval?: BrowserPendingOriginApproval;
+	pendingAction?: BrowserPendingActionApproval;
 	lastActions: readonly string[];
+	agentCursor?: { x: number; y: number; action: string };
 	resultSummary?: string;
 	resultMetadata?: BrowserRunResultMetadata;
 	error?: string;
@@ -130,6 +142,7 @@ export interface BrowserRunCoordinatorRunner {
 	subscribeFailure(listener: BrowserWorkerFailureListener): () => void;
 	start(request: BrowserWorkerStartRequest): Promise<void>;
 	approve(decision: BrowserWorkerApprovalDecision): Promise<void>;
+	approveAction(runId: string, actionId: string, decision: "approved" | "denied"): Promise<void>;
 	takeover(runId: string, reason?: string): Promise<void>;
 	resume(runId: string): Promise<void>;
 	stop(runId: string): Promise<void>;
@@ -154,9 +167,11 @@ export interface BrowserRunCoordinatorApi {
 	state(): BrowserRunPublicState | undefined;
 	start(input: BrowserRunStartInput): Promise<BrowserRunPublicState>;
 	approve(decision: BrowserRunApprovalInput): Promise<BrowserRunPublicState>;
+	approveAction(runId: string, actionId: string, decision: "approved" | "denied"): Promise<BrowserRunPublicState>;
 	takeover(input: BrowserRunTakeoverInput): Promise<BrowserRunPublicState>;
 	resume(runId: string): Promise<BrowserRunPublicState>;
 	stop(runId: string): Promise<BrowserRunPublicState>;
+	browserCrashed(runId?: string): Promise<BrowserRunPublicState | undefined>;
 	close(): Promise<void>;
 }
 
@@ -179,6 +194,7 @@ function cloneState(state: BrowserRunPublicState): BrowserRunPublicState {
 		lastActions: [...state.lastActions],
 		...(state.controlReason === undefined ? {} : { controlReason: state.controlReason }),
 		...(state.pendingApproval ? { pendingApproval: { ...state.pendingApproval } } : {}),
+		...(state.pendingAction ? { pendingAction: { ...state.pendingAction } } : {}),
 		...(state.resultMetadata ? { resultMetadata: { ...state.resultMetadata } } : {}),
 	};
 }
@@ -268,12 +284,25 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				throw new Error("Browser maxSteps must be an integer from 1 to 100.");
 			}
 
-			const url = input.startUrl?.trim() ? validateBrowserUrl(input.startUrl.trim()) : undefined;
+			const explicitSite =
+				/\b(?:nyisd\s+meg|nyissa\s+meg|open|navigate\s+to)\b[^.!?\n]{0,80}\byoutube(?:ot|on|ra|\.com)?\b/i.test(
+					input.prompt,
+				) && !/\bne\s+nyisd\s+meg\b/i.test(input.prompt)
+					? "https://www.youtube.com/"
+					: undefined;
+			const requestedUrl = input.startUrl?.trim() || explicitSite;
+			const url = requestedUrl ? validateBrowserUrl(requestedUrl) : undefined;
+			const currentUrl = input.currentUrl?.trim() ? validateBrowserUrl(input.currentUrl.trim()) : undefined;
+			if (input.cdpUrl && !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(input.cdpUrl)) {
+				throw new Error("Browser CDP endpoint must use loopback.");
+			}
 			if (url && !url.allowed) throw new Error(url.reason);
+			if (currentUrl && !currentUrl.allowed) throw new Error(currentUrl.reason);
 			if (url?.allowed) {
 				await this.assertPublicOrigin(url.origin);
 				if (url.url.length > 2_048) throw new Error("Browser startUrl must not exceed 2048 characters.");
 			}
+			if (currentUrl?.allowed) await this.assertPublicOrigin(currentUrl.origin);
 			const models = this.modelRuntime
 				.getAvailableSnapshot()
 				.filter((model) => input.model === model.id || input.model === modelReference(model));
@@ -331,7 +360,13 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					...(url?.allowed ? { startUrl: url.url } : {}),
 					baseUrl: active.gateway.url,
 					token: active.gateway.token,
-					allowedOrigins: url?.allowed ? [url.origin] : [],
+					allowedOrigins: [
+						...new Set([
+							...(url?.allowed ? [url.origin] : []),
+							...(currentUrl?.allowed ? [currentUrl.origin] : []),
+						]),
+					],
+					...(input.cdpUrl ? { cdpUrl: input.cdpUrl } : {}),
 					...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
 				});
 				await this.flushEvents();
@@ -400,6 +435,18 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				await this.flushEvents();
 				throw new Error("Browser approval failed.");
 			}
+		});
+	}
+
+	approveAction(runId: string, actionId: string, decision: "approved" | "denied"): Promise<BrowserRunPublicState> {
+		return this.exclusive(async () => {
+			const active = this.requireActive(runId);
+			if (this.current?.pendingAction?.actionId !== actionId || (decision !== "approved" && decision !== "denied")) {
+				throw new Error("Browser action approval is not pending.");
+			}
+			await active.runner.approveAction(runId, actionId, decision);
+			await this.flushEvents();
+			return this.requiredState();
 		});
 	}
 
@@ -476,6 +523,33 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		});
 	}
 
+	browserCrashed(runId?: string): Promise<BrowserRunPublicState | undefined> {
+		return this.exclusive(async () => {
+			if (!this.current || (runId && this.current.runId !== runId)) return this.state();
+			if (this.current.browserReset) return this.state();
+			const active = this.active;
+			if (active && !active.settled) {
+				await this.queueEvent(() =>
+					this.failActive(active, "Embedded Chromium crashed.", "Embedded Chromium crashed."),
+				);
+			}
+			this.unsubscribeIdleFailure?.();
+			this.unsubscribeIdleFailure = undefined;
+			const runner = this.browserRunner;
+			this.browserRunner = undefined;
+			await runner?.shutdown().catch(() => undefined);
+			await this.queueEvent(async () => {
+				this.current = { ...this.requiredState(), browserReset: true };
+				await this.record(
+					"BROWSER_RESET",
+					"Embedded Chromium crashed; the next browser opens on a blank page.",
+					this.requiredState().status,
+				);
+			});
+			return this.state();
+		});
+	}
+
 	close(): Promise<void> {
 		return this.exclusive(async () => {
 			if (this.closed && !this.active && !this.browserRunner) return;
@@ -543,12 +617,37 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				this.current = { ...this.requiredState(), status: "running", startedAt: event.timestamp };
 				await this.record("RUN_STARTED", "Browser worker started the run.", "running");
 				break;
+			case "navigation":
+				this.current = { ...this.requiredState(), currentOrigin: event.origin };
+				await this.record("NAVIGATION", "Browser navigated to the requested origin.", "running", {
+					origin: event.origin,
+				});
+				break;
 			case "step_planned": {
 				const actions = [...this.requiredState().lastActions, ...event.actions].slice(-MAX_LAST_ACTIONS);
-				this.current = { ...this.requiredState(), status: "running", lastActions: actions };
+				this.current = {
+					...this.requiredState(),
+					status: "running",
+					lastActions: actions,
+					agentCursor: event.cursor ?? undefined,
+				};
 				await this.record("ACTION", "Browser worker planned actions.", "running", { actions: event.actions });
 				break;
 			}
+			case "action_dispatched":
+				await this.record("ACTION_DISPATCHED", "Browser action dispatched to Chromium.", "running", {
+					action: event.action,
+				});
+				break;
+			case "action_settled":
+				this.current = { ...this.requiredState(), agentCursor: undefined };
+				await this.record(
+					event.status === "completed" ? "ACTION_COMPLETED" : "ACTION_FAILED",
+					"Browser action settled.",
+					"running",
+					{ action: event.action, disposition: event.status },
+				);
+				break;
 			case "origin_approval_required": {
 				if (this.current?.pendingApproval) {
 					await this.failActive(
@@ -613,10 +712,53 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				});
 				break;
 			}
+			case "action_approval_required": {
+				if (this.current?.pendingAction || this.current?.pendingApproval) {
+					await this.failActive(
+						active,
+						"Browser worker protocol failed.",
+						"Multiple browser approvals were requested.",
+					);
+					break;
+				}
+				this.current = {
+					...this.requiredState(),
+					status: "waiting-approval",
+					pendingAction: {
+						actionId: event.action_id,
+						action: event.action,
+						target: event.target,
+						origin: event.origin,
+					},
+				};
+				await this.record("APPROVAL_REQUESTED", "Browser action requires user approval.", "waiting-approval", {
+					actionId: event.action_id,
+					action: event.action,
+					target: event.target,
+					origin: event.origin,
+				});
+				break;
+			}
+			case "action_approval_resolved": {
+				const pending = this.current?.pendingAction;
+				if (!pending || pending.actionId !== event.action_id) {
+					await this.failActive(active, "Browser worker protocol failed.", "Unexpected browser action approval.");
+					break;
+				}
+				this.current = { ...this.requiredState(), status: "running", pendingAction: undefined };
+				await this.record("APPROVAL_RESOLVED", "User resolved the browser action.", "running", {
+					actionId: pending.actionId,
+					action: pending.action,
+					decision: event.decision,
+				});
+				break;
+			}
 			case "run_completed": {
 				const summary = event.result.present
 					? `Browser run completed; result metadata reports ${event.result.length} bytes.`
-					: "Browser run completed without result content.";
+					: this.current?.currentOrigin
+						? `Browser opened ${this.current.currentOrigin}.`
+						: "Browser run completed without result content.";
 				this.current = {
 					...this.requiredState(),
 					resultSummary: summary,
@@ -635,6 +777,8 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				if (this.requiredState().control === "human") break;
 				this.current = {
 					...this.requiredState(),
+					agentCursor: undefined,
+					pendingAction: undefined,
 					control: "human",
 					controlReason: event.reason,
 				};
@@ -675,6 +819,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			...this.requiredState(),
 			status: "completed",
 			pendingApproval: undefined,
+			pendingAction: undefined,
 			settledAt,
 			resultSummary: summary,
 		};
@@ -694,6 +839,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			...this.requiredState(),
 			status: "failed",
 			pendingApproval: undefined,
+			pendingAction: undefined,
 			settledAt: this.timestamp(),
 			error,
 		};
@@ -711,6 +857,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			...this.requiredState(),
 			status: "cancelled",
 			pendingApproval: undefined,
+			pendingAction: undefined,
 			settledAt: this.timestamp(),
 			resultSummary: "Browser run was stopped.",
 		};
