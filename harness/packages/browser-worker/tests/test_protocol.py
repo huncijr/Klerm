@@ -49,6 +49,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsInstance(command, StartCommand)
         self.assertEqual(command.allowed_origins, ("https://example.com",))
         self.assertEqual(command.max_steps, 25)
+        self.assertFalse(command.use_vision)
+
+    def test_start_accepts_only_boolean_vision_setting(self) -> None:
+        command = parse_command(valid_start(use_vision=True))
+        self.assertTrue(command.use_vision)
+        with self.assertRaisesRegex(ProtocolError, "use_vision"):
+            parse_command(valid_start(use_vision="true"))
 
     def test_rejects_unknown_fields(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "unknown field"):

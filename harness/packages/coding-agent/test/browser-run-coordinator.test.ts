@@ -136,6 +136,14 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 		this.emit({ ...this.base("step_planned", "running"), ...this.runFields(), actions });
 	}
 
+	dispatch(action: string, cursor: { x: number; y: number; action: string } | null): void {
+		this.emit({ ...this.base("action_dispatched", "running"), ...this.runFields(), action, cursor });
+	}
+
+	settle(action: string): void {
+		this.emit({ ...this.base("action_settled", "completed"), ...this.runFields(), action });
+	}
+
 	grantControl(reason: string): void {
 		this.emit({ ...this.base("control_granted", "paused"), ...this.runFields(), reason });
 	}
@@ -254,6 +262,27 @@ const startInput = {
 } as const;
 
 describe("BrowserRunCoordinator", () => {
+	it.each([
+		"lépj fel youtube-ra és keress zenét",
+		"lepj fel youtube es keress zenet",
+		"menj fel a youtube-ra",
+		"nyisd meg a youtubeot",
+	])("recognizes navigation: %s", async (prompt) => {
+		const context = setup();
+		const state = await context.coordinator.start({ model: startInput.model, prompt });
+		expect(state.startUrl).toBe("https://www.youtube.com/");
+		expect(context.audit.map((event) => event.event)).toEqual(["RUN_REQUESTED", "RUN_STARTED", "NAVIGATION"]);
+		await context.coordinator.close();
+	});
+	it.each(["ne lépj fel youtube-ra", "ne menj fel youtube-ra", "don't open youtube", "do not open youtube"])(
+		"does not infer navigation from negation: %s",
+		async (prompt) => {
+			const context = setup();
+			const state = await context.coordinator.start({ model: startInput.model, prompt });
+			expect(state.startUrl).toBeUndefined();
+			await context.coordinator.close();
+		},
+	);
 	it("requires a matching user decision for a pending action and audits it without input contents", async () => {
 		const context = setup();
 		const started = await context.coordinator.start(startInput);
@@ -294,6 +323,7 @@ describe("BrowserRunCoordinator", () => {
 			allowedOrigins: ["https://example.com"],
 			baseUrl: "http://127.0.0.1:43210/v1",
 			token: "ephemeral-gateway-token",
+			useVision: false,
 		});
 		const serializedState = JSON.stringify(context.coordinator.state());
 		expect(serializedState).not.toContain("prompt-secret");
@@ -342,6 +372,29 @@ describe("BrowserRunCoordinator", () => {
 		context.runner.requestOrigin("https://example.com");
 		await waitFor(() => context.coordinator.state()?.pendingApproval?.origin === "https://example.com");
 		expect(context.coordinator.state()?.status).toBe("waiting-approval");
+		await context.coordinator.close();
+	});
+
+	it("enables browser screenshots only for image-capable models", async () => {
+		const imageModel: Model<Api> = { ...model, input: ["text", "image"] };
+		const context = setup({ models: [imageModel] });
+		await context.coordinator.start(startInput);
+		expect(context.runner.starts[0]?.useVision).toBe(true);
+		await context.coordinator.close();
+	});
+
+	it("shows the cursor only while the corresponding action is executing", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		context.runner.plan(["scroll"]);
+		await waitFor(() => context.audit.some((event) => event.event === "ACTION"));
+		expect(context.coordinator.state()?.agentCursor).toBeUndefined();
+		context.runner.dispatch("scroll", { x: 400, y: 300, action: "scroll" });
+		await waitFor(() => context.coordinator.state()?.agentCursor?.action === "scroll");
+		expect(context.coordinator.state()?.agentCursor).toEqual({ x: 400, y: 300, action: "scroll" });
+		context.runner.settle("scroll");
+		await waitFor(() => context.audit.some((event) => event.event === "ACTION_COMPLETED"));
+		expect(context.coordinator.state()?.agentCursor).toBeUndefined();
 		await context.coordinator.close();
 	});
 

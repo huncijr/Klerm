@@ -13,6 +13,7 @@ import {
 	validateBrowserOrigin,
 	validateBrowserUrl,
 } from "./browser-agent.ts";
+import { BrowserDebugLog } from "./browser-debug.ts";
 import {
 	type BrowserWorkerApprovalDecision,
 	type BrowserWorkerEvent,
@@ -211,6 +212,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 	private readonly now: () => Date | string;
 	private readonly resolveHostname: (hostname: string) => Promise<readonly string[]>;
 	private readonly sequencer: BrowserEventSequencer;
+	private readonly debugLog: BrowserDebugLog;
 	private operationTail: Promise<void> = Promise.resolve();
 	private eventTail: Promise<void> = Promise.resolve();
 	private eventError = false;
@@ -222,6 +224,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 
 	constructor(options: BrowserRunCoordinatorOptions) {
 		this.cwd = options.cwd;
+		this.debugLog = new BrowserDebugLog(options.cwd);
 		this.sessionId = options.sessionId;
 		this.modelRuntime = options.modelRuntime;
 		this.onEvent = options.onEvent;
@@ -285,9 +288,9 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			}
 
 			const explicitSite =
-				/\b(?:nyisd\s+meg|nyissa\s+meg|open|navigate\s+to)\b[^.!?\n]{0,80}\byoutube(?:ot|on|ra|\.com)?\b/i.test(
+				/\b(?:nyisd\s+meg|nyissa\s+meg|l[ée]pj\s+fel|menj\s+fel|open|navigate\s+to)\b[^.!?\n]{0,80}\byoutube(?:ot|on|ra|\.com)?\b/i.test(
 					input.prompt,
-				) && !/\bne\s+nyisd\s+meg\b/i.test(input.prompt)
+				) && !/\b(?:ne|nem|don't|do\s+not)\b/i.test(input.prompt)
 					? "https://www.youtube.com/"
 					: undefined;
 			const requestedUrl = input.startUrl?.trim() || explicitSite;
@@ -351,7 +354,17 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				);
 			});
 			try {
-				active.gateway = await this.startGateway({ modelRuntime: this.modelRuntime, pinnedModel });
+				active.gateway = await this.startGateway({
+					modelRuntime: this.modelRuntime,
+					pinnedModel,
+					onDiagnostic: (entry) =>
+						this.debugLog.write({
+							event: entry.event,
+							runId: ids.runId,
+							model: modelReference(pinnedModel),
+							details: entry,
+						}),
+				});
 				await runner.start({
 					...ids,
 					agentId: BROWSER_AGENT_ID,
@@ -366,6 +379,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 							...(currentUrl?.allowed ? [currentUrl.origin] : []),
 						]),
 					],
+					useVision: pinnedModel.input.includes("image"),
 					...(input.cdpUrl ? { cdpUrl: input.cdpUrl } : {}),
 					...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
 				});
@@ -629,12 +643,13 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					...this.requiredState(),
 					status: "running",
 					lastActions: actions,
-					agentCursor: event.cursor ?? undefined,
+					agentCursor: undefined,
 				};
 				await this.record("ACTION", "Browser worker planned actions.", "running", { actions: event.actions });
 				break;
 			}
 			case "action_dispatched":
+				this.current = { ...this.requiredState(), agentCursor: event.cursor ?? undefined };
 				await this.record("ACTION_DISPATCHED", "Browser action dispatched to Chromium.", "running", {
 					action: event.action,
 				});
@@ -767,9 +782,13 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				await this.completeActive(active, summary);
 				break;
 			}
-			case "run_failed":
-				await this.failActive(active, "Browser run failed.", "Browser worker reported a run failure.");
+			case "run_failed": {
+				const incomplete =
+					event.error === "Browser task did not complete successfully; inspect browser-debug.jsonl.";
+				const error = incomplete ? "Browser task did not complete successfully." : "Browser run failed.";
+				await this.failActive(active, error, incomplete ? error : "Browser worker reported a run failure.");
 				break;
+			}
 			case "run_stopped":
 				await this.cancelActive(active, "Browser run stopped.");
 				break;
@@ -888,6 +907,18 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		});
 		this.current = { ...state, status, updatedAt: record.timestamp };
 		await this.appendEvent(this.cwd, record);
+		await this.debugLog.write({
+			event,
+			runId: state.runId,
+			model: state.model,
+			details: {
+				status,
+				reason,
+				auditSequence: record.sequence,
+				// Audit details are already bounded and stripped of field contents.
+				...(event === "RUN_REQUESTED" ? { hasStartUrl: Boolean(state.startUrl) } : { detail: record.details }),
+			},
+		});
 		if (this.onEvent) {
 			try {
 				await this.onEvent({ event: record, state: cloneState(this.requiredState()) });

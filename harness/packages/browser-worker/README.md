@@ -47,8 +47,9 @@ oversized input are rejected. One browser run may be active at a time; follow-up
 starts on the same worker reuse its browser until shutdown. An empty
 `allowed_origins` list starts without a chosen URL and requires approval for
 the first navigation origin. The desktop may supply `cdp_url` for its native
-CEF browser and `start_url` for an explicitly requested, approved navigation;
-the worker navigates before calling the model and emits a `navigation` event.
+CEF browser, `start_url` for an explicitly requested, approved navigation, and
+`use_vision` when the pinned model supports image input. The worker navigates
+before calling the model and emits a `navigation` event.
 
 Start a guarded browser run:
 
@@ -107,7 +108,9 @@ SHA-256 metadata.
 - Chromium is headed, sandboxing remains enabled, browser security remains
   enabled, default extensions are disabled, and permissions are empty.
 - Downloads and automatic PDF downloads are disabled.
-- Vision and cross-origin iframe processing are disabled.
+- Vision is enabled only when the pinned model advertises image input. The
+  loopback gateway accepts bounded inline PNG, JPEG, GIF, or WebP data and
+  rejects remote image URLs. Cross-origin iframe processing remains disabled.
 - IP-address navigation blocking is enabled by browser-use.
 - IP-address origins are rejected by the worker protocol as well as blocked by
   browser-use.
@@ -122,6 +125,10 @@ SHA-256 metadata.
   browser step. Unknown actions and uploads, downloads, clipboard and file
   actions remain excluded. Labeled credential fields and human-verification
   controls require manual takeover.
+- Browser-use implicit URL extraction is disabled because Klerm owns validated
+  navigation. The agent receives the original task once, executes at most one
+  action per observation, and does not treat opening a site as completion when
+  the request also requires interaction.
 - CAPTCHA, anti-bot, paywall, and other access-control bypass is prohibited in
   the enforced task instruction.
 - Required browser-use security fields and hooks are checked at runtime. The run

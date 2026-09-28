@@ -12,7 +12,7 @@ import browser_use
 from klerm_browser_worker.policy import ALLOWED_ACTIONS, PolicyError, check_interactive_target
 from klerm_browser_worker.policy import OriginPolicy
 from klerm_browser_worker.protocol import EventWriter, StartCommand
-from klerm_browser_worker.runtime import ActiveRuntime, RuntimeConfigurationError, _field_names, safe_runtime_error
+from klerm_browser_worker.runtime import ActiveRuntime, RuntimeConfigurationError, _disable_startup_animation, _field_names, safe_runtime_error
 
 
 class RuntimeSecurityTests(unittest.TestCase):
@@ -92,6 +92,36 @@ class RuntimeSecurityTests(unittest.TestCase):
 
 
 class NavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_animation_does_not_inject_cdp_script(self) -> None:
+        from browser_use.browser.watchdogs.aboutblank_watchdog import AboutBlankWatchdog
+        original = AboutBlankWatchdog._show_dvd_screensaver_on_about_blank_tabs
+        try:
+            _disable_startup_animation()
+            browser = browser_use.Browser(browser_profile=browser_use.BrowserProfile())
+            await browser.attach_all_watchdogs()
+            self.assertIsNotNone(browser._security_watchdog)
+            self.assertIsNotNone(browser._dom_watchdog)
+            # An animation call with no CDP connection must perform no IO.
+            await browser._aboutblank_watchdog._show_dvd_screensaver_on_about_blank_tabs()
+            self.assertTrue(callable(browser._aboutblank_watchdog.on_TabClosedEvent))
+        finally:
+            AboutBlankWatchdog._show_dvd_screensaver_on_about_blank_tabs = original
+
+    async def test_blank_page_done_is_rejected_before_executor(self) -> None:
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=(), max_steps=2,
+        )
+        active = ActiveRuntime(command, OriginPolicy((), AsyncMock()), EventWriter(io.StringIO()), lambda: None,
+                               browser=SimpleNamespace(get_current_page_url=AsyncMock(return_value="about:blank")))
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            result = await kwargs["tools"].act(SimpleNamespace(model_dump=lambda **_: {"done": {"success": True}}))
+            self.assertIn("about:blank", result.error)
+            execute.assert_not_awaited()
+
     async def test_human_verification_control_requires_takeover_not_approval(self) -> None:
         output = io.StringIO()
         command = StartCommand(
@@ -137,6 +167,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             await kwargs["tools"].act(action)
         self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
                          ["action_dispatched", "action_settled"])
+        self.assertIsNone(json.loads(output.getvalue().splitlines()[0])["cursor"])
         self.assertNotIn("secret-query", output.getvalue())
 
     async def test_button_click_waits_for_explicit_approval_and_denial_discards_action(self) -> None:
@@ -157,7 +188,8 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(active._step_callback(state, proposed, 1))
         await asyncio.sleep(0)
         self.assertEqual(active.pending_action_id, "action-1")
-        self.assertEqual(json.loads(output.getvalue().splitlines()[0])["event"], "action_approval_required")
+        self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
+                         ["step_planned", "action_approval_required"])
         active.approve_action("action-1", "denied")
         await task
         self.assertEqual(proposed["action"], [])
@@ -194,6 +226,52 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0]["cursor"], {"x": 70, "y": 50, "action": "input"})
         self.assertNotIn("private-search-term", output.getvalue())
 
+    async def test_scroll_uses_viewport_center_for_dispatched_cursor(self) -> None:
+        output = io.StringIO()
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="scroll", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=("https://example.org",), max_steps=2,
+        )
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()),
+                               EventWriter(output), lambda: None)
+        state = SimpleNamespace(
+            dom_state=SimpleNamespace(selector_map={}),
+            page_info=SimpleNamespace(viewport_width=800, viewport_height=600),
+        )
+        model_output = {"action": [{"scroll": {"down": True, "pages": 1}}]}
+        await active._step_callback(state, model_output, 1)
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            execute.return_value = SimpleNamespace(error=None)
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            action = SimpleNamespace(model_dump=lambda **_options: model_output["action"][0])
+            await kwargs["tools"].act(action)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(events[0]["cursor"], {"x": 400, "y": 300, "action": "scroll"})
+        self.assertEqual(events[1]["cursor"], {"x": 400, "y": 300, "action": "scroll"})
+
+    async def test_enter_key_requires_separate_approval(self) -> None:
+        output = io.StringIO()
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="submit", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=("https://example.org",), max_steps=2,
+        )
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()),
+                               EventWriter(output), lambda: None)
+        state = SimpleNamespace(url="https://example.org/", dom_state=SimpleNamespace(selector_map={}))
+        proposed = {"action": [{"send_keys": {"keys": "ENTER"}}]}
+        task = asyncio.create_task(active._step_callback(state, proposed, 1))
+        await asyncio.sleep(0)
+        self.assertEqual(active.pending_action_id, "action-1")
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([event["event"] for event in events], ["step_planned", "action_approval_required"])
+        self.assertEqual(events[1]["action"], "send_keys")
+        active.approve_action("action-1", "denied")
+        await task
+        self.assertEqual(proposed["action"], [])
+
     async def test_explicit_start_navigates_before_agent_completes(self) -> None:
         actions: list[str] = []
         output = io.StringIO()
@@ -202,6 +280,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             agent_id="browser-agent", task="nyisd meg a youtubeot", model="test-model",
             base_url="http://127.0.0.1:8080/v1", token="local-token",
             allowed_origins=("https://www.youtube.com",), max_steps=2,
+            use_vision=True,
             start_url="https://www.youtube.com/",
             cdp_url="http://127.0.0.1:9321",
         )
@@ -225,13 +304,14 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeAgent:
             def __init__(self, task: str, llm: object, browser: object, use_vision: bool,
-                         use_judge: bool, enable_signal_handler: bool, display_files_in_done_text: bool,
-                         tools: object, register_new_step_callback: object) -> None:
-                pass
+                          use_judge: bool, enable_signal_handler: bool, display_files_in_done_text: bool,
+                          max_actions_per_step: int, directly_open_url: bool, tools: object,
+                          register_new_step_callback: object) -> None:
+                self.settings = (use_vision, max_actions_per_step, directly_open_url)
 
             async def run(self, max_steps: int) -> object:
                 actions.append("agent")
-                return type("History", (), {"final_result": lambda self: None})()
+                return SimpleNamespace(final_result=lambda: None, is_done=lambda: True, is_successful=lambda: True)
 
         async def on_approval_required(_origin: str) -> None:
             raise AssertionError("unexpected origin approval")
@@ -243,8 +323,27 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             await active._run_agent(active.profile_dir)
 
         self.assertEqual(actions, ["start", "navigate:https://www.youtube.com/", "agent"])
+        self.assertEqual(active.agent.settings, (True, 1, False))
         self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
                          ["run_started", "navigation", "run_completed"])
+
+        for done, success in ((False, None), (True, False)):
+            with self.subTest(done=done, success=success):
+                failed_output = io.StringIO()
+                failed = ActiveRuntime(command, OriginPolicy(command.allowed_origins, on_approval_required),
+                                       EventWriter(failed_output), lambda: None, profile_dir=active.profile_dir)
+                history = SimpleNamespace(final_result=lambda: "not successful", is_done=lambda: done,
+                                          is_successful=lambda: success)
+                async def unsuccessful_run(self: object, max_steps: int) -> object:
+                    return history
+                with patch.object(browser_use, "Browser", FakeBrowser), patch.object(browser_use, "Agent", FakeAgent), \
+                        patch.object(browser_use, "ChatOpenAI", FakeChat), \
+                        patch.object(FakeAgent, "run", unsuccessful_run):
+                    await failed._run_agent(failed.profile_dir)
+                events = [json.loads(line) for line in failed_output.getvalue().splitlines()]
+                self.assertEqual(events[-1]["event"], "run_failed")
+                self.assertNotIn("run_completed", [event["event"] for event in events])
+                self.assertIsNotNone(failed.browser)
 
 
 if __name__ == "__main__":

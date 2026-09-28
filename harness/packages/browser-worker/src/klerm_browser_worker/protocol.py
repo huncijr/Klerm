@@ -64,6 +64,7 @@ class StartCommand:
     token: str
     allowed_origins: tuple[str, ...]
     max_steps: int
+    use_vision: bool = False
     start_url: str | None = None
     cdp_url: str | None = None
 
@@ -143,13 +144,16 @@ def parse_command(line: str) -> Command:
             "token",
             "allowed_origins",
         }
-        _strict_fields(payload, required, {"max_steps", "start_url", "cdp_url"})
+        _strict_fields(payload, required, {"max_steps", "use_vision", "start_url", "cdp_url"})
         origins = payload["allowed_origins"]
         if not isinstance(origins, list) or len(origins) > 64 or not all(isinstance(item, str) for item in origins):
             raise ProtocolError("invalid field: allowed_origins")
         max_steps = payload.get("max_steps", 25)
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or not 1 <= max_steps <= 100:
             raise ProtocolError("invalid field: max_steps")
+        use_vision = payload.get("use_vision", False)
+        if not isinstance(use_vision, bool):
+            raise ProtocolError("invalid field: use_vision")
         try:
             normalized_origins = tuple(dict.fromkeys(normalize_origin(item) for item in origins))
             base_url = validate_loopback_base_url(_string(payload, "base_url", maximum=2048))
@@ -178,6 +182,7 @@ def parse_command(line: str) -> Command:
             token=_string(payload, "token", maximum=8192),
             allowed_origins=normalized_origins,
             max_steps=max_steps,
+            use_vision=use_vision,
             start_url=start_url,
             cdp_url=cdp_url,
         )

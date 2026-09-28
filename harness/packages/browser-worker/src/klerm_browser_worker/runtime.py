@@ -9,6 +9,7 @@ import inspect
 import logging
 import math
 import os
+from importlib.metadata import version
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -74,6 +75,23 @@ def _maybe_await(value: object) -> Awaitable[object] | None:
     return value if inspect.isawaitable(value) else None
 
 
+def _disable_startup_animation() -> None:
+    """Pinned worker-local shim; preserve last-tab recovery and all other watchdogs."""
+    if version("browser-use") != "0.13.10":
+        raise RuntimeConfigurationError("browser-use startup animation shim requires 0.13.10")
+    module = importlib.import_module("browser_use.browser.watchdogs.aboutblank_watchdog")
+    watchdog = module.AboutBlankWatchdog
+    if not callable(getattr(watchdog, "_show_dvd_screensaver_on_about_blank_tabs", None)):
+        raise RuntimeConfigurationError("browser-use startup animation API changed")
+
+    async def no_animation(self: object) -> None:
+        # The upstream animation injects a remote image into the shared CEF page.
+        # Suppress injection before attachment, rather than hiding it after load.
+        return None
+
+    watchdog._show_dvd_screensaver_on_about_blank_tabs = no_animation
+
+
 @dataclass
 class ActiveRuntime:
     command: StartCommand
@@ -94,6 +112,7 @@ class ActiveRuntime:
     action_signal: asyncio.Event = field(default_factory=asyncio.Event)
     action_decision: str | None = None
     action_sequence: int = 0
+    planned_cursor: dict[str, object] | None = None
 
     async def run(self) -> None:
         try:
@@ -119,6 +138,7 @@ class ActiveRuntime:
             self.on_finished()
 
     async def _run_agent(self, profile_dir: str) -> None:
+        _disable_startup_animation()
         browser_use = importlib.import_module("browser_use")
         Agent = getattr(browser_use, "Agent", None)
         Browser = getattr(browser_use, "Browser", None)
@@ -185,10 +205,12 @@ class ActiveRuntime:
             _require_field(agent_fields, "task"): self._browser_task(),
             _require_field(agent_fields, "llm"): llm,
             _require_field(agent_fields, "browser", "browser_session"): self.browser,
-            _require_field(agent_fields, "use_vision"): False,
+            _require_field(agent_fields, "use_vision"): self.command.use_vision,
             _require_field(agent_fields, "use_judge"): False,
             _require_field(agent_fields, "enable_signal_handler"): False,
             _require_field(agent_fields, "display_files_in_done_text"): False,
+            _require_field(agent_fields, "max_actions_per_step"): 1,
+            _require_field(agent_fields, "directly_open_url"): False,
         }
         self._configure_read_only_tools(browser_use, Agent, agent_fields, agent_kwargs)
         callback_field = _require_field(agent_fields, "register_new_step_callback")
@@ -215,6 +237,15 @@ class ActiveRuntime:
         else:
             raise RuntimeConfigurationError("browser-use run lacks max_steps")
         history = await self.agent.run(**run_kwargs)
+        if self.stopped:
+            raise RunStopped
+        if not history.is_done() or history.is_successful() is not True:
+            self.terminal_emitted = True
+            self.event_writer.emit(
+                "run_failed", "failed", **self._run_fields(),
+                error="Browser task did not complete successfully; inspect browser-debug.jsonl.",
+            )
+            return
         final_result = None
         with suppress(Exception):
             final_result = history.final_result()
@@ -265,14 +296,26 @@ class ActiveRuntime:
             if len(names) != 1 or names[0] not in ALLOWED_ACTIONS:
                 raise PolicyError("browser attempted an unvalidated action")
             name = names[0]
-            self.event_writer.emit("action_dispatched", "running", **self._run_fields(), action=name)
+            cursor = self.planned_cursor if self.planned_cursor and self.planned_cursor.get("action") == name else None
+            self.event_writer.emit(
+                "action_dispatched", "running", **self._run_fields(), action=name, cursor=cursor
+            )
             try:
-                result = await original_act(action, *args, **kwargs)
+                if name == "done" and self.browser is not None and await self.browser.get_current_page_url() == "about:blank":
+                    result = browser_use.ActionResult(error="The browser is still on about:blank. Navigate to the requested public site before completing the task.")
+                else:
+                    result = await original_act(action, *args, **kwargs)
             except BaseException:
                 self.event_writer.emit("action_settled", "failed", **self._run_fields(), action=name)
                 raise
-            self.event_writer.emit("action_settled", "failed" if getattr(result, "error", None) else "completed",
-                                   **self._run_fields(), action=name)
+            finally:
+                self.planned_cursor = None
+            self.event_writer.emit(
+                "action_settled",
+                "failed" if getattr(result, "error", None) else "completed",
+                **self._run_fields(),
+                action=name,
+            )
             return result
 
         tools.act = traced_act
@@ -364,6 +407,15 @@ class ActiveRuntime:
                 approval_kind = action_name
             for url in urls:
                 await self.policy.require(url)
+        cursor = self._cursor_for_action(raw_actions, state)
+        self.planned_cursor = cursor
+        self.event_writer.emit(
+            "step_planned",
+            "running",
+            **self._run_fields(),
+            actions=action_names,
+            cursor=cursor,
+        )
         if approval_kind:
             self.action_sequence += 1
             action_id = f"action-{self.action_sequence}"
@@ -399,39 +451,46 @@ class ActiveRuntime:
             self.action_decision = None
             self.action_signal.clear()
             if not approved:
+                self.planned_cursor = None
                 if isinstance(model_output, dict):
                     model_output["action"] = []
                 else:
                     model_output.action = []
                 await self._drain_takeover()
                 return
-        cursor = None
-        if actions:
-            first = raw_actions[0] if isinstance(raw_actions, list) and raw_actions else None
-            if hasattr(first, "model_dump"):
-                first = first.model_dump(exclude_none=True)
-            if isinstance(first, dict) and len(first) == 1:
-                name, params = next(iter(first.items()))
-                if name in {"click", "input", "select_dropdown"} and isinstance(params, dict):
-                    x, y = params.get("coordinate_x"), params.get("coordinate_y")
-                    index = params.get("index")
-                    if (not isinstance(x, (int, float)) or not isinstance(y, (int, float))) and type(index) is int:
-                        state = args[0] if args else None
-                        selector_map = getattr(getattr(state, "dom_state", None), "selector_map", None)
-                        node = selector_map.get(index) if isinstance(selector_map, dict) else None
-                        rect = getattr(getattr(node, "snapshot_node", None), "clientRects", None)
-                        if rect is not None:
-                            x = rect.x + rect.width / 2
-                            y = rect.y + rect.height / 2
-                    if all(isinstance(point, (int, float)) and math.isfinite(point) and 0 <= point <= 10000 for point in (x, y)):
-                        cursor = {"x": round(x), "y": round(y), "action": name}
-        self.event_writer.emit(
-            "step_planned",
-            "running",
-            **self._run_fields(),
-            actions=action_names,
-            cursor=cursor,
-        )
+
+    @staticmethod
+    def _cursor_for_action(raw_actions: object, state: object) -> dict[str, object] | None:
+        first = raw_actions[0] if isinstance(raw_actions, list) and raw_actions else None
+        if hasattr(first, "model_dump"):
+            first = first.model_dump(exclude_none=True)
+        if not isinstance(first, dict) or len(first) != 1:
+            return None
+        name, params = next(iter(first.items()))
+        if name == "scroll":
+            page_info = getattr(state, "page_info", None)
+            width = getattr(page_info, "viewport_width", None)
+            height = getattr(page_info, "viewport_height", None)
+            if all(type(value) is int and 0 < value <= 10000 for value in (width, height)):
+                return {"x": round(width / 2), "y": round(height / 2), "action": name}
+            return None
+        if name not in {"click", "input", "select_dropdown"} or not isinstance(params, dict):
+            return None
+        x, y = params.get("coordinate_x"), params.get("coordinate_y")
+        index = params.get("index")
+        if (not isinstance(x, (int, float)) or not isinstance(y, (int, float))) and type(index) is int:
+            selector_map = getattr(getattr(state, "dom_state", None), "selector_map", None)
+            node = selector_map.get(index) if isinstance(selector_map, dict) else None
+            rect = getattr(getattr(node, "snapshot_node", None), "clientRects", None)
+            if rect is not None:
+                x = rect.x + rect.width / 2
+                y = rect.y + rect.height / 2
+        if all(
+            isinstance(point, (int, float)) and math.isfinite(point) and 0 <= point <= 10000
+            for point in (x, y)
+        ):
+            return {"x": round(x), "y": round(y), "action": name}
+        return None
 
     async def _drain_takeover(self) -> bool:
         """Pause AI stepping while a human owns the browser.
@@ -584,6 +643,8 @@ class ActiveRuntime:
             "You may navigate, scroll, inspect pages, follow ordinary links and type into search fields. "
             "Other clicks, field input, dropdown selection, and keypresses pause for explicit user approval "
             "before they execute; if denied, re-observe the page and choose another path. "
+            "Opening the requested site is not completion when the request also asks you to interact with it; "
+            "use done only after every requested browser action has succeeded. "
             "Never upload or download files, read the clipboard, solve human-verification challenges, "
             "or bypass access controls. Ask the human to take control for those actions.\n\n"
             f"Requested task:\n{self.command.task}"

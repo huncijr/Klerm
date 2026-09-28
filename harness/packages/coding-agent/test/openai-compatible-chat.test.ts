@@ -191,13 +191,52 @@ describe("OpenAI-compatible chat gateway", () => {
 		expect(completeSimple).toHaveBeenCalledOnce();
 	});
 
+	it("maps bounded inline browser screenshots for image-capable models", async () => {
+		const imageModel: Model<Api> = { ...model, input: ["text", "image"] };
+		const { runtime, completeSimple } = createRuntime();
+		await completeOpenAICompatibleChat(
+			{
+				model: "faux/browser-model",
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "Inspect this page." },
+							{
+								type: "image_url",
+								image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "auto" },
+							},
+						],
+					},
+				],
+			},
+			{ modelRuntime: runtime, pinnedModel: imageModel },
+		);
+		expect(completeSimple.mock.calls[0][1]).toMatchObject({
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Inspect this page." },
+						{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+					],
+				},
+			],
+		});
+	});
+
 	it.each([
 		[{ model: "browser-model", messages: [{ role: "user", content: "hello" }], stream: true }, "non-streaming"],
 		[{ model: "browser-model", messages: [{ role: "user", content: "hello" }], n: 2 }, "n=1"],
 		[{ model: "browser-model", messages: [{ role: "user", content: "hello" }], top_p: 0.5 }, "not supported"],
 		[
-			{ model: "browser-model", messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }] },
-			"must be a string",
+			{
+				model: "browser-model",
+				messages: [
+					{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }] },
+				],
+			},
+			"inline",
 		],
 		[
 			{ model: "browser-model", messages: [{ role: "user", content: "hello" }], tool_choice: "required" },

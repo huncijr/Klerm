@@ -31,6 +31,7 @@ export interface BrowserWorkerStartRequest extends BrowserRunRequest {
 	baseUrl: string;
 	token: string;
 	allowedOrigins: readonly string[];
+	useVision?: boolean;
 	cdpUrl?: string;
 	maxSteps?: number;
 }
@@ -132,6 +133,7 @@ export interface BrowserWorkerActionExecutionEvent extends WorkerEventBase, Work
 	event: "action_dispatched" | "action_settled";
 	status: "running" | "completed" | "failed";
 	action: string;
+	cursor?: { x: number; y: number; action: string } | null;
 }
 
 export interface BrowserWorkerRunCompletedEvent extends WorkerEventBase, WorkerRunFields {
@@ -408,12 +410,34 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 		}
 		case "action_dispatched":
 		case "action_settled":
-			exactFields(value, [...baseFields, ...runFields, "action"]);
+			exactFields(value, [
+				...baseFields,
+				...runFields,
+				"action",
+				...(event === "action_dispatched" ? ["cursor"] : []),
+			]);
 			validateEnvelope(value, event === "action_dispatched" ? "running" : String(value.status));
 			if (event === "action_settled" && value.status !== "completed" && value.status !== "failed")
 				throw new Error("Invalid browser action status.");
 			validateRunFields(value);
 			stringField(value, "action", 128);
+			if (event === "action_dispatched" && value.cursor !== null) {
+				const cursor = record(value.cursor);
+				if (
+					!cursor ||
+					Object.keys(cursor).sort().join() !== "action,x,y" ||
+					typeof cursor.action !== "string" ||
+					!["click", "input", "scroll", "select_dropdown"].includes(cursor.action) ||
+					!Number.isInteger(cursor.x) ||
+					!Number.isInteger(cursor.y) ||
+					(cursor.x as number) < 0 ||
+					(cursor.x as number) > 10000 ||
+					(cursor.y as number) < 0 ||
+					(cursor.y as number) > 10000
+				) {
+					throw new Error("Invalid browser worker cursor.");
+				}
+			}
 			break;
 		case "run_completed": {
 			exactFields(value, [...baseFields, ...runFields, "result"]);
@@ -636,6 +660,9 @@ function validateStartRequest(request: BrowserWorkerStartRequest): void {
 	if (request.cdpUrl && !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(request.cdpUrl)) {
 		throw new Error("Browser worker CDP endpoint must use loopback.");
 	}
+	if (request.useVision !== undefined && typeof request.useVision !== "boolean") {
+		throw new Error("Browser worker useVision must be a boolean.");
+	}
 	if (request.allowedOrigins.length > 64) {
 		throw new Error("A browser run accepts at most 64 allowed origins.");
 	}
@@ -753,12 +780,9 @@ export class BrowserWorkerRunner {
 		await this.ensureProcess();
 		this.activeRunId = request.runId;
 		this.runTerminal = false;
-		let task = request.prompt;
 		if (request.startUrl !== undefined) {
 			const startUrl = validateBrowserUrl(request.startUrl, { allowedOrigins: request.allowedOrigins });
 			if (!startUrl.allowed) throw new Error("Invalid browser worker startUrl.");
-			task = `Begin at this validated public URL: ${startUrl.url}\n\nRequested task:\n${request.prompt}`;
-			if (task.length > 32_768) throw new Error("Invalid browser worker prompt.");
 		}
 		this.promptSecret = request.prompt;
 		this.tokenSecret = request.token;
@@ -778,11 +802,12 @@ export class BrowserWorkerRunner {
 			task_id: request.taskId,
 			correlation_id: request.correlationId,
 			agent_id: request.agentId,
-			task,
+			task: request.prompt,
 			model: request.model,
 			base_url: request.baseUrl,
 			token: request.token,
 			allowed_origins: request.allowedOrigins,
+			...(request.useVision === undefined ? {} : { use_vision: request.useVision }),
 			...(request.startUrl === undefined ? {} : { start_url: request.startUrl }),
 			...(request.cdpUrl === undefined ? {} : { cdp_url: request.cdpUrl }),
 			...(request.maxSteps === undefined ? {} : { max_steps: request.maxSteps }),

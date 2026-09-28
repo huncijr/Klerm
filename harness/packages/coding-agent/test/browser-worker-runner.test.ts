@@ -197,7 +197,7 @@ describe("BrowserWorkerRunner", () => {
 			runtime: "configured browser worker",
 			version: "fake-1.0.0",
 		});
-		await runner.start({ ...startRequest(), cdpUrl: "http://127.0.0.1:9321" });
+		await runner.start({ ...startRequest(), cdpUrl: "http://127.0.0.1:9321", useVision: true });
 		await runner.approve({
 			approvalId: "approval-1",
 			runId: "run-1",
@@ -256,6 +256,7 @@ describe("BrowserWorkerRunner", () => {
 		expect(commands[3]?.allowed_origins).toEqual([]);
 		expect(commands[0]?.start_url).toBe("https://example.com/docs");
 		expect(commands[0]?.cdp_url).toBe("http://127.0.0.1:9321");
+		expect(commands[0]?.use_vision).toBe(true);
 		expect(commands[3]?.start_url).toBeUndefined();
 		expect(commands[3]?.task).toBe("Read the public documentation.");
 		expect(commands[0]).toMatchObject({
@@ -263,7 +264,7 @@ describe("BrowserWorkerRunner", () => {
 			task_id: "task-1",
 			correlation_id: "correlation-1",
 			agent_id: "browser-agent",
-			task: "Begin at this validated public URL: https://example.com/docs\n\nRequested task:\nRead the public documentation.",
+			task: "Read the public documentation.",
 			max_steps: 10,
 		});
 	});

@@ -14,13 +14,21 @@ import type {
 import type { ModelRuntime } from "../core/model-runtime.ts";
 
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
-const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+const IMAGE_DATA_URL = /^data:(image\/(?:gif|jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/u;
 const FUNCTION_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 type ChatRuntime = Pick<ModelRuntime, "completeSimple" | "getAvailableSnapshot">;
 
 export interface OpenAICompatibleChatOptions {
 	modelRuntime: ChatRuntime;
+	onDiagnostic?: (event: {
+		event: "MODEL_REQUEST" | "MODEL_RESPONSE" | "GATEWAY_ERROR";
+		code?: string;
+		stopReason?: string;
+		totalTokens?: number;
+	}) => void | Promise<void>;
 	/** A model that may be used without being present in ModelRuntime's available snapshot. */
 	pinnedModel?: Model<Api>;
 }
@@ -72,9 +80,13 @@ interface ParsedToolCall {
 	arguments: Record<string, unknown>;
 }
 
+type ParsedUserContent =
+	| string
+	| Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+
 type ParsedMessage =
 	| { role: "system"; content: string }
-	| { role: "user"; content: string }
+	| { role: "user"; content: ParsedUserContent }
 	| { role: "assistant"; content: string | null; toolCalls: ParsedToolCall[] }
 	| { role: "tool"; content: string; toolCallId: string };
 
@@ -173,6 +185,40 @@ function parseToolCalls(value: unknown, path: string): ParsedToolCall[] {
 	});
 }
 
+function parseUserContent(value: unknown, path: string): ParsedUserContent {
+	if (typeof value === "string") return value;
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new GatewayError(400, "invalid_request", `${path} must be a string or non-empty content array.`);
+	}
+	return value.map((entry, index) => {
+		const partPath = `${path}[${index}]`;
+		const part = expectRecord(entry, partPath);
+		const type = expectString(part.type, `${partPath}.type`, false);
+		if (type === "text") {
+			rejectUnknownKeys(part, ["type", "text"], partPath);
+			return { type, text: expectString(part.text, `${partPath}.text`) };
+		}
+		if (type !== "image_url") {
+			throw new GatewayError(400, "unsupported_content", `${partPath}.type is not supported.`);
+		}
+		rejectUnknownKeys(part, ["type", "image_url"], partPath);
+		const image = expectRecord(part.image_url, `${partPath}.image_url`);
+		rejectUnknownKeys(image, ["url", "detail"], `${partPath}.image_url`);
+		if (image.detail !== undefined && !["auto", "low", "high"].includes(String(image.detail))) {
+			throw new GatewayError(400, "invalid_request", `${partPath}.image_url.detail is invalid.`);
+		}
+		const match = IMAGE_DATA_URL.exec(expectString(image.url, `${partPath}.image_url.url`, false));
+		if (!match) {
+			throw new GatewayError(400, "unsupported_image", "Only inline PNG, JPEG, GIF, or WebP images are supported.");
+		}
+		const data = match[2];
+		if (data.length % 4 !== 0 || Buffer.byteLength(data, "base64") > MAX_IMAGE_BYTES) {
+			throw new GatewayError(400, "invalid_image", "Inline image data is invalid or too large.");
+		}
+		return { type: "image", data, mimeType: match[1] };
+	});
+}
+
 function parseMessages(value: unknown): ParsedMessage[] {
 	if (!Array.isArray(value) || value.length === 0) {
 		throw new GatewayError(400, "invalid_request", "messages must be a non-empty array.");
@@ -197,7 +243,7 @@ function parseMessages(value: unknown): ParsedMessage[] {
 		conversationStarted = true;
 		if (role === "user") {
 			rejectUnknownKeys(message, ["role", "content"], path);
-			return { role, content: expectString(message.content, `${path}.content`) };
+			return { role, content: parseUserContent(message.content, `${path}.content`) };
 		}
 		if (role === "assistant") {
 			rejectUnknownKeys(message, ["role", "content", "tool_calls"], path);
@@ -376,6 +422,13 @@ function buildContext(request: ParsedRequest, model: Model<Api>): Context {
 		if (message.role === "system") {
 			systemMessages.push(message.content);
 		} else if (message.role === "user") {
+			if (
+				Array.isArray(message.content) &&
+				message.content.some((part) => part.type === "image") &&
+				!model.input.includes("image")
+			) {
+				throw new GatewayError(400, "unsupported_image", `Model "${model.id}" does not accept image input.`);
+			}
 			messages.push({ role: "user", content: message.content, timestamp });
 		} else if (message.role === "assistant") {
 			for (const call of message.toolCalls) toolNames.set(call.id, call.name);
@@ -473,6 +526,17 @@ function mapResponse(request: ParsedRequest, message: AssistantMessage): OpenAIC
 	};
 }
 
+async function reportDiagnostic(
+	options: OpenAICompatibleChatOptions,
+	event: Parameters<NonNullable<OpenAICompatibleChatOptions["onDiagnostic"]>>[0],
+): Promise<void> {
+	try {
+		await options.onDiagnostic?.(event);
+	} catch {
+		// A diagnostic observer cannot alter model or HTTP response semantics.
+	}
+}
+
 /** Validate and execute one supported OpenAI chat-completions request. */
 export async function completeOpenAICompatibleChat(
 	requestValue: unknown,
@@ -490,7 +554,13 @@ export async function completeOpenAICompatibleChat(
 	};
 	let result: AssistantMessage;
 	try {
+		await reportDiagnostic(options, { event: "MODEL_REQUEST" });
 		result = await options.modelRuntime.completeSimple(model, buildContext(request, model), requestOptions);
+		await reportDiagnostic(options, {
+			event: "MODEL_RESPONSE",
+			stopReason: result.stopReason,
+			totalTokens: result.usage.totalTokens,
+		});
 	} catch {
 		if (signal?.aborted)
 			throw new GatewayError(499, "request_aborted", "The model request was aborted.", "request_aborted");
@@ -616,6 +686,10 @@ export async function startOpenAICompatibleChatServer(
 				response.off("close", onClose);
 			}
 		} catch (error) {
+			await reportDiagnostic(options, {
+				event: "GATEWAY_ERROR",
+				code: error instanceof GatewayError ? error.code : "internal_error",
+			});
 			if (!response.destroyed) {
 				sendError(
 					response,
