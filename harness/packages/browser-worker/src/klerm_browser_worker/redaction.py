@@ -14,14 +14,16 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 
 
-def redact_text(value: object, secrets: Iterable[str] = ()) -> str:
+def redact_text(value: object, secrets: Iterable[str] = (), *, maximum: int = 500, multiline: bool = False) -> str:
     """Return a bounded one-line error without known credential material."""
 
-    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = str(value).replace("\r", " ")
+    if not multiline:
+        text = text.replace("\n", " ")
     for secret in secrets:
         if secret:
             text = text.replace(secret, "[REDACTED]")
     text = _URL_CREDENTIALS.sub(r"\1[REDACTED]@", text)
     text = _BEARER.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
-    return text[:500]
+    return text[:maximum]

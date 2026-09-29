@@ -86,6 +86,12 @@ lines.on("line", (line) => {
       return;
     }
     emit("run_started", "running", runFields());
+	if (mode === "scroll") {
+		emit("step_planned", "running", { ...runFields(), actions: ["scroll"], cursor: { x: 400, y: 300, action: "scroll" } });
+		emit("action_dispatched", "running", { ...runFields(), action: "scroll", cursor: { x: 400, y: 300, action: "scroll" } });
+		emit("action_settled", "completed", { ...runFields(), action: "scroll" });
+		return;
+	}
 	if (mode === "crash-after-start") {
 		setImmediate(() => process.exit(3));
 		return;
@@ -186,6 +192,19 @@ function startRequest() {
 }
 
 describe("BrowserWorkerRunner", () => {
+	it("accepts planned scroll cursors and subsequent action outcomes", async () => {
+		const fake = await fakeWorker("scroll");
+		const runner = new BrowserWorkerRunner({ env: fake.env });
+		const events: BrowserWorkerEvent[] = [];
+		runner.subscribe((event) => events.push(event));
+		await runner.start(startRequest());
+		await runner.stop("run-1");
+		await runner.shutdown();
+		expect(events).toContainEqual(
+			expect.objectContaining({ event: "step_planned", cursor: { x: 400, y: 300, action: "scroll" } }),
+		);
+		expect(events).toContainEqual(expect.objectContaining({ event: "action_settled", status: "completed" }));
+	});
 	it("reports handshake availability and sends a single typed run without a shell", async () => {
 		const fake = await fakeWorker("normal");
 		const runner = new BrowserWorkerRunner({ env: fake.env });

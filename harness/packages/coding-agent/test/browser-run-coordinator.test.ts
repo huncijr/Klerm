@@ -153,6 +153,10 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 		this.emit({ ...this.base("action_verified", "completed"), ...this.runFields(), action: "input" });
 	}
 
+	message(text: string): void {
+		this.emit({ ...this.base("assistant_message", "running"), ...this.runFields(), text });
+	}
+
 	grantControl(reason: string): void {
 		this.emit({ ...this.base("control_granted", "paused"), ...this.runFields(), reason });
 	}
@@ -271,6 +275,42 @@ const startInput = {
 } as const;
 
 describe("BrowserRunCoordinator", () => {
+	it("preserves a complete multi-post final answer beyond the old 500-character limit", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		const text = `1. First post\n${"Observed content. ".repeat(100)}\n10. Final post`;
+		context.runner.message(text);
+		context.runner.complete();
+		await waitFor(() => context.audit.some((event) => event.event === "RUN_COMPLETED"));
+		expect(context.audit.find((event) => event.event === "ASSISTANT_MESSAGE")?.reason).toBe(text);
+		await context.coordinator.close();
+	});
+	it("does not overwrite an immediate human-control grant with pausing", async () => {
+		const context = setup();
+		const run = await context.coordinator.start(startInput);
+		vi.spyOn(context.runner, "takeover").mockImplementation(async () => {
+			context.runner.grantControl("Human takeover");
+		});
+		const state = await context.coordinator.takeover({ runId: run.runId });
+		expect(state.control).toBe("human");
+		expect(context.audit.slice(-2).map((event) => event.event)).toEqual([
+			"CONTROL_PAUSE_REQUESTED",
+			"CONTROL_GRANTED",
+		]);
+		await context.coordinator.stop(run.runId);
+		expect(context.coordinator.state()?.status).toBe("cancelled");
+		await context.coordinator.close();
+	});
+	it("places the agent's final user-facing answer in ordered browser activity", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		context.runner.message("Megnyitottam a YouTube-ot.");
+		context.runner.complete();
+		await waitFor(() => context.audit.some((event) => event.event === "RUN_COMPLETED"));
+		expect(context.audit.slice(-2).map((event) => event.event)).toEqual(["ASSISTANT_MESSAGE", "RUN_COMPLETED"]);
+		expect(context.audit.at(-2)?.reason).toBe("Megnyitottam a YouTube-ot.");
+		await context.coordinator.close();
+	});
 	it.each([
 		"lépj fel youtube-ra és keress zenét",
 		"lepj fel youtube es keress zenet",
@@ -371,7 +411,7 @@ describe("BrowserRunCoordinator", () => {
 		expect(context.runner.shutdownCalls).toBe(1);
 	});
 
-	it("starts without a default URL and requires approval for the first origin", async () => {
+	it("starts without a default URL and automatically allows the first public origin", async () => {
 		const context = setup();
 		const started = await context.coordinator.start({ model: startInput.model, prompt: startInput.prompt });
 		expect(started.startUrl).toBeUndefined();
@@ -379,8 +419,9 @@ describe("BrowserRunCoordinator", () => {
 		expect(context.runner.starts[0]?.allowedOrigins).toEqual([]);
 		expect(context.audit[0]?.details).toBeUndefined();
 		context.runner.requestOrigin("https://example.com");
-		await waitFor(() => context.coordinator.state()?.pendingApproval?.origin === "https://example.com");
-		expect(context.coordinator.state()?.status).toBe("waiting-approval");
+		await waitFor(() => context.audit.some((event) => event.event === "APPROVAL_RESOLVED"));
+		expect(context.coordinator.state()?.status).toBe("running");
+		expect(context.runner.approvals[0]?.decidedBy).toBe("policy");
 		await context.coordinator.close();
 	});
 
@@ -567,13 +608,11 @@ describe("BrowserRunCoordinator", () => {
 		await publicCoordinator.close();
 	});
 
-	it("approves only the exact pending origin and bounds the public action history", async () => {
+	it("automatically allows the exact public origin and bounds the public action history", async () => {
 		const context = setup();
 		const started = await context.coordinator.start(startInput);
 		context.runner.requestOrigin("https://docs.example.com");
-		await waitFor(() => context.coordinator.state()?.status === "waiting-approval");
-		const pending = context.coordinator.state()?.pendingApproval;
-		expect(pending).toMatchObject({ approvalId: "approval-1", origin: "https://docs.example.com" });
+		await waitFor(() => context.audit.some((event) => event.event === "APPROVAL_RESOLVED"));
 		await expect(
 			context.coordinator.approve({
 				runId: started.runId,
@@ -582,12 +621,7 @@ describe("BrowserRunCoordinator", () => {
 			}),
 		).rejects.toThrow("not pending");
 
-		const approved = await context.coordinator.approve({
-			runId: started.runId,
-			approvalId: "approval-1",
-			decision: "approved",
-			scope: "current_run",
-		});
+		const approved = context.coordinator.state()!;
 		expect(approved.status).toBe("running");
 		expect(approved.pendingApproval).toBeUndefined();
 		expect(context.runner.approvals[0]).toMatchObject({
@@ -648,17 +682,12 @@ describe("BrowserRunCoordinator", () => {
 		await context.coordinator.close();
 	});
 
-	it("denies an origin by stopping and settles only once across stop and close", async () => {
+	it("stops after automatic origin allowance and settles only once across stop and close", async () => {
 		const context = setup();
 		const started = await context.coordinator.start(startInput);
 		context.runner.requestOrigin("https://other.example.com");
-		await waitFor(() => context.coordinator.state()?.pendingApproval !== undefined);
-
-		const denied = await context.coordinator.approve({
-			runId: started.runId,
-			approvalId: "approval-1",
-			decision: "denied",
-		});
+		await waitFor(() => context.audit.some((event) => event.event === "APPROVAL_RESOLVED"));
+		const denied = await context.coordinator.stop(started.runId);
 		expect(denied.status).toBe("cancelled");
 		expect(context.runner.stops).toEqual([started.runId]);
 		expect(context.audit.filter((event) => event.event === "RUN_CANCELLED")).toHaveLength(1);

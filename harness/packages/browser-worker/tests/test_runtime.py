@@ -92,6 +92,25 @@ class RuntimeSecurityTests(unittest.TestCase):
 
 
 class NavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_root_scroll_animates_the_live_page_before_settlement(self) -> None:
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="scroll", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=(), max_steps=2,
+        )
+        page = SimpleNamespace(evaluate=AsyncMock(return_value="True"))
+        active = ActiveRuntime(command, OriginPolicy((), AsyncMock()), EventWriter(io.StringIO()), lambda: None,
+                               browser=SimpleNamespace(get_current_page=AsyncMock(return_value=page)))
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            result = await kwargs["tools"].act(SimpleNamespace(model_dump=lambda **_: {"scroll": {"pages": 1, "down": True}}))
+            execute.assert_not_awaited()
+        self.assertIsNone(result.error)
+        self.assertIn("requestAnimationFrame", page.evaluate.await_args.args[0])
+        self.assertEqual(page.evaluate.await_args.args[1:], (1, True))
+        self.assertFalse(active.action_in_flight)
+
     async def test_startup_animation_does_not_inject_cdp_script(self) -> None:
         from browser_use.browser.watchdogs.aboutblank_watchdog import AboutBlankWatchdog
         original = AboutBlankWatchdog._show_dvd_screensaver_on_about_blank_tabs
@@ -256,7 +275,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
             token="local-token", allowed_origins=("https://www.youtube.com",), max_steps=2,
         )
-        page = SimpleNamespace(evaluate=AsyncMock(return_value="True"))
+        page = SimpleNamespace(evaluate=AsyncMock(side_effect=["False", "True"]))
         browser = SimpleNamespace(get_current_page=AsyncMock(return_value=page))
         active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()),
                                EventWriter(output), lambda: None, browser=browser)
@@ -272,7 +291,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             await kwargs["tools"].act(action)
         self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
                          ["step_planned", "action_dispatched", "action_verified", "action_settled"])
-        page.evaluate.assert_awaited_once_with(
+        page.evaluate.assert_awaited_with(
             "(key, identifier, value) => { const elements = key === 'id' ? [document.getElementById(identifier)] : [...document.getElementsByName(identifier)].filter(el => el.tagName === 'INPUT'); return elements.length === 1 && elements[0]?.value === value; }",
             "id", "search", "jazz")
         self.assertNotIn("jazz", output.getvalue())
@@ -284,7 +303,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
             token="local-token", allowed_origins=("https://www.youtube.com",), max_steps=2,
         )
-        browser = SimpleNamespace(get_current_page=AsyncMock(return_value=SimpleNamespace(evaluate=AsyncMock(return_value="True"))))
+        browser = SimpleNamespace(get_current_page=AsyncMock(return_value=SimpleNamespace(evaluate=AsyncMock(return_value="False"))))
         active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()), EventWriter(output), lambda: None, browser=browser)
         search = SimpleNamespace(node_name="INPUT", attributes={"name": "search_query", "type": "text"}, snapshot_node=None)
         state = SimpleNamespace(url="https://www.youtube.com/", dom_state=SimpleNamespace(selector_map={1: search}))

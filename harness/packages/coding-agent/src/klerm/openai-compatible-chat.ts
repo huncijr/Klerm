@@ -589,6 +589,12 @@ export async function completeOpenAICompatibleChat(
 
 function classifyModelError(message: string | undefined): string {
 	if (!message) return "upstream_error";
+	if (
+		/model/i.test(message) &&
+		/not supported|unsupported/i.test(message) &&
+		/account|subscription|chatgpt/i.test(message)
+	)
+		return "model_account_unsupported";
 	if (/\b(401|403|unauthorized|forbidden|authentication|invalid.api.key)\b/i.test(message)) return "model_auth_failed";
 	if (/\b(404|model.not.found|unknown.model|invalid.model)\b/i.test(message)) return "model_unavailable";
 	if (/\b(429|rate.limit|quota)\b/i.test(message)) return "model_rate_limited";
@@ -650,7 +656,15 @@ export async function probeBrowserModel(
 		};
 	} catch (error) {
 		const code = error instanceof GatewayError ? error.code : "probe_failed";
-		return { status: "failed", code, reason: `Browser tool-request check failed (${code}).`, levels };
+		return {
+			status: "failed",
+			code,
+			reason:
+				code === "model_account_unsupported"
+					? "The provider rejected this model for the current account. Select a model available to this account; this is not a browser-action compatibility failure."
+					: `Browser tool-request check failed (${code}).`,
+			levels,
+		};
 	}
 }
 

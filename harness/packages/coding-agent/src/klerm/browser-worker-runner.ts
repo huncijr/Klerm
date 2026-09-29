@@ -142,6 +142,12 @@ export interface BrowserWorkerActionVerifiedEvent extends WorkerEventBase, Worke
 	action: "input";
 }
 
+export interface BrowserWorkerAssistantMessageEvent extends WorkerEventBase, WorkerRunFields {
+	event: "assistant_message";
+	status: "running";
+	text: string;
+}
+
 export interface BrowserWorkerRunCompletedEvent extends WorkerEventBase, WorkerRunFields {
 	event: "run_completed";
 	status: "completed";
@@ -196,6 +202,7 @@ export type BrowserWorkerEvent =
 	| BrowserWorkerStepPlannedEvent
 	| BrowserWorkerActionExecutionEvent
 	| BrowserWorkerActionVerifiedEvent
+	| BrowserWorkerAssistantMessageEvent
 	| BrowserWorkerRunCompletedEvent
 	| BrowserWorkerRunFailedEvent
 	| BrowserWorkerRunStoppedEvent
@@ -402,7 +409,7 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 					!cursor ||
 					Object.keys(cursor).sort().join() !== "action,x,y" ||
 					typeof cursor.action !== "string" ||
-					!["click", "input", "select_dropdown"].includes(cursor.action) ||
+					!["click", "input", "scroll", "select_dropdown"].includes(cursor.action) ||
 					!Number.isInteger(cursor.x) ||
 					!Number.isInteger(cursor.y) ||
 					(cursor.x as number) < 0 ||
@@ -451,6 +458,12 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 			validateEnvelope(value, "completed");
 			validateRunFields(value);
 			if (value.action !== "input") throw new Error("Invalid verified browser action.");
+			break;
+		case "assistant_message":
+			exactFields(value, [...baseFields, ...runFields, "text"]);
+			validateEnvelope(value, "running");
+			validateRunFields(value);
+			stringField(value, "text", 32_000);
 			break;
 		case "run_completed": {
 			exactFields(value, [...baseFields, ...runFields, "result"]);
@@ -837,7 +850,8 @@ export class BrowserWorkerRunner {
 			await this.stop(decision.runId);
 			return;
 		}
-		if (decision.decidedBy !== "user") throw new Error("Browser origin approval must be decided by the user.");
+		if (decision.decidedBy !== "user" && decision.decidedBy !== "policy")
+			throw new Error("Invalid browser origin decision source.");
 		this.assertActiveRun(decision.runId);
 		if (this.runTerminal) throw new Error("Browser run is not active.");
 		const origin = validateBrowserOrigin(decision.origin);
@@ -1127,6 +1141,11 @@ export class BrowserWorkerRunner {
 	}
 
 	private sanitizeEvent(event: BrowserWorkerEvent): BrowserWorkerEvent {
+		if (event.event === "assistant_message") {
+			let text = redactBrowserSecretText(event.text);
+			if (this.tokenSecret) text = text.split(this.tokenSecret).join(BROWSER_REDACTED_VALUE);
+			return { ...event, text };
+		}
 		if (event.event !== "run_failed" && event.event !== "command_rejected") return event;
 		let error = redactBrowserSecretText(event.error);
 		for (const secret of [this.tokenSecret, this.promptSecret]) {

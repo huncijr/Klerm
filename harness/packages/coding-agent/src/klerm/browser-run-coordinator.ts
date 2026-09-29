@@ -495,6 +495,10 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				throw new Error("Browser takeover reason must be 1 through 500 characters.");
 			}
 			const reason = input.reason ?? "Human takeover requested.";
+			await this.queueEvent(async () => {
+				this.current = { ...this.requiredState(), control: "pausing", controlReason: reason };
+				await this.record("CONTROL_PAUSE_REQUESTED", "Human control was requested.", "running", { reason });
+			});
 			try {
 				await active.runner.takeover(input.runId, reason);
 				await this.flushEvents();
@@ -505,11 +509,6 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				await this.flushEvents();
 				throw new Error("Browser takeover failed.");
 			}
-			await this.queueEvent(async () => {
-				if (this.active !== active || active.settled) return;
-				this.current = { ...this.requiredState(), control: "pausing", controlReason: reason };
-				await this.record("CONTROL_PAUSE_REQUESTED", "Human control was requested.", "running", { reason });
-			});
 			await this.flushEvents();
 			return this.requiredState();
 		});
@@ -650,6 +649,9 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 		}
 
 		switch (event.event) {
+			case "assistant_message":
+				await this.record("ASSISTANT_MESSAGE", event.text, "running");
+				break;
 			case "run_started":
 				this.current = { ...this.requiredState(), status: "running", startedAt: event.timestamp };
 				await this.record("RUN_STARTED", "Browser worker started the run.", "running");
@@ -725,16 +727,24 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					origin: origin.origin,
 					requestedAt: event.timestamp,
 				};
-				this.current = { ...this.requiredState(), status: "waiting-approval", pendingApproval };
+				this.current = { ...this.requiredState(), status: "running", pendingApproval };
 				await this.record(
 					"APPROVAL_REQUESTED",
-					"A new browser origin requires user approval.",
-					"waiting-approval",
+					"Checking the new public browser origin automatically.",
+					"running",
 					{
 						approvalId: pendingApproval.approvalId,
 						origin: pendingApproval.origin,
 					},
 				);
+				await active.runner.approve({
+					runId: this.requiredState().runId,
+					approvalId: pendingApproval.approvalId,
+					origin: pendingApproval.origin,
+					decision: "approved",
+					decidedBy: "policy",
+					scope: "current_run",
+				});
 				break;
 			}
 			case "origin_approved": {
@@ -748,7 +758,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					break;
 				}
 				this.current = { ...this.requiredState(), status: "running", pendingApproval: undefined };
-				await this.record("APPROVAL_RESOLVED", "User approved the pending origin.", "running", {
+				await this.record("APPROVAL_RESOLVED", "Public origin allowed automatically for this run.", "running", {
 					approvalId: pending.approvalId,
 					origin: pending.origin,
 					decision: "approved",

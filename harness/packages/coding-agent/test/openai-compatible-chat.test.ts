@@ -127,6 +127,7 @@ describe("OpenAI-compatible chat gateway", () => {
 		expect(completeSimple).toHaveBeenCalledTimes(2);
 	});
 	it.each([
+		["The model is not supported when using Codex with a ChatGPT account", "model_account_unsupported"],
 		["401 invalid API key", "model_auth_failed"],
 		["404 model not found", "model_unavailable"],
 		["unsupported tool schema", "request_rejected"],

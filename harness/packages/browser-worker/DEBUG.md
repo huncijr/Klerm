@@ -2,6 +2,45 @@
 
 ## Current findings
 
+- Final answers previously reused the 500-character error sanitizer, truncating
+  the ten-post Reddit summary despite complete result metadata. Final answers
+  now retain paragraphs up to 32,000 characters; intermediate next_goal updates
+  and error messages retain the shorter bound. Root-page scrolling animates
+  the actual page for 650 ms before the next observation; indexed nested scroll
+  still uses the upstream executor. Private input is planned separately in
+  PRIVATE_INPUT_PLAN.md and is not yet an enforced observation boundary.
+- Reddit scrolling protocol failure: step_planned accepted click/input cursors
+  but rejected scroll, although action_dispatched already accepted it. Both
+  now accept scroll; a worker-process regression covers planning through
+  dispatch and settlement. New public origins are DNS-validated and allowed
+  automatically for the current run, with ordered policy decision events.
+  The desktop displays user-facing narration as text bubbles, without an
+  ASSISTANT MESSAGE heading. The worker requests first-person next_goal updates
+  in the user's language, based on actual observations.
+- Takeover now records pausing before sending the worker command, so an
+  immediate CONTROL_GRANTED cannot be overwritten by a late pausing update.
+  Stop cancels pending model/observation waits when no browser action is in
+  flight; dispatched actions drain first. The pausing panel hides on settlement.
+  Each step's next_goal is forwarded as a bounded user-facing message, without
+  private model reasoning. Visible human-verification text also triggers
+  takeover for wait/done plans; Continue discards that plan and observes again.
+  Challenge detection is best-effort and currently recognizes English text.
+- Successful browser runs now emit a bounded, credential-redacted
+  ASSISTANT_MESSAGE immediately before RUN_COMPLETED. The activity timeline
+  displays the agent's actual final user-facing answer between ordered events.
+  This answer is intentionally recorded in the audit, unlike private reasoning
+  and intermediate model text; it is limited to 500 characters.
+- Live probes of `openai-codex/gpt-6-sol` and `openai-codex/gpt-6.1-sol`
+  returned provider errors stating that the model is unsupported for the
+  current ChatGPT account. The gateway now identifies this separately as
+  `model_account_unsupported`, rather than `request_rejected`. This is an
+  account/model access failure, not evidence of unsupported browser actions.
+- Additional alternatives reviewed: Browserbase Stagehand (MIT), including
+  `packages/extension/llm/aisdk.ts` provider-option and prompt-JSON fallback
+  handling; Vercel agent-browser (Apache-2.0 license checked). Neither is
+  integrated by this diagnostic correction. A CEF/CDP adapter must preserve
+  current-page ownership, approval boundaries, action verification, and audit
+  ordering before an alternative runtime can be offered as working.
 - In the `teszt` workspace, the September 29 `openai-codex/gpt-6-luna` runs
   reached `MODEL_REQUEST` six times each, but every response was
   `stopReason:error` with zero tokens and `GATEWAY_ERROR upstream_error`.

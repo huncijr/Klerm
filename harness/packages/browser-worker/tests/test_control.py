@@ -4,10 +4,12 @@ import asyncio
 import io
 import json
 import unittest
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 from klerm_browser_worker.policy import OriginPolicy, PolicyError, RunStopped
-from klerm_browser_worker.protocol import EventWriter, StartCommand
+from klerm_browser_worker.protocol import EventWriter, StartCommand, StopCommand
+from klerm_browser_worker.worker import Worker
 from klerm_browser_worker.runtime import ActiveRuntime
 
 
@@ -45,6 +47,38 @@ async def wait_for_event(output: io.StringIO, name: str) -> None:
 
 
 class ControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_cancels_a_pending_model_wait_and_reports_stopped(self) -> None:
+        output = io.StringIO()
+        worker = Worker(io.StringIO(), EventWriter(output))
+        runtime = make_runtime(output)
+        # Use a real blocking coroutine, rather than a fake browser operation.
+        async def wait_for_model(_profile: str) -> None:
+            await asyncio.Event().wait()
+        runtime._run_agent = wait_for_model
+        worker.active = runtime
+        worker.run_task = asyncio.create_task(runtime.run())
+        await asyncio.sleep(0)
+        task = worker.run_task
+        await worker._dispatch(StopCommand("stop-1", "run-1"))
+        await asyncio.wait_for(task, 1)
+        self.assertIn("run_stopped", [event["event"] for event in read_events(output)])
+        worker.profile.cleanup()
+
+    async def test_visible_challenge_discards_plan_and_waits_for_explicit_resume(self) -> None:
+        output = io.StringIO()
+        runtime = make_runtime(output)
+        page = SimpleNamespace(evaluate=AsyncMock(return_value="True"))
+        runtime.browser = SimpleNamespace(get_current_page=AsyncMock(return_value=page),
+                                         get_current_page_url=AsyncMock(return_value="about:blank"))
+        proposal = {"next_goal": "Waiting for human verification", "action": [{"wait": {"seconds": 1}}]}
+        callback = asyncio.create_task(runtime._step_callback(proposal))
+        await wait_for_event(output, "control_granted")
+        self.assertEqual(proposal["action"], [])
+        self.assertFalse(callback.done())
+        runtime.resume()
+        await asyncio.wait_for(callback, 5)
+        self.assertIn("control_resumed", [event["event"] for event in read_events(output)])
+
     async def test_takeover_pauses_step_callback_until_resume(self) -> None:
         output = io.StringIO()
         runtime = make_runtime(output)

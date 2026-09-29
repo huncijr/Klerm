@@ -49,7 +49,7 @@ export interface BrowserApprovalDecision {
 	approvalId: string;
 	runId: string;
 	decision: "approved" | "denied";
-	decidedBy: "user";
+	decidedBy: "user" | "policy";
 }
 
 export type BrowserEventType =
@@ -61,6 +61,7 @@ export type BrowserEventType =
 	| "ACTION_DISPATCHED"
 	| "ACTION_COMPLETED"
 	| "ACTION_VERIFIED"
+	| "ASSISTANT_MESSAGE"
 	| "ACTION_FAILED"
 	| "APPROVAL_REQUESTED"
 	| "APPROVAL_RESOLVED"

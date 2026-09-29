@@ -116,6 +116,7 @@ class ActiveRuntime:
     action_sequence: int = 0
     planned_cursor: dict[str, object] | None = None
     planned_input_check: tuple[str, str, str] | None = None
+    action_in_flight: bool = False
 
     async def run(self) -> None:
         try:
@@ -253,6 +254,11 @@ class ActiveRuntime:
         with suppress(Exception):
             final_result = history.final_result()
         result_text = final_result if isinstance(final_result, str) else ""
+        if result_text.strip():
+            self.event_writer.emit(
+                "assistant_message", "running", **self._run_fields(),
+                text=redact_text(result_text, (self.command.token,), maximum=32_000, multiline=True),
+            )
         self.terminal_emitted = True
         self.event_writer.emit(
             "run_completed",
@@ -304,8 +310,20 @@ class ActiveRuntime:
             self.event_writer.emit(
                 "action_dispatched", "running", **self._run_fields(), action=name, cursor=cursor
             )
+            self.action_in_flight = True
             try:
-                if name == "done" and self.browser is not None:
+                if name == "scroll" and self.browser is not None and isinstance(data.get("scroll"), dict) and data["scroll"].get("index") in (None, 0):
+                    params = data["scroll"]
+                    page = await self.browser.get_current_page()
+                    if page is None:
+                        result = browser_use.ActionResult(error="The current page is unavailable for scrolling.")
+                    else:
+                        await page.evaluate(
+                            "(pages, down) => new Promise(resolve => { const start = window.scrollY; const distance = innerHeight * pages * (down ? 1 : -1); const began = performance.now(); function step(now) { const t = Math.min(1, (now - began) / 650); window.scrollTo(0, start + distance * (t * t * (3 - 2 * t))); if (t < 1) requestAnimationFrame(step); else resolve(true); } requestAnimationFrame(step); })",
+                            params.get("pages", 1), params.get("down", True),
+                        )
+                        result = browser_use.ActionResult(extracted_content="Scrolled the current page smoothly; observe it again to read the newly visible content.")
+                elif name == "done" and self.browser is not None:
                     current_url = await self.browser.get_current_page_url()
                     if current_url == "about:blank":
                         result = browser_use.ActionResult(error="The browser is still on about:blank. Navigate to the requested public site before completing the task.")
@@ -330,6 +348,7 @@ class ActiveRuntime:
                 self.event_writer.emit("action_settled", "failed", **self._run_fields(), action=name)
                 raise
             finally:
+                self.action_in_flight = False
                 self.planned_cursor = None
                 self.planned_input_check = None
             self.event_writer.emit(
@@ -374,6 +393,27 @@ class ActiveRuntime:
         )
         if model_output is None:
             return
+        next_goal = model_output.get("next_goal") if isinstance(model_output, dict) else getattr(model_output, "next_goal", None)
+        if isinstance(next_goal, str) and next_goal.strip():
+            self.event_writer.emit("assistant_message", "running", **self._run_fields(),
+                                   text=redact_text(next_goal, (self.command.token,)))
+        # Visible page text can reveal a challenge even when the model chooses
+        # wait/done rather than clicking its control. Hidden iframes alone are
+        # not treated as proof of a challenge.
+        if self.browser is not None and callable(getattr(self.browser, "get_current_page", None)):
+            page = await self.browser.get_current_page()
+            if page is not None and callable(getattr(page, "evaluate", None)):
+                challenged = await page.evaluate(
+                    "() => /verify you are human|verify that you are human|confirm you are human|complete the captcha|checking your browser/i.test(document.body?.innerText || '')"
+                )
+                if challenged == "True":
+                    self.request_takeover("Human verification requires manual control.")
+                    if isinstance(model_output, dict):
+                        model_output["action"] = []
+                    else:
+                        model_output.action = []
+                    await self._drain_takeover()
+                    return
         raw_actions = getattr(model_output, "action", None)
         if isinstance(model_output, dict):
             raw_actions = model_output.get("action")
@@ -697,6 +737,9 @@ class ActiveRuntime:
             "before they execute; if denied, re-observe the page and choose another path. "
             "Opening the requested site is not completion when the request also asks you to interact with it; "
             "use done only after every requested browser action has succeeded. "
+            "Write next_goal as a short first-person update in the user's language, for example "
+            "'Most megnyitom a Redditet' or 'Most lejjebb görgetek, hogy további posztokat lássak'. "
+            "In your final answer explain what you actually observed; never invent unseen posts. "
             "Never upload or download files, read the clipboard, solve human-verification challenges, "
             "or bypass access controls. Ask the human to take control for those actions.\n\n"
             f"Requested task:\n{self.command.task}"

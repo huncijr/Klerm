@@ -133,6 +133,10 @@ class Worker:
                 **self._run_fields(active.command),
             )
             await active.stop()
+            # Cancel a pending model/observation wait, but never interrupt an
+            # already dispatched browser operation before it drains.
+            if self.run_task is not None and not active.action_in_flight:
+                self.run_task.cancel()
             return
         if isinstance(command, TakeoverCommand):
             active = self._matching_run(command.request_id, command.run_id)
