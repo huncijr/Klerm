@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { ImageContent, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
@@ -272,11 +272,13 @@ export type RpcCommand =
 	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "stop_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "get_browser_availability" }
+	| { id?: string; type: "probe_browser_model"; model: string; reasoning?: ModelThinkingLevel }
 	| { id?: string; type: "get_browser_run" }
 	| {
 			id?: string;
 			type: "start_browser_run";
 			model: string;
+			reasoning?: ModelThinkingLevel;
 			prompt: string;
 			startUrl?: string;
 			currentUrl?: string;
@@ -511,6 +513,13 @@ export type RpcResponse =
 			command: "get_browser_availability";
 			success: true;
 			data: RpcBrowserAvailability;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "probe_browser_model";
+			success: true;
+			data: { status: "passed" | "failed"; code: string; reason: string; levels: ModelThinkingLevel[] };
 	  }
 	| {
 			id?: string;

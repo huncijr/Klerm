@@ -122,6 +122,29 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("about:blank", result.error)
             execute.assert_not_awaited()
 
+    async def test_youtube_search_cannot_finish_before_results_load(self) -> None:
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="Lépj fel a YouTube-ra, írd be: jazz, majd indítsd el a keresést.",
+            model="test-model", base_url="http://127.0.0.1:8080/v1", token="local-token",
+            allowed_origins=("https://www.youtube.com",), max_steps=5,
+        )
+        page_url = AsyncMock(return_value="https://www.youtube.com/")
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()),
+                               EventWriter(io.StringIO()), lambda: None, browser=SimpleNamespace(get_current_page_url=page_url))
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            done = SimpleNamespace(model_dump=lambda **_: {"done": {"success": True}})
+            premature = await kwargs["tools"].act(done)
+            self.assertIn("not been submitted", premature.error)
+            execute.assert_not_awaited()
+            page_url.return_value = "https://www.youtube.com/results?search_query=jazz"
+            execute.return_value = SimpleNamespace(error=None)
+            completed = await kwargs["tools"].act(done)
+            self.assertIsNone(completed.error)
+            execute.assert_awaited_once()
+
     async def test_human_verification_control_requires_takeover_not_approval(self) -> None:
         output = io.StringIO()
         command = StartCommand(
@@ -225,6 +248,69 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0]["actions"], ["input"])
         self.assertEqual(events[0]["cursor"], {"x": 70, "y": 50, "action": "input"})
         self.assertNotIn("private-search-term", output.getvalue())
+
+    async def test_search_input_is_verified_against_the_live_page_without_logging_text(self) -> None:
+        output = io.StringIO()
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=("https://www.youtube.com",), max_steps=2,
+        )
+        page = SimpleNamespace(evaluate=AsyncMock(return_value="True"))
+        browser = SimpleNamespace(get_current_page=AsyncMock(return_value=page))
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()),
+                               EventWriter(output), lambda: None, browser=browser)
+        search = SimpleNamespace(node_name="INPUT", attributes={"id": "search", "type": "text"}, snapshot_node=None)
+        state = SimpleNamespace(url="https://www.youtube.com/", dom_state=SimpleNamespace(selector_map={1: search}))
+        proposal = {"action": [{"input": {"index": 1, "text": "jazz"}}]}
+        await active._step_callback(state, proposal, 1)
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            execute.return_value = SimpleNamespace(error=None)
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            action = SimpleNamespace(model_dump=lambda **_: proposal["action"][0])
+            await kwargs["tools"].act(action)
+        self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
+                         ["step_planned", "action_dispatched", "action_verified", "action_settled"])
+        page.evaluate.assert_awaited_once_with(
+            "(key, identifier, value) => { const elements = key === 'id' ? [document.getElementById(identifier)] : [...document.getElementsByName(identifier)].filter(el => el.tagName === 'INPUT'); return elements.length === 1 && elements[0]?.value === value; }",
+            "id", "search", "jazz")
+        self.assertNotIn("jazz", output.getvalue())
+
+    async def test_name_only_search_input_can_be_verified(self) -> None:
+        output = io.StringIO()
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=("https://www.youtube.com",), max_steps=2,
+        )
+        browser = SimpleNamespace(get_current_page=AsyncMock(return_value=SimpleNamespace(evaluate=AsyncMock(return_value="True"))))
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()), EventWriter(output), lambda: None, browser=browser)
+        search = SimpleNamespace(node_name="INPUT", attributes={"name": "search_query", "type": "text"}, snapshot_node=None)
+        state = SimpleNamespace(url="https://www.youtube.com/", dom_state=SimpleNamespace(selector_map={1: search}))
+        proposed = {"action": [{"input": {"index": 1, "text": "jazz"}}]}
+        await active._step_callback(state, proposed, 1)
+        self.assertEqual(active.planned_input_check, ("name", "search_query", "jazz"))
+
+    async def test_search_input_without_matching_page_value_fails_closed(self) -> None:
+        output = io.StringIO()
+        command = StartCommand(
+            request_id="request-1", run_id="run-1", task_id="task-1", correlation_id="correlation-1",
+            agent_id="browser-agent", task="search", model="test-model", base_url="http://127.0.0.1:8080/v1",
+            token="local-token", allowed_origins=("https://www.youtube.com",), max_steps=2,
+        )
+        browser = SimpleNamespace(get_current_page=AsyncMock(return_value=SimpleNamespace(evaluate=AsyncMock(return_value="False"))))
+        active = ActiveRuntime(command, OriginPolicy(command.allowed_origins, AsyncMock()), EventWriter(output), lambda: None, browser=browser)
+        active.planned_input_check = ("name", "search_query", "jazz")
+        kwargs: dict[str, object] = {}
+        with patch.object(browser_use.Tools, "act", new_callable=AsyncMock) as execute:
+            execute.return_value = SimpleNamespace(error=None)
+            active._configure_read_only_tools(browser_use, browser_use.Agent, _field_names(browser_use.Agent), kwargs)
+            result = await kwargs["tools"].act(SimpleNamespace(model_dump=lambda **_: {"input": {"index": 1, "text": "jazz"}}))
+        self.assertIn("could not be verified", result.error)
+        self.assertEqual([json.loads(line)["event"] for line in output.getvalue().splitlines()],
+                         ["action_dispatched", "action_settled"])
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1])["status"], "failed")
 
     async def test_scroll_uses_viewport_center_for_dispatched_cursor(self) -> None:
         output = io.StringIO()

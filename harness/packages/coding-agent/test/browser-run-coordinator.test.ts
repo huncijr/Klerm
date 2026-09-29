@@ -132,8 +132,13 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 		});
 	}
 
-	plan(actions: string[]): void {
-		this.emit({ ...this.base("step_planned", "running"), ...this.runFields(), actions });
+	plan(actions: string[], cursor?: { x: number; y: number; action: string }): void {
+		this.emit({
+			...this.base("step_planned", "running"),
+			...this.runFields(),
+			actions,
+			...(cursor ? { cursor } : {}),
+		});
 	}
 
 	dispatch(action: string, cursor: { x: number; y: number; action: string } | null): void {
@@ -142,6 +147,10 @@ class FakeRunner implements BrowserRunCoordinatorRunner {
 
 	settle(action: string): void {
 		this.emit({ ...this.base("action_settled", "completed"), ...this.runFields(), action });
+	}
+
+	verifyInput(): void {
+		this.emit({ ...this.base("action_verified", "completed"), ...this.runFields(), action: "input" });
 	}
 
 	grantControl(reason: string): void {
@@ -383,6 +392,20 @@ describe("BrowserRunCoordinator", () => {
 		await context.coordinator.close();
 	});
 
+	it("pins reasoning on the gateway and rejects unsupported levels before a run", async () => {
+		const context = setup({ models: [{ ...model, reasoning: true }] });
+		const started = await context.coordinator.start({ ...startInput, reasoning: "high" });
+		expect(started.reasoning).toBe("high");
+		expect(context.audit[0]?.details).toMatchObject({ reasoning: "high" });
+		expect(context.gatewayOptions()?.reasoning).toBe("high");
+		await context.coordinator.close();
+		const unsupported = setup();
+		await expect(unsupported.coordinator.start({ ...startInput, reasoning: "high" })).rejects.toThrow(
+			"reasoning level",
+		);
+		expect(unsupported.startGateway).not.toHaveBeenCalled();
+	});
+
 	it("shows the cursor only while the corresponding action is executing", async () => {
 		const context = setup();
 		await context.coordinator.start(startInput);
@@ -395,6 +418,36 @@ describe("BrowserRunCoordinator", () => {
 		context.runner.settle("scroll");
 		await waitFor(() => context.audit.some((event) => event.event === "ACTION_COMPLETED"));
 		expect(context.coordinator.state()?.agentCursor).toBeUndefined();
+		await context.coordinator.close();
+	});
+
+	it("shows a planned search target before dispatch and identifies model gateway failures", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		context.runner.plan(["input"], { x: 70, y: 50, action: "input" });
+		await waitFor(() => context.audit.at(-1)?.event === "ACTION");
+		expect(context.coordinator.state()?.agentCursor?.action).toBe("input");
+		expect(context.audit.at(-1)?.event).toBe("ACTION");
+		context.runner.dispatch("input", { x: 70, y: 50, action: "input" });
+		await waitFor(() => context.coordinator.state()?.agentCursor?.action === "input");
+		context.runner.settle("input");
+		await waitFor(() => context.coordinator.state()?.agentCursor === undefined);
+		await context.gatewayOptions()?.onDiagnostic?.({ event: "GATEWAY_ERROR", code: "upstream_error" });
+		context.runner.failRun("Browser task did not complete successfully; inspect browser-debug.jsonl.");
+		await waitFor(() => context.coordinator.state()?.status === "failed");
+		expect(context.coordinator.state()?.error).toContain("upstream_error");
+	});
+
+	it("audits only verified live browser input without field contents", async () => {
+		const context = setup();
+		await context.coordinator.start(startInput);
+		context.runner.plan(["input"], { x: 70, y: 50, action: "input" });
+		context.runner.dispatch("input", { x: 70, y: 50, action: "input" });
+		context.runner.verifyInput();
+		context.runner.settle("input");
+		await waitFor(() => context.audit.some((event) => event.event === "ACTION_VERIFIED"));
+		expect(context.coordinator.state()?.verifiedActions).toBe(1);
+		expect(context.audit.find((event) => event.event === "ACTION_VERIFIED")?.details).toEqual({ action: "input" });
 		await context.coordinator.close();
 	});
 

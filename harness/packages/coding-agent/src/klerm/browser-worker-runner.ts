@@ -136,6 +136,12 @@ export interface BrowserWorkerActionExecutionEvent extends WorkerEventBase, Work
 	cursor?: { x: number; y: number; action: string } | null;
 }
 
+export interface BrowserWorkerActionVerifiedEvent extends WorkerEventBase, WorkerRunFields {
+	event: "action_verified";
+	status: "completed";
+	action: "input";
+}
+
 export interface BrowserWorkerRunCompletedEvent extends WorkerEventBase, WorkerRunFields {
 	event: "run_completed";
 	status: "completed";
@@ -189,6 +195,7 @@ export type BrowserWorkerEvent =
 	| BrowserWorkerNavigationEvent
 	| BrowserWorkerStepPlannedEvent
 	| BrowserWorkerActionExecutionEvent
+	| BrowserWorkerActionVerifiedEvent
 	| BrowserWorkerRunCompletedEvent
 	| BrowserWorkerRunFailedEvent
 	| BrowserWorkerRunStoppedEvent
@@ -438,6 +445,12 @@ function parseWorkerEvent(line: string): BrowserWorkerEvent {
 					throw new Error("Invalid browser worker cursor.");
 				}
 			}
+			break;
+		case "action_verified":
+			exactFields(value, [...baseFields, ...runFields, "action"]);
+			validateEnvelope(value, "completed");
+			validateRunFields(value);
+			if (value.action !== "input") throw new Error("Invalid verified browser action.");
 			break;
 		case "run_completed": {
 			exactFields(value, [...baseFields, ...runFields, "result"]);

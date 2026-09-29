@@ -1,15 +1,17 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type {
-	Api,
-	AssistantMessage,
-	Context,
-	Message,
-	Model,
-	ModelsSimpleStreamOptions,
-	Tool,
-	TSchema,
+import {
+	type Api,
+	type AssistantMessage,
+	type Context,
+	getSupportedThinkingLevels,
+	type Message,
+	type Model,
+	type ModelsSimpleStreamOptions,
+	type ModelThinkingLevel,
+	type Tool,
+	type TSchema,
 } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 
@@ -23,6 +25,7 @@ type ChatRuntime = Pick<ModelRuntime, "completeSimple" | "getAvailableSnapshot">
 
 export interface OpenAICompatibleChatOptions {
 	modelRuntime: ChatRuntime;
+	reasoning?: ModelThinkingLevel;
 	onDiagnostic?: (event: {
 		event: "MODEL_REQUEST" | "MODEL_RESPONSE" | "GATEWAY_ERROR";
 		code?: string;
@@ -546,9 +549,16 @@ export async function completeOpenAICompatibleChat(
 	signal?.throwIfAborted();
 	const request = parseRequest(requestValue);
 	const model = resolveModel(request.model, options);
+	if (options.reasoning !== undefined && !getSupportedThinkingLevels(model).includes(options.reasoning)) {
+		throw new GatewayError(400, "unsupported_reasoning", "Selected reasoning level is unavailable for this model.");
+	}
 	const requestOptions: ModelsSimpleStreamOptions = {
-		toolChoice: request.toolChoice,
-		...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+		...(request.tools.length > 0 ? { toolChoice: request.toolChoice } : {}),
+		...(options.reasoning && options.reasoning !== "off" ? { reasoning: options.reasoning } : {}),
+		// Browser Use supplies temperature by default, but Codex Responses rejects it.
+		...(request.temperature === undefined || model.api === "openai-codex-responses"
+			? {}
+			: { temperature: request.temperature }),
 		...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
 		...(signal ? { signal } : {}),
 	};
@@ -560,13 +570,88 @@ export async function completeOpenAICompatibleChat(
 			event: "MODEL_RESPONSE",
 			stopReason: result.stopReason,
 			totalTokens: result.usage.totalTokens,
+			...(result.stopReason === "error" ? { code: classifyModelError(result.errorMessage) } : {}),
 		});
 	} catch {
 		if (signal?.aborted)
 			throw new GatewayError(499, "request_aborted", "The model request was aborted.", "request_aborted");
 		throw new GatewayError(502, "upstream_error", "The upstream model request failed.", "api_error");
 	}
-	return mapResponse(request, result);
+	try {
+		return mapResponse(request, result);
+	} catch (error) {
+		if (error instanceof GatewayError && error.code === "upstream_error") {
+			throw new GatewayError(error.status, classifyModelError(result.errorMessage), error.message, error.type);
+		}
+		throw error;
+	}
+}
+
+function classifyModelError(message: string | undefined): string {
+	if (!message) return "upstream_error";
+	if (/\b(401|403|unauthorized|forbidden|authentication|invalid.api.key)\b/i.test(message)) return "model_auth_failed";
+	if (/\b(404|model.not.found|unknown.model|invalid.model)\b/i.test(message)) return "model_unavailable";
+	if (/\b(429|rate.limit|quota)\b/i.test(message)) return "model_rate_limited";
+	if (/\b(unsupported|not supported|invalid.*(?:tool|schema|image|format))\b/i.test(message))
+		return "request_rejected";
+	return "upstream_error";
+}
+
+export interface BrowserModelProbe {
+	status: "passed" | "failed";
+	code: string;
+	reason: string;
+	levels: ModelThinkingLevel[];
+}
+
+/** Test a provider tool-schema request, not the entire browser-use action loop. */
+export async function probeBrowserModel(
+	modelRuntime: ChatRuntime,
+	reference: string,
+	reasoning: ModelThinkingLevel = "off",
+): Promise<BrowserModelProbe> {
+	const matches = modelRuntime.getAvailableSnapshot().filter((model) => modelReferences(model).includes(reference));
+	if (matches.length !== 1)
+		return { status: "failed", code: "model_unavailable", reason: "Model is unavailable or ambiguous.", levels: [] };
+	const levels = getSupportedThinkingLevels(matches[0]);
+	if (!levels.includes(reasoning))
+		return {
+			status: "failed",
+			code: "unsupported_reasoning",
+			reason: "Selected reasoning level is unavailable for this model.",
+			levels,
+		};
+	try {
+		await completeOpenAICompatibleChat(
+			{
+				model: reference,
+				messages: [{ role: "user", content: "Reply with OK. This is a browser tool-request check." }],
+				tools: [
+					{
+						type: "function",
+						function: {
+							name: "browser_probe",
+							description: "Optional probe",
+							parameters: { type: "object", properties: {} },
+						},
+					},
+				],
+				tool_choice: "auto",
+				temperature: 0.2,
+				max_tokens: 64,
+			},
+			{ modelRuntime, pinnedModel: matches[0], reasoning },
+		);
+		return {
+			status: "passed",
+			code: "request_accepted",
+			reason: "Provider accepted a tool-schema request; browser actions are not yet verified.",
+			levels,
+		};
+	} catch (error) {
+		const code = error instanceof GatewayError ? error.code : "probe_failed";
+		return { status: "failed", code, reason: `Browser tool-request check failed (${code}).`, levels };
+	}
 }
 
 function bearerTokenMatches(header: string | undefined, token: string): boolean {

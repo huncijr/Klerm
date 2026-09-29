@@ -4,6 +4,7 @@ import {
 	completeOpenAICompatibleChat,
 	type OpenAICompatibleChatResponse,
 	type OpenAICompatibleChatServer,
+	probeBrowserModel,
 	startOpenAICompatibleChatServer,
 } from "../src/klerm/openai-compatible-chat.ts";
 
@@ -59,6 +60,88 @@ afterEach(async () => {
 });
 
 describe("OpenAI-compatible chat gateway", () => {
+	it("omits tool choice for Browser Use schema-in-prompt turns without tools", async () => {
+		const { runtime, completeSimple } = createRuntime();
+		await completeOpenAICompatibleChat(
+			{ model: model.id, messages: [{ role: "user", content: "Observe the page" }], tool_choice: "auto" },
+			{ modelRuntime: runtime },
+		);
+		expect(completeSimple.mock.calls[0]?.[2]).not.toHaveProperty("toolChoice");
+	});
+	it("omits Browser Use temperature for Codex Responses while retaining selected reasoning", async () => {
+		const codex: Model<Api> = { ...model, api: "openai-codex-responses", provider: "openai-codex", reasoning: true };
+		const { runtime, completeSimple } = createRuntime();
+		await completeOpenAICompatibleChat(
+			{
+				model: "openai-codex/browser-model",
+				messages: [{ role: "user", content: "Observe the browser" }],
+				response_format: { type: "text" },
+				tool_choice: "auto",
+				temperature: 0.2,
+			},
+			{ modelRuntime: runtime, pinnedModel: codex, reasoning: "medium" },
+		);
+		expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ reasoning: "medium" });
+		expect(completeSimple.mock.calls[0]?.[2]).not.toHaveProperty("temperature");
+		expect(completeSimple.mock.calls[0]?.[2]).not.toHaveProperty("toolChoice");
+	});
+	it("probes a selected model with a real tool-schema request before browser use", async () => {
+		const { runtime, completeSimple } = createRuntime();
+		expect(await probeBrowserModel(runtime, "faux/browser-model")).toMatchObject({
+			status: "passed",
+			code: "request_accepted",
+		});
+		expect(completeSimple.mock.calls[0]?.[1]).toMatchObject({ tools: [{ name: "browser_probe" }] });
+		expect(await probeBrowserModel(runtime, "faux/missing")).toMatchObject({
+			status: "failed",
+			code: "model_unavailable",
+		});
+		expect(completeSimple).toHaveBeenCalledOnce();
+		const rejected = createRuntime(
+			assistantMessage({ stopReason: "error", errorMessage: "unsupported tool schema" }),
+		);
+		expect(await probeBrowserModel(rejected.runtime, "faux/browser-model")).toMatchObject({
+			status: "failed",
+			code: "request_rejected",
+		});
+	});
+	it("applies the selected reasoning to both probe and gateway requests", async () => {
+		const reasoningModel: Model<Api> = { ...model, reasoning: true };
+		const { runtime, completeSimple } = createRuntime();
+		const capable = { ...runtime, getAvailableSnapshot: () => [reasoningModel] };
+		expect(await probeBrowserModel(capable, "faux/browser-model", "high")).toMatchObject({
+			status: "passed",
+			levels: expect.arrayContaining(["high"]),
+		});
+		expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ reasoning: "high" });
+		await completeOpenAICompatibleChat(
+			{ model: model.id, messages: [{ role: "user", content: "Search" }] },
+			{ modelRuntime: capable, pinnedModel: reasoningModel, reasoning: "low" },
+		);
+		expect(completeSimple.mock.calls[1]?.[2]).toMatchObject({ reasoning: "low" });
+		expect(await probeBrowserModel(runtime, "faux/browser-model", "high")).toMatchObject({
+			status: "failed",
+			code: "unsupported_reasoning",
+			levels: ["off"],
+		});
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+	});
+	it.each([
+		["401 invalid API key", "model_auth_failed"],
+		["404 model not found", "model_unavailable"],
+		["unsupported tool schema", "request_rejected"],
+		["429 rate limit", "model_rate_limited"],
+	])("classifies provider failure without exposing its body: %s", async (errorMessage, code) => {
+		const { runtime } = createRuntime(assistantMessage({ stopReason: "error", errorMessage }));
+		const onDiagnostic = vi.fn();
+		await expect(
+			completeOpenAICompatibleChat(
+				{ model: model.id, messages: [{ role: "user", content: "Search" }] },
+				{ modelRuntime: runtime, onDiagnostic },
+			),
+		).rejects.toThrow("upstream model request failed");
+		expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ event: "MODEL_RESPONSE", code }));
+	});
 	it("maps Browser Use text, function-tool history, options, tool calls, and usage", async () => {
 		const { runtime, completeSimple } = createRuntime(
 			assistantMessage({

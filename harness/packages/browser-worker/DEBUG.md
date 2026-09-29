@@ -2,6 +2,46 @@
 
 ## Current findings
 
+- In the `teszt` workspace, the September 29 `openai-codex/gpt-6-luna` runs
+  reached `MODEL_REQUEST` six times each, but every response was
+  `stopReason:error` with zero tokens and `GATEWAY_ERROR upstream_error`.
+  No DOM action was planned or dispatched. Navigation and the missing cursor
+  were consequences, not the provider failure's cause. The gateway now
+  classifies known authentication, unavailable-model, rate-limit, and
+  rejected-request errors without logging raw provider responses. Rejected
+  requests are not proof of intrinsic model incompatibility. Model selection
+  now performs a separate small, potentially billable tool-schema request
+  for each selected model and reasoning level before browser work. Changing
+  either selection invalidates the old check; the same reasoning is pinned to
+  the subsequent browser gateway. Passing establishes only that this request succeeded,
+  not that a complete browser-use run will work. A provider response is
+  still required before any autonomous search interaction can happen.
+- A planned DOM target now appears as an AI cursor before dispatch, with a
+  short cancellable preview before automatic interactions. The search query
+  remains excluded from audit events. Enter/submission still requires user
+  approval.
+- A real Grok 4.7 / CEF / browser-use run identified the original HTTP 400:
+  Klerm forwarded tool_choice=auto on a turn with no tools. The gateway now
+  omits tool choice on such turns. On retest, the model planned and executed
+  input into the YouTube search field; independent CEF CDP inspection found
+  the value jazz. The next click paused for user approval. The worker emits
+  ACTION_VERIFIED only after checking the targeted field on the live page by
+  ID or unique name, without logging its contents. This verifies an executed
+  action, not an unstarted probe or an unapproved search submission.
+- The later `teszt` workspace `openai-codex/gpt-6-luna` run used medium
+  reasoning and failed immediately after NAVIGATION with request_rejected.
+  A live provider diagnostic isolated the difference from its passing model
+  probe: browser-use adds temperature=0.2, but the Codex Responses endpoint
+  rejects temperature for this model. The browser gateway now omits this
+  parameter for Codex Responses (and the probe includes browser-use's default
+  temperature). A follow-up live CEF run reached ACTION and ACTION_VERIFIED
+  for search input. It did not submit the search: the model repeatedly proposed
+  done before results appeared. The worker now rejects premature done for an
+  explicit YouTube search submission request. A completed results-page flow
+  still requires a subsequent model action and, where requested, real user approval.
+  A final isolated CEF run with the same model and medium reasoning then
+  completed the whole flow: input, ACTION_VERIFIED, click with a test-only
+  auto-approval, results page with 20 results, and RUN_COMPLETED.
 - The Hungarian `lepj fel youtube` prompt was not recognized by the explicit
   start-navigation matcher. `lépj fel`, `lepj fel`, and `menj fel` now start on
   YouTube; negated requests do not. Other sites still use agent navigation and

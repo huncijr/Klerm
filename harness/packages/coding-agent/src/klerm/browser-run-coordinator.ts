@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, getSupportedThinkingLevels, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import {
 	appendBrowserEvent,
@@ -68,6 +68,7 @@ export type BrowserControlOwner = "ai" | "pausing" | "human";
 
 export interface BrowserRunStartInput {
 	model: string;
+	reasoning?: ModelThinkingLevel;
 	prompt: string;
 	startUrl?: string;
 	currentUrl?: string;
@@ -113,6 +114,7 @@ export interface BrowserRunPublicState {
 	correlationId: string;
 	agentId: string;
 	model: string;
+	reasoning?: ModelThinkingLevel;
 	status: BrowserRunStatus;
 	browserReset?: boolean;
 	control: BrowserControlOwner;
@@ -126,6 +128,7 @@ export interface BrowserRunPublicState {
 	pendingApproval?: BrowserPendingOriginApproval;
 	pendingAction?: BrowserPendingActionApproval;
 	lastActions: readonly string[];
+	verifiedActions?: number;
 	agentCursor?: { x: number; y: number; action: string };
 	resultSummary?: string;
 	resultMetadata?: BrowserRunResultMetadata;
@@ -219,6 +222,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 	private current?: BrowserRunPublicState;
 	private active?: ActiveRun;
 	private browserRunner?: BrowserRunCoordinatorRunner;
+	private lastGatewayFailure?: string;
 	private unsubscribeIdleFailure?: () => void;
 	private closed = false;
 
@@ -311,6 +315,10 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				.filter((model) => input.model === model.id || input.model === modelReference(model));
 			if (models.length !== 1) throw new Error(`Browser model "${input.model}" is unavailable or ambiguous.`);
 			const pinnedModel = models[0];
+			const reasoning = input.reasoning ?? "off";
+			if (!getSupportedThinkingLevels(pinnedModel).includes(reasoning))
+				throw new Error("Selected reasoning level is unavailable for this browser model.");
+			this.lastGatewayFailure = undefined;
 			const ids = {
 				runId: this.generatedId("run"),
 				taskId: this.generatedId("task"),
@@ -323,6 +331,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				...(this.sessionId ? { sessionId: this.sessionId } : {}),
 				agentId: BROWSER_AGENT_ID,
 				model: modelReference(pinnedModel),
+				reasoning,
 				status: "queued",
 				control: "ai",
 				requestedAt,
@@ -350,20 +359,34 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					"RUN_REQUESTED",
 					"Browser run requested.",
 					"queued",
-					url?.allowed ? { url: url.url } : undefined,
+					url?.allowed || reasoning !== "off"
+						? { ...(url?.allowed ? { url: url.url } : {}), ...(reasoning !== "off" ? { reasoning } : {}) }
+						: undefined,
 				);
 			});
 			try {
 				active.gateway = await this.startGateway({
 					modelRuntime: this.modelRuntime,
 					pinnedModel,
-					onDiagnostic: (entry) =>
-						this.debugLog.write({
+					reasoning,
+					onDiagnostic: (entry) => {
+						if (entry.event === "GATEWAY_ERROR" && !this.lastGatewayFailure)
+							this.lastGatewayFailure = entry.code ?? "unknown";
+						if (entry.event === "MODEL_RESPONSE" && entry.stopReason === "error")
+							this.lastGatewayFailure = entry.code ?? "upstream_error";
+						if (
+							entry.event === "MODEL_RESPONSE" &&
+							entry.stopReason !== "error" &&
+							entry.stopReason !== "aborted"
+						)
+							this.lastGatewayFailure = undefined;
+						return this.debugLog.write({
 							event: entry.event,
 							runId: ids.runId,
 							model: modelReference(pinnedModel),
 							details: entry,
-						}),
+						});
+					},
 				});
 				await runner.start({
 					...ids,
@@ -643,7 +666,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					...this.requiredState(),
 					status: "running",
 					lastActions: actions,
-					agentCursor: undefined,
+					agentCursor: event.cursor ?? undefined,
 				};
 				await this.record("ACTION", "Browser worker planned actions.", "running", { actions: event.actions });
 				break;
@@ -662,6 +685,12 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					"running",
 					{ action: event.action, disposition: event.status },
 				);
+				break;
+			case "action_verified":
+				this.current = { ...this.requiredState(), verifiedActions: (this.current?.verifiedActions ?? 0) + 1 };
+				await this.record("ACTION_VERIFIED", "Browser input value was verified on the current page.", "running", {
+					action: event.action,
+				});
 				break;
 			case "origin_approval_required": {
 				if (this.current?.pendingApproval) {
@@ -785,7 +814,12 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			case "run_failed": {
 				const incomplete =
 					event.error === "Browser task did not complete successfully; inspect browser-debug.jsonl.";
-				const error = incomplete ? "Browser task did not complete successfully." : "Browser run failed.";
+				const modelFailure = this.lastGatewayFailure;
+				const error = modelFailure
+					? `Browser provider request failed (${modelFailure}). This does not prove the model is incompatible; check the model and provider settings.`
+					: incomplete
+						? "Browser task did not complete successfully."
+						: "Browser run failed.";
 				await this.failActive(active, error, incomplete ? error : "Browser worker reported a run failure.");
 				break;
 			}

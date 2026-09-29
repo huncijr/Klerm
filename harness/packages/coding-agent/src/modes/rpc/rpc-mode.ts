@@ -15,7 +15,7 @@ import * as crypto from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { constants as errnoConstants } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { AssistantMessage, AuthEvent, AuthPrompt, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AuthEvent, AuthPrompt, ModelThinkingLevel, UserMessage } from "@earendil-works/pi-ai";
 import { VERSION } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
@@ -109,6 +109,7 @@ import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
 import { normalizeStdioArgs } from "../../klerm/mcp/stdio-args.ts";
+import { probeBrowserModel } from "../../klerm/openai-compatible-chat.ts";
 import {
 	appendPersonalBotConversationEvent,
 	createPersonalBotConversation,
@@ -261,6 +262,7 @@ const DESKTOP_COMMANDS = [
 	"run_kanban_task",
 	"stop_kanban_task",
 	"get_browser_availability",
+	"probe_browser_model",
 	"get_browser_run",
 	"start_browser_run",
 	"resolve_browser_origin",
@@ -3123,6 +3125,19 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				return success(id, "get_browser_availability", await getBrowserCoordinator().availability());
 			}
 
+			case "probe_browser_model": {
+				if (typeof command.model !== "string" || !command.model || command.model.length > 256)
+					return error(id, "probe_browser_model", "A browser model is required.", "INVALID_BROWSER_MODEL");
+				const reasoning = command.reasoning ?? "off";
+				if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(reasoning))
+					return error(id, "probe_browser_model", "Invalid browser reasoning level.", "INVALID_BROWSER_REASONING");
+				return success(
+					id,
+					"probe_browser_model",
+					await probeBrowserModel(session.modelRuntime, command.model, reasoning as ModelThinkingLevel),
+				);
+			}
+
 			case "get_browser_run": {
 				return success(id, "get_browser_run", { state: getBrowserCoordinator().state() });
 			}
@@ -3135,7 +3150,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					!command.prompt.trim() ||
 					(command.startUrl !== undefined && typeof command.startUrl !== "string") ||
 					(command.currentUrl !== undefined && typeof command.currentUrl !== "string") ||
-					(command.cdpUrl !== undefined && typeof command.cdpUrl !== "string")
+					(command.cdpUrl !== undefined && typeof command.cdpUrl !== "string") ||
+					(command.reasoning !== undefined &&
+						!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(command.reasoning))
 				) {
 					return error(
 						id,
@@ -3155,6 +3172,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				try {
 					const state = await getBrowserCoordinator().start({
 						model: command.model,
+						...(command.reasoning ? { reasoning: command.reasoning } : {}),
 						prompt: command.prompt.trim(),
 						...(command.startUrl?.trim() ? { startUrl: command.startUrl.trim() } : {}),
 						...(command.currentUrl?.trim() ? { currentUrl: command.currentUrl.trim() } : {}),

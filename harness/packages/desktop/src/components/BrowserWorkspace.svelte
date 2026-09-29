@@ -23,7 +23,7 @@
 		Sparkles,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
-	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, SelectOption } from "../lib/model.ts";
+	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, SelectOption, ThinkingLevel } from "../lib/model.ts";
 
 	let {
 		sessionId,
@@ -33,6 +33,7 @@
 		activity,
 		loading,
 		onrefresh,
+		onprobe,
 		onstart,
 		onresolveorigin,
 		onresolveaction,
@@ -49,8 +50,10 @@
 		activity: BrowserActivityEvent[];
 		loading: boolean;
 		onrefresh: () => Promise<void>;
+		onprobe: (model: string, reasoning: ThinkingLevel) => Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }>;
 		onstart: (input: {
 			model: string;
+			reasoning: ThinkingLevel;
 			prompt: string;
 			startUrl?: string;
 			currentUrl?: string;
@@ -72,6 +75,9 @@
 	type BrowserMessage = { id: number; role: "user" | "assistant"; text: string; tone?: "normal" | "error" };
 
 	let selectedModel = $state("");
+	let selectedReasoning = $state<ThinkingLevel>("off");
+	let reasoningLevels = $state<ThinkingLevel[]>(["off"]);
+	let probeRetry = $state(0);
 	let placement = $state<ChatPlacement>("right");
 	let chatRatio = $state(40);
 	let layoutElement: HTMLElement;
@@ -88,12 +94,26 @@
 	let localRunId = $state<string | undefined>(undefined);
 	let renderedSettlement = $state<string | undefined>(undefined);
 	let messages = $state<BrowserMessage[]>([]);
+	let modelProbe = $state<{ model: string; reasoning: ThinkingLevel; status: "checking" | "passed" | "failed"; code?: string; reason: string } | undefined>();
+	let probeGeneration = 0;
 
 	const running = $derived(run?.status === "queued" || run?.status === "running" || run?.status === "waiting-approval");
 	const humanControl = $derived(run?.control === "human");
 	const pausingControl = $derived(run?.control === "pausing");
 	const browserFirst = $derived(placement === "left");
 	const currentActivity = $derived(activity.filter((item) => !run || !item.runId || item.runId === run.runId));
+	const runStageLabel = $derived.by(() => {
+		if (!running) return "Browser task running";
+		if (run?.status === "waiting-approval")
+			return run?.pendingAction ? "Waiting for action approval" : "Waiting for origin approval";
+		if (
+			!currentActivity.some((item) =>
+				["ACTION", "ACTION_DISPATCHED", "ACTION_COMPLETED", "ACTION_FAILED", "ACTION_VERIFIED"].includes(item.event),
+			)
+		)
+			return "Model is planning the first step…";
+		return "Browser task running";
+	});
 	const runtimeLabel = $derived.by(() => {
 		if (loading) return "checking runtime";
 		if (!availability) return "runtime unchecked";
@@ -107,6 +127,9 @@
 		if (!availability) return "Browser runtime is not checked yet";
 		if (!availability.available) return availability.reason;
 		if (!selectedModel) return "Select a model";
+		if (!modelProbe || modelProbe.model !== selectedModel || modelProbe.reasoning !== selectedReasoning) return "Checking the selected model";
+		if (modelProbe.status === "checking") return "Checking the selected model";
+		if (modelProbe.status === "failed") return modelProbe.reason;
 		if (!prompt.trim()) return "Enter a task";
 		return "";
 	});
@@ -114,6 +137,28 @@
 	$effect(() => {
 		if (models.some((option) => option.value === selectedModel)) return;
 		selectedModel = models[0]?.value ?? "";
+	});
+
+	$effect(() => {
+		const model = selectedModel;
+		const reasoning = selectedReasoning;
+		probeRetry;
+		if (!model || !availability?.available) return;
+		const generation = ++probeGeneration;
+		modelProbe = { model, reasoning, status: "checking", reason: "Checking provider tool-request support…" };
+		void onprobe(model, reasoning).then(
+			(result) => {
+				if (generation !== probeGeneration) return;
+			reasoningLevels = result.levels;
+				if (result.levels.length && !result.levels.includes(reasoning)) {
+					selectedReasoning = result.levels[0];
+					return;
+				}
+				modelProbe = { model, reasoning, ...result };
+			},
+			() => { if (generation === probeGeneration) modelProbe = { model, reasoning, status: "failed", code: "probe_failed", reason: "Model check failed. Retry the check." }; },
+		);
+		return () => { probeGeneration += 1; };
 	});
 
 	$effect(() => {
@@ -257,6 +302,7 @@
 			if (!cdpUrl) throw new Error(hostError || "The in-app Chromium browser is not ready yet.");
 			const started = await onstart({
 				model: selectedModel,
+				reasoning: selectedReasoning,
 				prompt: text,
 				cdpUrl,
 				...(/^https?:\/\//.test(address) ? { currentUrl: address } : {}),
@@ -442,7 +488,8 @@
 
 	<div class="flex min-h-0 flex-1 flex-col p-3 sm:p-4">
 		<div class="mx-auto flex w-full max-w-[1480px] shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#27353c] bg-[linear-gradient(110deg,rgba(14,21,26,.96),rgba(9,15,19,.96))] p-2 shadow-[0_14px_40px_rgba(0,0,0,.2)]">
-			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser model</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedModel} disabled={models.length === 0 || running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="" disabled>Choose a model</option>{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
+			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser model</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedModel} disabled={models.length === 0 || running} onchange={() => { selectedReasoning = "off"; reasoningLevels = ["off"]; }} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="" disabled>Choose a model</option>{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
+			<label class="flex h-9 items-center gap-2 rounded-xl border border-[#34434a] bg-[#0a1014] px-2.5 font-mono text-[9px] text-[#d8e2e4]"><span class="text-[#8c9b9c]">Reasoning</span><select aria-label="Browser reasoning" bind:value={selectedReasoning} disabled={running || reasoningLevels.length < 2} class="bg-transparent text-[#d8e2e4] outline-none disabled:opacity-45">{#each reasoningLevels as level}<option value={level}>{level}</option>{/each}</select></label>
 			<button type="button" aria-label="Refresh browser runtime" disabled={loading || running} class="grid h-9 w-9 place-items-center rounded-xl border border-[#303e44] bg-[#080e12] text-[#7f9297] transition hover:text-white disabled:opacity-40" onclick={() => void onrefresh()}><RefreshCw size={12} class={loading ? "animate-spin" : ""} /></button>
 			<div class="ml-auto flex items-center gap-1 rounded-xl border border-[#303e44] bg-[#080e12] p-1" aria-label="Prompt placement">
 				<button type="button" aria-label="Prompt left" aria-pressed={placement === "left"} class={`grid h-7 w-8 place-items-center rounded-lg transition ${placement === "left" ? "bg-[#344b2a] text-[#d7f2b8]" : "text-[#697a80] hover:text-white"}`} onclick={() => (placement = "left")}><LayoutPanelLeft size={13} /></button>
@@ -453,6 +500,15 @@
 
 		{#if availability && !availability.available}
 			<div class="mx-auto mt-3 flex w-full max-w-[1480px] items-start gap-2 rounded-xl border border-[#563c34] bg-[#1a100e] px-3 py-2 text-[9px] text-[#d7aaa0]"><ShieldAlert size={13} class="mt-0.5 shrink-0" /><span>{availability.reason}</span></div>
+		{/if}
+		{#if modelProbe && modelProbe.model === selectedModel && modelProbe.reasoning === selectedReasoning}
+			<div class={`mx-auto mt-2 flex w-full max-w-[1480px] items-center gap-2 rounded-xl border px-3 py-2 text-[9px] ${modelProbe.status === "failed" ? "border-[#563c34] bg-[#1a100e] text-[#d7aaa0]" : "border-[#31432f] bg-[#0c1510] text-[#a9c29b]"}`} role="status">
+			<span>Model check: {modelProbe.reason}</span>
+			{#if modelProbe.status === "failed"}<button type="button" class="ml-auto underline" onclick={() => (probeRetry += 1)}>Retry</button>{/if}
+			</div>
+		{/if}
+		{#if run?.verifiedActions && run.model === selectedModel && (run.reasoning ?? "off") === selectedReasoning}
+			<div class="mx-auto mt-2 w-full max-w-[1480px] rounded-xl border border-[#31432f] bg-[#0c1510] px-3 py-2 text-[9px] text-[#a9c29b]" role="status">Browser action verified: the search field value matched after the AI input ({run.verifiedActions} verified).</div>
 		{/if}
 		{#if run?.browserReset}
 			<div class="mx-auto mt-3 flex w-full max-w-[1480px] items-start gap-2 rounded-xl border border-[#563c34] bg-[#1a100e] px-3 py-2 text-[9px] text-[#d7aaa0]" role="status"><ShieldAlert size={13} class="mt-0.5 shrink-0" /><span>The browser stopped unexpectedly. Your previous page was lost; your next question starts on a blank page.</span></div>
@@ -485,7 +541,7 @@
 					{#if messages.length === 0}
 						<div class="grid h-full min-h-[170px] place-items-center"><div class="max-w-[390px] text-center"><div class="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-[#34464c] bg-[#10191e] text-[#a8c98b]"><Sparkles size={17} /></div><h3 class="mt-3 mb-1.5 text-[13px] font-semibold text-[#dfe8e9]">Explore a public site</h3><p class="m-0 text-[9px] leading-[1.6] text-[#718489]">New origins require approval. The agent can follow ordinary links and fill search fields; other controls, forms, uploads and downloads require human control.</p></div></div>
 					{:else}
-						<div class="space-y-3">{#each messages as message (message.id)}<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><article class={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[10px] leading-[1.6] ${message.role === "user" ? "rounded-br-md border border-[#496038] bg-[linear-gradient(135deg,#304526,#22351e)] text-[#ecf7df]" : message.tone === "error" ? "rounded-bl-md border border-[#65413e] bg-[#211313] text-[#e7aaa4]" : "rounded-bl-md border border-[#304148] bg-[#111a1f] text-[#bcc9cc]"}`}><p class="m-0">{message.text}</p></article></div>{/each}{#if running}<div class="flex justify-start"><div class="flex items-center gap-2 rounded-2xl rounded-bl-md border border-[#304148] bg-[#111a1f] px-3.5 py-2.5"><LoaderCircle size={12} class="animate-spin text-[#b9e184]" /><span class="font-mono text-[8px] text-[#84979b]">{run?.status === "waiting-approval" ? "Waiting for origin approval" : "Browser task running"}</span></div></div>{/if}</div>
+						<div class="space-y-3">{#each messages as message (message.id)}<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><article class={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[10px] leading-[1.6] ${message.role === "user" ? "rounded-br-md border border-[#496038] bg-[linear-gradient(135deg,#304526,#22351e)] text-[#ecf7df]" : message.tone === "error" ? "rounded-bl-md border border-[#65413e] bg-[#211313] text-[#e7aaa4]" : "rounded-bl-md border border-[#304148] bg-[#111a1f] text-[#bcc9cc]"}`}><p class="m-0">{message.text}</p></article></div>{/each}{#if running}<div class="flex justify-start"><div class="flex items-center gap-2 rounded-2xl rounded-bl-md border border-[#304148] bg-[#111a1f] px-3.5 py-2.5"><LoaderCircle size={12} class="animate-spin text-[#b9e184]" /><span class="font-mono text-[8px] text-[#84979b]">{runStageLabel}</span></div></div>{/if}</div>
 					{/if}
 					{#if run?.pendingApproval}
 						<div class="mt-4 rounded-xl border border-[#65522d] bg-[#1a160b] p-3"><div class="flex items-start gap-2"><ShieldAlert size={14} class="mt-0.5 shrink-0 text-[#e3c06b]" /><div class="min-w-0"><p class="m-0 text-[10px] font-semibold text-[#f0d58e]">New origin requested</p><p class="mt-1 mb-0 break-all font-mono text-[8px] text-[#bba96f]">{run.pendingApproval.origin}</p></div></div><div class="mt-3 flex flex-wrap gap-2"><button type="button" disabled={commandBusy} class="rounded-lg border border-[#58713d] bg-[#26391c] px-2.5 py-1.5 text-[8px] font-semibold text-[#daf5b8] disabled:opacity-40" onclick={() => void resolveOrigin("approved", "allow_once")}>Allow once</button><button type="button" disabled={commandBusy} class="rounded-lg border border-[#58713d] bg-[#26391c] px-2.5 py-1.5 text-[8px] font-semibold text-[#daf5b8] disabled:opacity-40" onclick={() => void resolveOrigin("approved", "current_run")}>Allow for run</button><button type="button" disabled={commandBusy} class="rounded-lg border border-[#704847] bg-[#301a1a] px-2.5 py-1.5 text-[8px] font-semibold text-[#f3aaa4] disabled:opacity-40" onclick={() => void resolveOrigin("denied")}>Deny and stop</button></div></div>

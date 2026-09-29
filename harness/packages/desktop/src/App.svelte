@@ -449,8 +449,15 @@
 		}
 	}
 
+	async function probeSelectedBrowserModel(model: string, reasoning: ThinkingLevel): Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }> {
+		if (!supportsCommand("probe_browser_model"))
+			return { status: "failed", code: "backend_outdated", reason: "Restart Klerm to upgrade the browser backend.", levels: [] };
+		return bridge.send("probe_browser_model", { model, reasoning }, 45_000);
+	}
+
 	async function startBrowserRun(input: {
 		model: string;
+		reasoning: ThinkingLevel;
 		prompt: string;
 		startUrl?: string;
 		currentUrl?: string;
@@ -3257,6 +3264,7 @@
 				activity={browserActivity}
 				loading={browserStatusLoading}
 				onrefresh={refreshBrowserStatus}
+				onprobe={probeSelectedBrowserModel}
 				onstart={startBrowserRun}
 				onresolveorigin={resolveBrowserOrigin}
 				onresolveaction={resolveBrowserAction}

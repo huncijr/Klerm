@@ -9,11 +9,13 @@ import inspect
 import logging
 import math
 import os
+import re
 from importlib.metadata import version
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from .policy import (
     ALLOWED_ACTIONS,
@@ -113,6 +115,7 @@ class ActiveRuntime:
     action_decision: str | None = None
     action_sequence: int = 0
     planned_cursor: dict[str, object] | None = None
+    planned_input_check: tuple[str, str, str] | None = None
 
     async def run(self) -> None:
         try:
@@ -297,19 +300,38 @@ class ActiveRuntime:
                 raise PolicyError("browser attempted an unvalidated action")
             name = names[0]
             cursor = self.planned_cursor if self.planned_cursor and self.planned_cursor.get("action") == name else None
+            input_check = self.planned_input_check if name == "input" else None
             self.event_writer.emit(
                 "action_dispatched", "running", **self._run_fields(), action=name, cursor=cursor
             )
             try:
-                if name == "done" and self.browser is not None and await self.browser.get_current_page_url() == "about:blank":
-                    result = browser_use.ActionResult(error="The browser is still on about:blank. Navigate to the requested public site before completing the task.")
+                if name == "done" and self.browser is not None:
+                    current_url = await self.browser.get_current_page_url()
+                    if current_url == "about:blank":
+                        result = browser_use.ActionResult(error="The browser is still on about:blank. Navigate to the requested public site before completing the task.")
+                    elif self._requires_youtube_search_submission() and not self._youtube_results_loaded(current_url):
+                        result = browser_use.ActionResult(error="The requested YouTube search has not been submitted. Click the search button or press Enter, wait for the results page, then finish.")
+                    else:
+                        result = await original_act(action, *args, **kwargs)
                 else:
                     result = await original_act(action, *args, **kwargs)
+                if input_check is not None and not getattr(result, "error", None):
+                    key, identifier, expected = input_check
+                    page = await self.browser.get_current_page()
+                    matched = await page.evaluate(
+                        "(key, identifier, value) => { const elements = key === 'id' ? [document.getElementById(identifier)] : [...document.getElementsByName(identifier)].filter(el => el.tagName === 'INPUT'); return elements.length === 1 && elements[0]?.value === value; }",
+                        key, identifier, expected,
+                    ) if page is not None else "False"
+                    if matched != "True":
+                        result = browser_use.ActionResult(error="The search field value could not be verified after input.")
+                    else:
+                        self.event_writer.emit("action_verified", "completed", **self._run_fields(), action="input")
             except BaseException:
                 self.event_writer.emit("action_settled", "failed", **self._run_fields(), action=name)
                 raise
             finally:
                 self.planned_cursor = None
+                self.planned_input_check = None
             self.event_writer.emit(
                 "action_settled",
                 "failed" if getattr(result, "error", None) else "completed",
@@ -409,6 +431,20 @@ class ActiveRuntime:
                 await self.policy.require(url)
         cursor = self._cursor_for_action(raw_actions, state)
         self.planned_cursor = cursor
+        self.planned_input_check = None
+        if actions and actions[0][0] == "input" and isinstance(raw_actions, list):
+            first_input = raw_actions[0]
+            if hasattr(first_input, "model_dump"):
+                first_input = first_input.model_dump(exclude_none=True)
+            params = first_input.get("input") if isinstance(first_input, dict) else None
+            node = selector_map.get(params.get("index")) if isinstance(params, dict) and isinstance(selector_map, dict) else None
+            attributes = getattr(node, "attributes", {}) if node is not None else {}
+            if isinstance(attributes, dict) and isinstance(params.get("text"), str):
+                for key in ("id", "name"):
+                    identifier = attributes.get(key)
+                    if isinstance(identifier, str) and identifier:
+                        self.planned_input_check = (key, identifier, params["text"])
+                        break
         self.event_writer.emit(
             "step_planned",
             "running",
@@ -416,6 +452,22 @@ class ActiveRuntime:
             actions=action_names,
             cursor=cursor,
         )
+        # Let the user see the target before the browser action is dispatched.
+        # Stop and takeover remain responsive during this short preview.
+        if cursor is not None and approval_kind is None:
+            try:
+                await asyncio.wait_for(self.stop_signal.wait(), timeout=0.35)
+            except asyncio.TimeoutError:
+                pass
+            if self.stopped:
+                raise RunStopped
+            if self.takeover_reason is not None:
+                if isinstance(model_output, dict):
+                    model_output["action"] = []
+                else:
+                    model_output.action = []
+                await self._drain_takeover()
+                return
         if approval_kind:
             self.action_sequence += 1
             action_id = f"action-{self.action_sequence}"
@@ -649,6 +701,17 @@ class ActiveRuntime:
             "or bypass access controls. Ask the human to take control for those actions.\n\n"
             f"Requested task:\n{self.command.task}"
         )
+
+    def _requires_youtube_search_submission(self) -> bool:
+        task = self.command.task.lower()
+        return bool(re.search(r"\b(?:youtube|youtube-ra|youtubeot)\b", task)
+                    and re.search(r"(?:ind[ií]tsd|ind[ií]tsa|submit|start).{0,40}(?:keres[eé]s|search)", task))
+
+    @staticmethod
+    def _youtube_results_loaded(url: str) -> bool:
+        parsed = urlsplit(url)
+        return (parsed.hostname in {"youtube.com", "www.youtube.com"}
+                and parsed.path == "/results" and bool(parse_qs(parsed.query).get("search_query")))
 
     def _run_fields(self) -> dict[str, str]:
         return {
