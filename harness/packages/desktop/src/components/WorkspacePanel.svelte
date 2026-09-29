@@ -13,6 +13,7 @@
 	let {
 		workspace,
 		webUrl,
+		webSources,
 		webSessionId,
 		oncloseweb,
 		editors,
@@ -38,6 +39,7 @@
 	}: {
 		workspace: WorkspaceStatus | undefined;
 		webUrl: string;
+		webSources: string[];
 		webSessionId: string;
 		oncloseweb: () => void;
 		editors: EditorInfo[];
@@ -359,6 +361,11 @@
 		{/if}
 	</div>
 	{#if webUrl && webSessionId}
-		{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} onclose={oncloseweb} />{/key}
+		{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} sources={webSources} onclose={oncloseweb} />{/key}
+	{:else}
+		<section aria-label="External browser" class="shrink-0 border-t border-[#34424d] bg-[#0b1116] px-3 py-3">
+			<strong class="text-[10px] text-[#cbd9dd]">External browser</strong>
+			<p class="mt-1 mb-0 text-[9px] text-[#81949b]">The latest web-tool page will appear here.</p>
+		</section>
 	{/if}
 </aside>

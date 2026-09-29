@@ -19,3 +19,17 @@ export function webToolUrl(toolName: string, args: unknown): string | undefined 
 		return undefined;
 	}
 }
+
+/** Keep distinct observed URLs in last-observed order without mutating history. */
+export function recordWebSource(history: readonly string[], url: string): string[] {
+	const safeUrl = webToolUrl("webfetch", { url });
+	if (!safeUrl) return [...history];
+	return [...history.filter((previous) => previous !== safeUrl), safeUrl];
+}
+
+export function webSourceIdentity(url: string): { hostname: string; icon: string } {
+	const safeUrl = webToolUrl("webfetch", { url });
+	if (!safeUrl) return { hostname: "Website", icon: "" };
+	const parsed = new URL(safeUrl);
+	return { hostname: parsed.hostname, icon: `${parsed.origin}/favicon.ico` };
+}

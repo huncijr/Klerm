@@ -90,7 +90,7 @@
 	} from "./lib/model.ts";
 	import { mcpDisplayName, prepareMcpPrompt, resolveMcpTool } from "./lib/mcp-mentions.ts";
 	import { RpcBridge, toError } from "./lib/rpc.ts";
-	import { webToolUrl } from "./lib/web-activity.ts";
+	import { recordWebSource, webToolUrl } from "./lib/web-activity.ts";
 	import Composer from "./components/Composer.svelte";
 	import AgentViews from "./components/AgentViews.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
@@ -139,6 +139,7 @@
 	let browserActivity = $state<BrowserActivityEvent[]>([]);
 	let agentWebUrl = $state("");
 	let agentWebSession = $state("");
+	let agentWebSources = $state<Record<string, string[]>>({});
 	let browserStatusLoading = $state(false);
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
@@ -1134,6 +1135,10 @@
 		if (openedUrl && lastState?.sessionId) {
 			agentWebSession = lastState.sessionId;
 			agentWebUrl = openedUrl;
+			agentWebSources = {
+				...agentWebSources,
+				[lastState.sessionId]: recordWebSource(agentWebSources[lastState.sessionId] ?? [], openedUrl),
+			};
 			workspacePanelOpen = true;
 		}
 		const described = describeToolCall(toolName, event.args);
@@ -3505,7 +3510,8 @@
 		<WorkspacePanel
 			bind:editDrafts={workspaceEditDrafts}
 			{workspace}
-			webUrl={agentWebSession === lastState?.sessionId ? agentWebUrl : ""}
+			webUrl={agentWebSession === lastState?.sessionId ? agentWebUrl : (agentWebSources[lastState?.sessionId ?? ""]?.at(-1) ?? "")}
+			webSources={agentWebSources[lastState?.sessionId ?? ""] ?? []}
 			webSessionId={lastState?.sessionId ?? ""}
 			oncloseweb={() => (agentWebUrl = "")}
 			{editors}
