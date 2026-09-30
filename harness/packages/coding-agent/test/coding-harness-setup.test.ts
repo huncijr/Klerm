@@ -96,7 +96,7 @@ describe("coding harness setup", () => {
 		expect(createCodingHarnessAgent("agent2")).toEqual(agent("agent2", "klerm"));
 	});
 
-	it("enables Work together and drops legacy slot memory assignments", () => {
+	it("retains reusable Personal Agent references while dropping legacy profile assignments", () => {
 		const agents = [
 			{
 				...agent("agent1", "klerm"),
@@ -107,7 +107,11 @@ describe("coding harness setup", () => {
 			{ ...agent("agent2", "klerm"), model: "provider/two" },
 			{ ...agent("agent3", "klerm"), model: "provider/three" },
 		];
-		const normalizedAgents = [{ ...agent("agent1", "klerm"), model: "provider/one" }, agents[1]!, agents[2]!];
+		const normalizedAgents = [
+			{ ...agent("agent1", "klerm"), model: "provider/one", personalBotId: "bot-scout" },
+			agents[1]!,
+			agents[2]!,
+		];
 		expect(
 			normalizeCodingHarnessSlots({ externalHarnessesEnabled: true, workTogetherEnabled: true, agents }),
 		).toEqual({
@@ -139,7 +143,10 @@ describe("coding harness setup", () => {
 			}),
 		).toEqual({
 			externalHarnessesEnabled: false,
-			agents: [agent("agent1", "klerm"), { ...agent("agent2", "klerm"), role: "planner" }],
+			agents: [
+				{ ...agent("agent1", "klerm"), personalBotId: "bot-scout" },
+				{ ...agent("agent2", "klerm"), role: "planner" },
+			],
 		});
 	});
 

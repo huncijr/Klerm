@@ -42,11 +42,12 @@
 
 ### Changed
 
-- Changed Browser Task to accept an optional start URL and reuse one headed browser per Klerm conversation session across follow-up questions; worker failure resets the next run to a blank profile, and human takeover/Continue use explicit audited control events. Native in-app CEF hosting remains pending.
+- Added a Linux in-app CEF Browser Task surface with native input forwarding and loopback CDP attachment to the same page; explicit YouTube-open requests navigate before model execution, and ordered browser activity appears beside the task conversation. Desktop/model smoke and CEF release packaging remain pending.
+- Changed Browser Task to accept an optional start URL and reuse one browser per Klerm conversation session across follow-up questions; worker failure resets the next run to a blank profile, and human takeover/Continue use explicit audited control events.
 - Changed desktop Memory settings to make the shared team prompt the only Klerm-owned harness memory and show the exact active shared prompt sent to external agents; Personal Bots remain standalone chats.
 - Removed Personal Bot and memory-profile assignment from coding-harness slots, including legacy persisted-field normalization and desktop model-menu controls.
 - Removed automatic Personal Bot summary generation and the desktop summary history, cadence, pending-task, and summary-state controls.
-- Changed the desktop Kanban to separate quick idea capture from planned tasks, show running spinners and hover previews, and move execution plans, attempts, results, and activity into a full-width workspace below the board.
+ - Changed the desktop Kanban to separate quick idea capture from planned tasks, show running spinners and hover previews, and move execution plans, attempts, results, and activity into a full-width workspace below the board.
 - Moved all Shared Memory editing and saved-memory selection from the composer into desktop Memory settings.
 - Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization.
 - Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
@@ -63,6 +64,7 @@
 
 ### Fixed
 
+- Fixed Browser Task stopping after explicit navigation by preserving the original task, disabling duplicate browser-use URL opening, forwarding bounded screenshots to image-capable models, and tying the visible cursor to actual click/input/scroll dispatch.
 - Fixed shared-memory preset selection overwriting the reusable default memory, kept default edits from deselecting an active saved memory, and redesigned desktop Memory settings around a persistent default and separate saved-memory flow.
 - Fixed text-only desktop prompts sending an invalid empty image list, and replaced the stale external-adapter model placeholder with the actual discovery state.
 - Fixed desktop Settings freezing on open by stopping draft-sync from rewriting unchanged state, caching harness discovery during slot saves, and queuing overlapping setup requests.

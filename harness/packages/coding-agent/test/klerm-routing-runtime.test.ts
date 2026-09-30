@@ -108,6 +108,60 @@ describe("Klerm routing runtime", () => {
 		});
 	});
 
+	it("uses the configured Agent 1 model for desktop Direct prompts instead of the stale session model", async () => {
+		const oldProvider = registerFauxProvider({ provider: "ollama", models: [{ id: "old-session-model" }] });
+		const selectedProvider = registerFauxProvider({ provider: "google", models: [{ id: "selected-agent1-model" }] });
+		const old = oldProvider.getModel();
+		const selected = selectedProvider.getModel();
+		const runtime = {
+			getAvailableSnapshot: () => [old, selected],
+			getModel: (provider: string, id: string) =>
+				[old, selected].find((model) => model.provider === provider && model.id === id),
+			checkAuth: async () => ({ source: "config" }),
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+		} as unknown as ModelRuntime;
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "off",
+			localModel: "google/selected-agent1-model",
+			localRole: "planner",
+		});
+		const controller = new KlermRoutingController(tempDir, runtime, store);
+		let requested: string | undefined;
+		let tools: string[] = [];
+		const agent = new Agent({
+			streamFn: (model, context, options) => {
+				requested = `${model.provider}/${model.id}`;
+				tools = context.tools?.map((tool) => tool.name) ?? [];
+				return streamSimple(model, context, options);
+			},
+			initialState: { model: old, systemPrompt: "test", tools: [], thinkingLevel: "off" },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(tempDir),
+			settingsManager: SettingsManager.inMemory(),
+			cwd: tempDir,
+			modelRuntime: runtime,
+			resourceLoader: createTestResourceLoader(),
+			klermRoutingController: controller,
+		});
+		try {
+			selectedProvider.setResponses([fauxAssistantMessage("Ready to research.")]);
+			await session.prompt("Research public documentation", { source: "rpc" });
+			expect(requested).toBe("google/selected-agent1-model");
+			expect(tools).toContain("webfetch");
+			vi.spyOn(runtime, "getModel").mockReturnValue(undefined);
+			await expect(session.prompt("Research again", { source: "rpc" })).rejects.toThrow(
+				"selected Agent 1 model is unavailable",
+			);
+		} finally {
+			session.dispose();
+			oldProvider.unregister();
+			selectedProvider.unregister();
+		}
+	});
+
 	it("starts the local orchestrator in auto mode", async () => {
 		const store = await KlermConfigStore.load(tempDir, {
 			routing: "auto",

@@ -11,9 +11,61 @@ import {
 	loadPersonalBotConversation,
 	savePersonalBotConversation,
 } from "../src/klerm/personal-bot-conversations.ts";
-import { normalizePersonalBotRegistry } from "../src/klerm/personal-bots.ts";
+import { normalizePersonalBotRegistry, resolvePersonalAgent } from "../src/klerm/personal-bots.ts";
 
 describe("Personal Bot registry", () => {
+	test("keeps permissions separate and reuses the latest Personal Agent model", () => {
+		const manager = SettingsManager.inMemory();
+		const scout = manager.getPersonalBots().bots[0]!;
+		manager.upsertPersonalBot({ ...scout, model: "openai/first", enabled: true, browserEnabled: true });
+		expect(resolvePersonalAgent(manager.getPersonalBots(), scout.id, "browser").model).toBe("openai/first");
+		expect(() => resolvePersonalAgent(manager.getPersonalBots(), scout.id, "kanban")).toThrow(
+			"Kanban access is disabled",
+		);
+		manager.setCodingHarnessSlots({
+			externalHarnessesEnabled: true,
+			agents: [
+				{
+					id: "agent1",
+					kind: "klerm",
+					enabled: true,
+					personalBotId: scout.id,
+					model: "stale",
+					role: "builder",
+					effort: "off",
+					tools: [],
+				},
+			],
+		});
+		manager.upsertPersonalBot({
+			...scout,
+			model: "openai/second",
+			enabled: true,
+			effort: "high",
+			kanbanEnabled: true,
+		});
+		expect(manager.getCodingHarnessSlots().agents[0]).toMatchObject({
+			model: "openai/second",
+			effort: "high",
+			personalBotId: scout.id,
+		});
+		expect(() => resolvePersonalAgent(manager.getPersonalBots(), scout.id, "browser")).toThrow(
+			"Browser access is disabled",
+		);
+		manager.deletePersonalBot(scout.id);
+		expect(manager.getCodingHarnessSlots().agents[0]).toMatchObject({ enabled: false });
+	});
+	test("browser session names persist separately from Personal Agent and coding sessions", () => {
+		const manager = SettingsManager.inMemory();
+		manager.setBrowserSessions([
+			{ id: "browser-one", name: "Research" },
+			{ id: "browser-two", name: "Videos" },
+		]);
+		expect(manager.getBrowserSessions().map((entry) => entry.name)).toEqual(["Research", "Videos"]);
+		manager.setBrowserSessions(manager.getBrowserSessions().filter((entry) => entry.id !== "browser-one"));
+		expect(manager.getBrowserSessions()).toEqual([{ id: "browser-two", name: "Videos" }]);
+		expect(manager.getPersonalBots().bots).toHaveLength(3);
+	});
 	const root = join(process.cwd(), "test-personal-bots-tmp");
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "workspace");

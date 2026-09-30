@@ -275,6 +275,20 @@ const startInput = {
 } as const;
 
 describe("BrowserRunCoordinator", () => {
+	it("uses Personal Agent guidance without treating prior context as a new navigation request", async () => {
+		const context = setup();
+		const state = await context.coordinator.start({
+			model: startInput.model,
+			personalBotId: "bot-scout",
+			prompt: "What is on the current page?",
+			instructions: "Earlier the user asked: open YouTube. This is previous context.",
+		});
+		expect(state.startUrl).toBeUndefined();
+		expect(context.runner.starts[0]?.prompt).toContain("What is on the current page?");
+		expect(context.runner.starts[0]?.prompt).toContain("previous context");
+		expect(context.audit[0]?.personalBotId).toBe("bot-scout");
+		await context.coordinator.close();
+	});
 	it("preserves a complete multi-post final answer beyond the old 500-character limit", async () => {
 		const context = setup();
 		await context.coordinator.start(startInput);

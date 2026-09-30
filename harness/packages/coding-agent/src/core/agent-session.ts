@@ -53,6 +53,7 @@ import {
 	resolveMcpPromptSelection,
 } from "../klerm/mcp/extension.ts";
 import type { McpPromptMention } from "../klerm/mcp/runtime.ts";
+import { formatProfilePrompt } from "../klerm/profiles.ts";
 import {
 	type KlermEnforcedDelegation,
 	type KlermModelTransition,
@@ -146,6 +147,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { createWebFetchToolDefinition } from "./tools/webfetch.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
 // ============================================================================
@@ -841,7 +843,7 @@ export class AgentSession {
 		if (controller.activeWorkerRole === "planner") {
 			this._klermBuilderTools ??= this.agent.state.tools.slice();
 			const tools = new Map(this._klermBuilderTools.map((tool) => [tool.name, tool]));
-			for (const name of ["read", "grep", "find", "ls", "bash"]) {
+			for (const name of ["read", "grep", "find", "ls", "bash", "webfetch"]) {
 				const tool = this._toolRegistry.get(name);
 				if (tool) tools.set(name, tool);
 			}
@@ -1401,7 +1403,19 @@ export class AgentSession {
 
 	private _withKlermSystemPrompt(systemPrompt: string): string {
 		const contribution = this._klermRoutingController?.getSystemPromptContribution();
-		return contribution ? `${systemPrompt}\n\n${contribution}` : systemPrompt;
+		const laneId = this._klermRoutingController?.routingState.lane === "frontier" ? "agent2" : "agent1";
+		const assignment = this.settingsManager.getCodingHarnessSlots().agents.find((agent) => agent.id === laneId);
+		const bot = assignment?.personalBotId
+			? this.settingsManager.getPersonalBots().bots.find((agent) => agent.id === assignment.personalBotId)
+			: undefined;
+		const profile = bot
+			? this.settingsManager.getKlermProfiles().profiles.find((entry) => entry.id === bot.profileId)
+			: undefined;
+		const identity =
+			bot?.enabled && profile
+				? formatProfilePrompt(bot.name, profile, this._klermRoutingController?.activeWorkerRole ?? "builder")
+				: undefined;
+		return [systemPrompt, contribution, identity].filter(Boolean).join("\n\n");
 	}
 
 	// =========================================================================
@@ -1751,6 +1765,20 @@ export class AgentSession {
 				return;
 			}
 
+			// Desktop Direct mode uses the Agent 1 selector, not a model left
+			// behind in the native session by an earlier task.
+			if (
+				options?.source === "rpc" &&
+				!options.routingOverride &&
+				this._klermRoutingController?.config.routing === "off"
+			) {
+				const selected = this._getKlermLaneModel("local");
+				if (!selected && this._klermRoutingController.config.localModel)
+					throw new Error(
+						"The selected Agent 1 model is unavailable. Refresh the model catalog or select another model.",
+					);
+				if (selected) await this._applyRoutedModel(selected, false, this.getKlermThinkingSetting("local").level);
+			}
 			const modelBeforeRouting = this.model;
 			const thinkingBeforeRouting = this.agent.state.thinkingLevel;
 			const routedTransition = await this._klermRoutingController?.routePrompt(
@@ -3297,6 +3325,8 @@ export class AgentSession {
 		this._baseToolDefinitions = new Map(
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
+		if (this._klermRoutingController && !this._baseToolsOverride)
+			this._baseToolDefinitions.set("webfetch", createWebFetchToolDefinition());
 
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {
@@ -3323,7 +3353,10 @@ export class AgentSession {
 			: ["read", "bash", "edit", "write"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
-			activeToolNames: baseActiveToolNames,
+			activeToolNames:
+				this._klermRoutingController && !this._baseToolsOverride
+					? [...new Set([...baseActiveToolNames, "webfetch"])]
+					: baseActiveToolNames,
 			includeAllExtensionTools: options.includeAllExtensionTools,
 		});
 	}

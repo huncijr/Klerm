@@ -136,10 +136,23 @@
 	let kanbanActivity = $state<KanbanActivityEvent[]>([]);
 	let browserAvailability = $state<BrowserAvailability | undefined>(undefined);
 	let browserRun = $state<BrowserRunState | undefined>(undefined);
+	let browserSessions = $state<Array<{ id: string; name: string }>>([]);
+	let selectedBrowserSessionId = $state("");
+	let browserRuns = $state<Record<string, BrowserRunState>>({});
+	let browserActivities = $state<Record<string, BrowserActivityEvent[]>>({});
+	let personalBrowserRuns = $state<Record<string, BrowserRunState>>({});
 	let browserActivity = $state<BrowserActivityEvent[]>([]);
 	let agentWebUrl = $state("");
 	let agentWebSession = $state("");
 	let agentWebSources = $state<Record<string, string[]>>({});
+	let webOpenRequest = $state(0);
+	function openWebSource(url: string): void {
+		if (!lastState?.sessionId) return;
+		agentWebSession = lastState.sessionId;
+		agentWebUrl = url;
+		workspacePanelOpen = true;
+		webOpenRequest += 1;
+	}
 	let browserStatusLoading = $state(false);
 	let personalBots = $state<PersonalBotRegistry>({ version: 1, defaultsInitialized: true, bots: [] });
 	let personalBotConversations = $state<Record<string, PersonalBotConversation | undefined>>({});
@@ -433,9 +446,12 @@
 		}
 		browserStatusLoading = true;
 		try {
+			const registry = await bridge.send<{ sessions: Array<{ id: string; name: string }> }>("get_browser_sessions");
+			browserSessions = registry.sessions;
+			if (!browserSessions.some((entry) => entry.id === selectedBrowserSessionId)) selectedBrowserSessionId = browserSessions[0]?.id ?? "";
 			const [availability, run] = await Promise.all([
 				bridge.send<BrowserAvailability>("get_browser_availability", {}, 15_000),
-				bridge.send<{ state?: BrowserRunState }>("get_browser_run"),
+				bridge.send<{ state?: BrowserRunState }>("get_browser_run", { browserSessionId: selectedBrowserSessionId }),
 			]);
 			browserAvailability = availability;
 			browserRun = run.state;
@@ -449,15 +465,34 @@
 			browserStatusLoading = false;
 		}
 	}
+	$effect(() => { if (workspaceView === "browser" && backendReady && !selectedBrowserSessionId) untrack(() => { void refreshBrowserStatus(); }); });
+	async function selectBrowserSession(id: string): Promise<void> {
+		selectedBrowserSessionId = id;
+		browserRun = browserRuns[id];
+		browserActivity = browserActivities[id] ?? [];
+		const result = await bridge.send<{ state?: BrowserRunState }>("get_browser_run", { browserSessionId: id });
+		if (selectedBrowserSessionId === id) browserRun = result.state;
+	}
+	async function changeBrowserSession(command: "create_browser_session" | "rename_browser_session" | "delete_browser_session", id?: string, name?: string): Promise<void> {
+		const result = await bridge.send<{ sessions: Array<{ id: string; name: string }> }>(command, { browserSessionId: id, name });
+		browserSessions = result.sessions;
+		if (!result.sessions.length) { selectedBrowserSessionId = ""; await refreshBrowserStatus(); return; }
+		if (command === "delete_browser_session" && id) void invoke("browser_host_command", { sessionId: id, command: { type: "close" } }).catch(() => undefined);
+		await selectBrowserSession(command === "create_browser_session" ? result.sessions.at(-1)!.id : result.sessions.some((entry) => entry.id === selectedBrowserSessionId) ? selectedBrowserSessionId : result.sessions[0]?.id ?? "");
+	}
+	async function attachPersonalBrowser(botId: string, cdpUrl: string): Promise<void> { await bridge.send("attach_personal_browser", { botId, cdpUrl }); }
+	async function personalBrowserCommand(command: string, input: Record<string, unknown>): Promise<void> { await bridge.send(command, input, 30_000); }
 
-	async function probeSelectedBrowserModel(model: string, reasoning: ThinkingLevel): Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }> {
+	async function probeSelectedBrowserModel(model: string, reasoning: ThinkingLevel, personalBotId?: string): Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }> {
 		if (!supportsCommand("probe_browser_model"))
 			return { status: "failed", code: "backend_outdated", reason: "Restart Klerm to upgrade the browser backend.", levels: [] };
-		return bridge.send("probe_browser_model", { model, reasoning }, 45_000);
+		return bridge.send("probe_browser_model", { model, reasoning, personalBotId }, 45_000);
 	}
 
 	async function startBrowserRun(input: {
+		context?: string;
 		model: string;
+		personalBotId: string;
 		reasoning: ThinkingLevel;
 		prompt: string;
 		startUrl?: string;
@@ -466,7 +501,7 @@
 	}): Promise<BrowserRunState> {
 		if (!supportsCommand("start_browser_run")) throw new Error("Restart Klerm to upgrade the desktop backend.");
 		browserActivity = [];
-		const state = await bridge.send<BrowserRunState>("start_browser_run", input, 60_000);
+		const state = await bridge.send<BrowserRunState>("start_browser_run", { ...input, browserSessionId: selectedBrowserSessionId }, 60_000);
 		browserRun = state;
 		return state;
 	}
@@ -688,14 +723,14 @@
 			: frontierOptions,
 	);
 	const composerLocalValue = $derived(
-		externalHarnessesEnabled
+		firstHarnessAgent?.personalBotId ? firstHarnessAgent.model ?? "" : externalHarnessesEnabled
 			? (firstHarnessAgent
 				? resolvedCodingHarnessModel(firstHarnessAgent, currentConfig?.localModel, currentConfig?.frontierModel) ?? ""
 				: "")
 			: (currentConfig?.localModel ?? ""),
 	);
 	const composerFrontierValue = $derived(
-		externalHarnessesEnabled
+		secondHarnessAgent?.personalBotId ? secondHarnessAgent.model ?? "" : externalHarnessesEnabled
 			? (secondHarnessAgent
 				? resolvedCodingHarnessModel(secondHarnessAgent, currentConfig?.localModel, currentConfig?.frontierModel) ?? ""
 				: "")
@@ -705,14 +740,14 @@
 		!externalHarnessesEnabled && hasDistinctSecondKlermModel(currentConfig?.localModel, currentConfig?.frontierModel),
 	);
 	const composerLocalDisabled = $derived(
-		!backendReady || interactionActive || !composerLocalOptions.some((option) => option.value.length > 0),
+		!backendReady || interactionActive || !!firstHarnessAgent?.personalBotId || !composerLocalOptions.some((option) => option.value.length > 0),
 	);
 	const composerFrontierDisabled = $derived(
-		!backendReady || interactionActive || !composerFrontierOptions.some((option) => option.value.length > 0),
+		!backendReady || interactionActive || !!secondHarnessAgent?.personalBotId || !composerFrontierOptions.some((option) => option.value.length > 0),
 	);
 	const routingSelectDisabled = $derived(!backendReady || interactionActive);
-	const localThinkingDisabled = $derived(!backendReady || interactionActive || localThinking.levels.length < 2);
-	const frontierThinkingDisabled = $derived(!backendReady || interactionActive || frontierThinking.levels.length < 2);
+	const localThinkingDisabled = $derived(!backendReady || interactionActive || !!firstHarnessAgent?.personalBotId || localThinking.levels.length < 2);
+	const frontierThinkingDisabled = $derived(!backendReady || interactionActive || !!secondHarnessAgent?.personalBotId || frontierThinking.levels.length < 2);
 	const chatMessages = $derived.by(() =>
 		feed.flatMap((item) => (item.type === "message" ? [item.message] : [])),
 	);
@@ -756,8 +791,10 @@
 
 	const currentModel = $derived.by(() => {
 		const routing = currentConfig?.routing ?? "off";
-		let reference = currentRoutingState?.selectedTarget;
-		if (!reference) {
+		let reference = routing === "off" ? currentConfig?.localModel : currentRoutingState?.selectedTarget;
+		const configuredSlot = routing === "frontier" ? secondHarnessAgent : firstHarnessAgent;
+		if (!taskActive && configuredSlot?.personalBotId) reference = configuredSlot.model;
+		if (!reference && !configuredSlot?.personalBotId) {
 			if (routing === "frontier") reference = currentConfig?.frontierModel;
 			else if (routing === "local" || routing === "auto") reference = currentConfig?.localModel;
 			else if (lastState?.model) reference = `${lastState.model.provider}/${lastState.model.id}`;
@@ -1150,6 +1187,12 @@
 			described.label = `${mcpServer.name} MCP called`;
 			described.detail = `${mcpDisplayName(mcpServer)} / ${mcpTool?.remoteName ?? toolName}`;
 		}
+		if (openedUrl) {
+			described.kind = "webfetch";
+			described.label = "Web fetch";
+			described.detail = openedUrl;
+			described.tone = "blue";
+		}
 		const existingId = toolCards.get(toolCallId);
 		if (existingId === undefined) {
 			const item = pushTimeline(
@@ -1188,7 +1231,13 @@
 		const entry = feed.find((candidate) => candidate.type === "activity" && candidate.activity.id === existingId);
 		const item = entry?.type === "activity" ? entry.activity : undefined;
 		if (!item) return;
-		const result = event.result as { content?: AgentMessage["content"] } | undefined;
+		const result = event.result as { content?: AgentMessage["content"]; details?: { url?: unknown } } | undefined;
+		const fetchedUrl = event.isError === true ? undefined : webToolUrl(String(event.toolName ?? ""), { url: result?.details?.url });
+		if (fetchedUrl && lastState?.sessionId) {
+			agentWebSession = lastState.sessionId;
+			agentWebUrl = fetchedUrl;
+			agentWebSources = { ...agentWebSources, [lastState.sessionId]: recordWebSource(agentWebSources[lastState.sessionId] ?? [], fetchedUrl) };
+		}
 		const images = contentImages(result?.content);
 		if (images.length > 0) item.images = images;
 		if (event.isError === true) {
@@ -1464,9 +1513,17 @@
 			case "browser_event": {
 				const state = event.state as BrowserRunState | undefined;
 				const activity = event.event as BrowserActivityEvent | undefined;
-				if (state && typeof state.runId === "string") browserRun = state;
+				if (state && typeof state.runId === "string") {
+					const owner = state.sessionId ?? "";
+					browserRuns = { ...browserRuns, [owner]: state };
+					if (state.personalBotId && owner.startsWith("personal-")) personalBrowserRuns = { ...personalBrowserRuns, [state.personalBotId]: state };
+					if (owner === selectedBrowserSessionId) browserRun = state;
+				}
 				if (activity && typeof activity.event === "string" && typeof activity.sequence === "number") {
-					browserActivity = [...browserActivity.slice(-99), activity];
+					const owner = state?.sessionId ?? "";
+					const items = [...(browserActivities[owner] ?? []).slice(-199), activity];
+					browserActivities = { ...browserActivities, [owner]: items };
+					if (owner === selectedBrowserSessionId) browserActivity = items;
 				}
 				return;
 			}
@@ -3192,6 +3249,7 @@
 		{#if settingsOpen}
 			{#if desktopSettings}
 			<SettingsView
+				personalAgents={personalBots.bots}
 				settings={desktopSettings}
 				klermConfig={currentConfig}
 				{mcpStatus}
@@ -3232,6 +3290,9 @@
 			{/if}
 		{:else if workspaceView === "personal-bots"}
 			<PersonalBotsView
+				browserRuns={personalBrowserRuns}
+				onbrowserattach={attachPersonalBrowser}
+				onbrowsercommand={personalBrowserCommand}
 				bots={personalBots.bots}
 				profiles={desktopSettings?.profiles.profiles ?? []}
 				harnessSetup={personalBotHarnessSetup}
@@ -3241,7 +3302,7 @@
 				focusBotId={personalBotsFocus}
 				onclose={() => (workspaceView = undefined)}
 				onselect={(botId) => void loadPersonalBotConversation(botId)}
-				onsave={savePersonalBot}
+				onsave={async (bot) => { const saved = await savePersonalBot(bot); if (saved) { await refreshCodingHarnessSetup(); currentConfig = await bridge.send<KlermConfig>("get_klerm_config"); } return saved; }}
 				onprofilesave={savePersonalBotProfile}
 				ongeneratememory={generatePersonalBotMemory}
 				ondelete={deletePersonalBot}
@@ -3250,9 +3311,9 @@
 			/>
 		{:else if workspaceView === "kanban"}
 			<WorkspacePlannedView
+				personalAgents={personalBots.bots}
 				registry={kanbanRegistry}
 				workspaceRoot={workspace?.projectRoot ?? sessionCwd}
-				models={modelCatalog}
 				activity={kanbanActivity}
 				onclose={() => (workspaceView = undefined)}
 				onsave={saveKanban}
@@ -3261,9 +3322,19 @@
 				onstop={stopKanbanTask}
 			/>
 		{:else if workspaceView === "browser"}
+			<div class="flex min-h-0 flex-1 overflow-hidden">
+				<aside class="flex w-44 shrink-0 flex-col border-r border-[#27353c] bg-[#0a1014] p-2">
+					<strong class="px-2 py-3 text-[10px] text-[#cbd9dd]">Browser sessions</strong>
+					<div class="min-h-0 flex-1 overflow-y-auto">{#each browserSessions as entry (entry.id)}
+						<div class="mb-2 rounded-lg border border-[#27353c] p-1"><button type="button" class={`w-full truncate rounded px-2 py-2 text-left text-[10px] ${selectedBrowserSessionId === entry.id ? "bg-[#26391c] text-[#daf5b8]" : "text-[#81949b]"}`} onclick={() => void selectBrowserSession(entry.id)}>{entry.name}</button>
+						{#if selectedBrowserSessionId === entry.id}<div class="flex gap-1"><input aria-label="Rename browser session (Enter to save)" value={entry.name} class="min-w-0 flex-1 bg-transparent px-1 py-1 text-[9px] text-[#81949b]" onkeydown={(event) => { if (event.key === "Enter") void changeBrowserSession("rename_browser_session", entry.id, event.currentTarget.value); }} /><button type="button" aria-label="Delete browser session" class="px-1 text-[#c9827b]" onclick={() => void changeBrowserSession("delete_browser_session", entry.id)}>×</button></div>{/if}</div>
+					{/each}</div>
+					<button type="button" class="rounded-lg border border-[#34424d] px-2 py-2 text-[10px] text-[#cbd9dd]" onclick={() => void changeBrowserSession("create_browser_session")}>+ New browser session</button>
+				</aside>
+				{#if selectedBrowserSessionId}{#key selectedBrowserSessionId}
 			<BrowserWorkspace
-				sessionId={lastState?.sessionId ?? ""}
-				models={modelCatalog}
+				personalAgents={personalBots.bots}
+				sessionId={selectedBrowserSessionId}
 				availability={browserAvailability}
 				run={browserRun}
 				activity={browserActivity}
@@ -3279,6 +3350,8 @@
 				onresume={resumeBrowserRun}
 				onclose={closeBrowserWorkspace}
 			/>
+				{/key}{:else}<p class="p-6 text-[10px] text-[#81949b]">Loading browser sessions…</p>{/if}
+			</div>
 		{:else if selectedProject}
 			<ProjectWorkspace
 				project={selectedProject}
@@ -3310,6 +3383,8 @@
 			onchangeroot={() => void changeRoot()}
 			{workspacePanelOpen}
 			ontogglefiles={() => (workspacePanelOpen = !workspacePanelOpen)}
+			webSources={agentWebSources[lastState?.sessionId ?? ""] ?? []}
+			onwebsource={openWebSource}
 			{workspaceView}
 			showWorkspaceMenu={!sessionsExpanded}
 			onworkspaceview={(view) => {
@@ -3508,12 +3583,12 @@
 	</main>
 	{#if workspacePanelOpen && !settingsOpen && !selectedProject && !workspaceView}
 		<WorkspacePanel
+			{webOpenRequest}
 			bind:editDrafts={workspaceEditDrafts}
 			{workspace}
 			webUrl={agentWebSession === lastState?.sessionId ? agentWebUrl : (agentWebSources[lastState?.sessionId ?? ""]?.at(-1) ?? "")}
 			webSources={agentWebSources[lastState?.sessionId ?? ""] ?? []}
 			webSessionId={lastState?.sessionId ?? ""}
-			oncloseweb={() => (agentWebUrl = "")}
 			{editors}
 			selectedPath={selectedFilePath}
 			diff={selectedFileDiff}

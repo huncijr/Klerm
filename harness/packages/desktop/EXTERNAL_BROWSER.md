@@ -1,15 +1,24 @@
 # External browser in Agents & Routing
 
-The Files panel contains an External browser preview beneath the file workspace.
+The Files panel contains an External browser tab next to Changes.
 Explicit web-tool URL activity updates the preview to the latest observed URL.
-The Source control below the preview reveals distinct observed URLs on hover or
-keyboard focus, newest first, with a site favicon and clickable full URL.
+The Sources control below the main Files button reveals distinct observed URLs on hover or
+keyboard focus, newest first, with site favicons and compact side-by-side URL chips.
+Clicking a chip opens that source inside the External browser tab; the full URL
+remains in its tooltip, while the visible label omits the HTTP scheme.
 Failed favicon loads keep a globe fallback. Favicon requests use the website's
 origin only and do not send the visited URL as a referrer.
 
 History is scoped to the Klerm conversation session and rebuilt from replayed
 web-tool calls where the session retains structured tool arguments. Repeated
 URLs move to the latest position instead of creating duplicate source rows.
+
+Built-in Klerm sessions expose a read-only webfetch tool for public text pages
+in Plan and Build roles. Its start event has a separate Web fetch card; a
+successful response updates the current preview to its final redirected URL.
+The External browser surface forwards native mouse clicks and wheel scrolling.
+Switching back to Changes preserves the source list. Desktop Direct prompts
+use the configured Agent 1 model and effort rather than a stale session model.
 
 This is a preview of explicit web-tool activity, not a mirror of an external
 harness's private native browser. Mentioning a URL in chat, shell output, or a
@@ -26,11 +35,13 @@ From `harness`:
 ```
 
 1. Open Agents & Routing and the Files panel. Confirm External browser appears
-   below the file workspace, initially with an empty-state message.
-2. With a configured web-reading tool, ask the AI to read two public pages.
-   Confirm the latest page is previewed and Source shows two distinct URLs.
-3. Hover Source or focus it with Tab. Confirm both rows show a favicon/globe,
-   hostname and URL. Open a source link and confirm it opens the requested URL.
+   beside Changes, initially with an empty-state message.
+2. Select an Agent 1 model, then ask the AI to use webfetch to read two public pages.
+   Confirm the response model matches the selection, a Web fetch card appears,
+   and External browser shows the latest page.
+3. Hover Sources below Files or focus it with Tab. Confirm rows show a favicon/globe,
+   compact URL labels. Click a source and confirm External browser opens it.
+   In External browser, scroll and click an ordinary page link to verify input.
 4. Read the first URL again. Confirm no duplicate row appears and it moves to
    the top of Source. Switch sessions and confirm histories are separate.
 5. Reopen a session with recorded web-tool calls and confirm replay restores

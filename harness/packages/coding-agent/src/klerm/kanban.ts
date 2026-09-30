@@ -39,6 +39,7 @@ export interface KanbanTask {
 	workspaceRoot: string;
 	kind: KanbanTaskKind;
 	model?: string;
+	personalBotId?: string;
 	reasoning: string;
 	status: KanbanTaskStatus;
 	targetMinutes?: number;
@@ -164,6 +165,7 @@ export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 					status,
 					reasoning: typeof task.reasoning === "string" ? task.reasoning : "medium",
 					...(typeof task.model === "string" ? { model: task.model } : {}),
+					...(typeof task.personalBotId === "string" ? { personalBotId: task.personalBotId } : {}),
 					...(typeof task.targetMinutes === "number" ? { targetMinutes: task.targetMinutes } : {}),
 					...(typeof task.repeatMinutes === "number" ? { repeatMinutes: task.repeatMinutes } : {}),
 					...(typeof task.scheduledAt === "string" ? { scheduledAt: task.scheduledAt } : {}),

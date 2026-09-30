@@ -21,7 +21,8 @@ export interface KanbanRunEvent {
 	taskId: string;
 	/** Deterministic per-task run number, persisted as KanbanTask.runCount. */
 	sequence: number;
-	sender: "user" | "klerm-scheduler";
+	sender: "user" | "klerm-scheduler" | "personal-agent";
+	personalBotId?: string;
 	recipient: "kanban-task";
 	status: "running" | "succeeded" | "failed" | "stopped" | "scheduled" | "interrupted";
 	reason: string;

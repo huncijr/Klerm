@@ -39,6 +39,7 @@ export interface KanbanTask {
 	workspaceRoot: string;
 	kind: KanbanTaskKind;
 	model?: string;
+	personalBotId?: string;
 	reasoning: string;
 	status: KanbanTaskStatus;
 	targetMinutes?: number;
@@ -91,6 +92,7 @@ export interface BrowserPendingOriginApproval {
 }
 
 export interface BrowserRunState {
+	personalBotId?: string;
 	runId: string;
 	sessionId?: string;
 	taskId: string;
@@ -135,6 +137,7 @@ export interface CodingHarnessSlotSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	personalBotId?: string;
 	role: WorkerRole;
 	effort: ThinkingLevel;
 	tools: string[];
@@ -471,6 +474,8 @@ export interface DesktopProjects {
 }
 
 export interface PersonalBot {
+	browserEnabled?: boolean;
+	kanbanEnabled?: boolean;
 	id: string;
 	name: string;
 	face: KlermProfileFace;

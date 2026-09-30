@@ -14,8 +14,8 @@
 		workspace,
 		webUrl,
 		webSources,
+		webOpenRequest,
 		webSessionId,
-		oncloseweb,
 		editors,
 		selectedPath,
 		diff,
@@ -40,8 +40,8 @@
 		workspace: WorkspaceStatus | undefined;
 		webUrl: string;
 		webSources: string[];
+		webOpenRequest: number;
 		webSessionId: string;
-		oncloseweb: () => void;
 		editors: EditorInfo[];
 		selectedPath: string | undefined;
 		diff: string;
@@ -65,7 +65,16 @@
 	} = $props();
 
 	let tab = $state<"diff" | "edit">("diff");
-	let listTab = $state<"changes" | "files">("changes");
+	let listTab = $state<"changes" | "files" | "web">("changes");
+	let lastWebUrl = "";
+	let lastWebOpenRequest = 0;
+	$effect(() => {
+		if (webUrl && (webUrl !== lastWebUrl || webOpenRequest !== lastWebOpenRequest)) {
+			lastWebUrl = webUrl;
+			lastWebOpenRequest = webOpenRequest;
+			listTab = "web";
+		}
+	});
 	let collapsedPaths = $state<string[]>([]);
 	let editContent = $state("");
 	let originalContent = $state("");
@@ -160,7 +169,7 @@
 		return "text-[#7f8991]";
 	}
 
-	function showListTab(next: "changes" | "files"): void {
+	function showListTab(next: "changes" | "files" | "web"): void {
 		listTab = next;
 		if (next === "files") onviewprojectfiles();
 	}
@@ -237,12 +246,14 @@
 			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "changes" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
 			onclick={() => showListTab("changes")}
 		>Changes</button>
+		<button type="button" class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "web" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`} onclick={() => showListTab("web")}>External browser</button>
 		<button
 			type="button"
 			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "files" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
 			onclick={() => showListTab("files")}
 		><FolderTree size={10} /> View project files</button>
 	</div>
+	{#if listTab !== "web"}
 	<div class="shrink-0 overflow-y-auto bg-[#131c23] p-2" style={`height: ${listHeight}px;`}>
 		{#if listTab === "files"}
 			{#if projectFilesLoading}
@@ -311,8 +322,16 @@
 	>
 		<span class="block h-0.5 w-8 rounded-full bg-[#4a5861]"></span>
 	</button>
+	{/if}
 
-	<div class={`flex min-h-0 flex-col bg-[#0e151b] ${webUrl ? "h-[35%] shrink-0" : "flex-1"}`}>
+	{#if listTab === "web"}
+		{#if webUrl && webSessionId}
+			{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} sources={webSources} openRequest={webOpenRequest} onclose={() => (listTab = "changes")} />{/key}
+		{:else}
+			<div class="grid min-h-0 flex-1 place-items-center px-6 text-center text-[10px] text-[#81949b]">No web fetch has run yet. The latest AI web-tool page will appear here.</div>
+		{/if}
+	{:else}
+	<div class="flex min-h-0 flex-1 flex-col bg-[#0e151b]">
 		{#if selectedPath}
 			<div class="flex h-10 shrink-0 items-center border-b border-line-soft px-2">
 				<button
@@ -360,12 +379,5 @@
 			<div class="grid flex-1 place-items-center px-8 text-center"><div><FileCode2 size={24} class="mx-auto mb-3 text-[#38434b]" /><p class="text-[10px]/[1.55] text-[#68747c]">Select a changed file to inspect its diff or edit the current text.</p></div></div>
 		{/if}
 	</div>
-	{#if webUrl && webSessionId}
-		{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} sources={webSources} onclose={oncloseweb} />{/key}
-	{:else}
-		<section aria-label="External browser" class="shrink-0 border-t border-[#34424d] bg-[#0b1116] px-3 py-3">
-			<strong class="text-[10px] text-[#cbd9dd]">External browser</strong>
-			<p class="mt-1 mb-0 text-[9px] text-[#81949b]">The latest web-tool page will appear here.</p>
-		</section>
 	{/if}
 </aside>

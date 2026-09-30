@@ -31,6 +31,7 @@ export interface CodingHarnessAgentSettings {
 	kind: CodingHarnessSlot;
 	enabled: boolean;
 	model?: string;
+	personalBotId?: string;
 	role: CodingHarnessRole;
 	effort: CodingHarnessEffort;
 	tools: string[];
@@ -192,6 +193,9 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		kind,
 		enabled: kind !== null && (typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled),
 		...(model ? { model } : {}),
+		...(typeof candidate.personalBotId === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.personalBotId)
+			? { personalBotId: candidate.personalBotId }
+			: {}),
 		role,
 		effort,
 		tools,
@@ -243,14 +247,23 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	const agent = value as Record<string, unknown>;
 	if (
 		Object.keys(agent).some(
-			(key) => !["id", "kind", "enabled", "model", "role", "effort", "tools", "specialties"].includes(key),
+			(key) =>
+				!["id", "kind", "enabled", "model", "role", "effort", "tools", "specialties", "personalBotId"].includes(
+					key,
+				),
 		)
 	) {
 		return undefined;
 	}
 	if (typeof agent.id !== "string" || !AGENT_ID_PATTERN.test(agent.id)) return undefined;
+	if (
+		agent.personalBotId !== undefined &&
+		(typeof agent.personalBotId !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(agent.personalBotId))
+	)
+		return undefined;
 	if (agent.kind !== null && !CODING_HARNESS_KINDS.includes(agent.kind as CodingHarnessKind)) return undefined;
 	if (typeof agent.enabled !== "boolean" || (agent.kind === null && agent.enabled)) return undefined;
+	if (agent.personalBotId && agent.kind !== "klerm") return undefined;
 	if (
 		agent.model !== undefined &&
 		(typeof agent.model !== "string" || !agent.model.trim() || agent.model.length > MAX_MODEL_LENGTH)
@@ -279,6 +292,7 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		kind: agent.kind as CodingHarnessSlot,
 		enabled: agent.enabled,
 		...(typeof agent.model === "string" ? { model: agent.model.trim() } : {}),
+		...(typeof agent.personalBotId === "string" ? { personalBotId: agent.personalBotId } : {}),
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,
 		tools: [...new Set(agent.tools as string[])],

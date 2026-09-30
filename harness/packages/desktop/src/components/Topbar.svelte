@@ -3,6 +3,7 @@
 	import { tick } from "svelte";
 	import type { WorkspaceView } from "../lib/model.ts";
 	import WorkspaceNavMenu from "./WorkspaceNavMenu.svelte";
+	import WebsiteSources from "./WebsiteSources.svelte";
 
 	let {
 		title,
@@ -16,6 +17,8 @@
 		onchangeroot,
 		workspacePanelOpen,
 		ontogglefiles,
+		webSources,
+		onwebsource,
 		workspaceView,
 		showWorkspaceMenu,
 		onworkspaceview,
@@ -31,6 +34,8 @@
 		onchangeroot: () => void;
 		workspacePanelOpen: boolean;
 		ontogglefiles: () => void;
+		webSources: string[];
+		onwebsource: (url: string) => void;
 		workspaceView?: WorkspaceView;
 		showWorkspaceMenu: boolean;
 		onworkspaceview: (view: WorkspaceView) => void;
@@ -80,7 +85,7 @@
 	);
 </script>
 
-<div class="bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
+<div class="relative z-20 bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
 <header
 	class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-line px-7 py-2.5 narrow-900:gap-2 narrow-900:px-[18px] narrow-520:gap-2 narrow-520:px-3"
 >
@@ -142,7 +147,8 @@
 		</span>
 	</div>
 </header>
-	<div class="flex justify-end px-7 py-1 narrow-900:px-[18px] narrow-520:px-3">
+	<div class="flex flex-col items-end px-7 py-1 narrow-900:px-[18px] narrow-520:px-3">
 		<button type="button" aria-pressed={workspacePanelOpen} class={`flex h-6 items-center gap-1 rounded px-2 font-mono text-[7px] uppercase ${workspacePanelOpen ? "bg-[#1a2228] text-[#c5ced3]" : "text-[#65717a] hover:bg-[#171d22] hover:text-[#c5ced3]"}`} onclick={ontogglefiles}><Files size={10} /> Files</button>
+		<WebsiteSources sources={webSources} onselect={onwebsource} />
 	</div>
 </div>

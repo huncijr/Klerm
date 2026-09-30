@@ -1,10 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
-import type { BrowserRunCoordinatorOptions, BrowserRunPublicState } from "../src/klerm/browser-run-coordinator.ts";
+import type {
+	BrowserRunCoordinatorOptions,
+	BrowserRunPublicState,
+	BrowserRunStartInput,
+} from "../src/klerm/browser-run-coordinator.ts";
 import type {
 	CodingHarnessAdapter,
 	CodingHarnessAdapterListener,
@@ -222,7 +226,7 @@ describe("Klerm desktop RPC contract", () => {
 			startUrl: "https://example.com/docs",
 			lastActions: [],
 		};
-		const browserStart = vi.fn(async () => browserState);
+		const browserStart = vi.fn(async (_input: BrowserRunStartInput) => browserState);
 		const browserApprove = vi.fn(async () => browserState);
 		const browserTakeover = vi.fn(async () => browserState);
 		const browserResume = vi.fn(async () => browserState);
@@ -755,6 +759,51 @@ describe("Klerm desktop RPC contract", () => {
 					},
 				});
 			});
+			expect(
+				await send({
+					id: "enable-personal-kanban",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-builder",
+						name: "Builder",
+						face: "bear",
+						profileId: "builder",
+						harness: "klerm",
+						model: klermModelRef,
+						role: "planner",
+						effort: "medium",
+						enabled: true,
+						createdSequence: 3,
+						kanbanEnabled: true,
+					},
+				}),
+			).toMatchObject({ success: true });
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("kanban_create", { title: "Personal card", prompt: "Review the project" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("Card created."),
+			]);
+			expect(
+				await send({
+					id: "personal-create-card",
+					type: "prompt_personal_bot",
+					botId: "bot-builder",
+					message: "Create a planned Kanban card",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				expect(
+					harness.session.settingsManager.getKanbanRegistry().boards.flatMap((board) => board.tasks),
+					JSON.stringify(parseOutputLines().slice(-8)),
+				).toContainEqual(expect.objectContaining({ title: "Personal card", personalBotId: "bot-builder" }));
+			});
+			await vi.waitFor(async () => {
+				expect(
+					await send({ id: "personal-card-settled", type: "get_personal_bot_conversation", botId: "bot-builder" }),
+				).toMatchObject({ data: { status: "idle" } });
+			});
 			const addedBot = await send({
 				id: "personal-bot-add",
 				type: "upsert_personal_bot",
@@ -785,6 +834,12 @@ describe("Klerm desktop RPC contract", () => {
 				success: true,
 				data: { state: browserState },
 			});
+			const codingSessionId = harness.session.sessionId;
+			const registryResponse = await send({ id: "browser-sessions", type: "get_browser_sessions" });
+			const firstBrowser = (registryResponse.data as { sessions: Array<{ id: string; name: string }> }).sessions[0]!;
+			await send({ id: "independent-browser-state", type: "get_browser_run", browserSessionId: firstBrowser.id });
+			expect(createBrowserRunCoordinator.mock.calls.at(-1)?.[0].sessionId).toBe(firstBrowser.id);
+			expect(harness.session.sessionId).toBe(codingSessionId);
 			await createBrowserRunCoordinator.mock.calls[0]![0].onEvent?.({
 				event: {
 					version: 1,
@@ -875,6 +930,80 @@ describe("Klerm desktop RPC contract", () => {
 				},
 			);
 			expect(browserResume).toHaveBeenCalledWith("browser-run-1");
+			expect(
+				await send({
+					id: "browser-permission-off",
+					type: "attach_personal_browser",
+					botId: "bot-builder",
+					cdpUrl: "http://127.0.0.1:9321",
+				}),
+			).toMatchObject({ success: false });
+			expect(
+				await send({
+					id: "enable-personal-browser",
+					type: "upsert_personal_bot",
+					bot: {
+						id: "bot-builder",
+						name: "Builder",
+						face: "bear",
+						profileId: "builder",
+						harness: "klerm",
+						model: klermModelRef,
+						role: "planner",
+						effort: "medium",
+						enabled: true,
+						createdSequence: 3,
+						browserEnabled: true,
+						kanbanEnabled: true,
+					},
+				}),
+			).toMatchObject({ success: true });
+			expect(
+				await send({
+					id: "attach-personal-browser",
+					type: "attach_personal_browser",
+					botId: "bot-builder",
+					cdpUrl: "http://127.0.0.1:9321",
+				}),
+			).toMatchObject({ success: true, data: { ready: true } });
+			browserState.status = "completed";
+			harness.setResponses([
+				fauxAssistantMessage([fauxToolCall("browser_task", { task: "Read a public page" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Browser finished."),
+			]);
+			expect(
+				await send({
+					id: "personal-browser-task",
+					type: "prompt_personal_bot",
+					botId: "bot-builder",
+					message: "Read a public page in your browser",
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(async () => {
+				expect(
+					await send({
+						id: "personal-browser-settled",
+						type: "get_personal_bot_conversation",
+						botId: "bot-builder",
+					}),
+				).toMatchObject({
+					data: {
+						status: "idle",
+						messages: expect.arrayContaining([
+							expect.objectContaining({ role: "assistant", text: "Browser finished." }),
+						]),
+					},
+				});
+			});
+			expect(browserStart.mock.calls.at(-1)?.[0]).toMatchObject({
+				personalBotId: "bot-builder",
+				model: klermModelRef,
+				cdpUrl: "http://127.0.0.1:9321",
+			});
+			expect(createBrowserRunCoordinator.mock.calls.at(-1)?.[0].sessionId).toBe("personal-bot-builder");
+			browserState.status = "running";
 			expect(
 				await send({ id: "personal-bot-delete", type: "delete_personal_bot", botId: "bot-reviewer" }),
 			).toMatchObject({

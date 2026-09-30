@@ -272,12 +272,26 @@ export type RpcCommand =
 	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "stop_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "get_browser_availability" }
-	| { id?: string; type: "probe_browser_model"; model: string; reasoning?: ModelThinkingLevel }
-	| { id?: string; type: "get_browser_run" }
+	| {
+			id?: string;
+			type: "probe_browser_model";
+			model?: string;
+			reasoning?: ModelThinkingLevel;
+			personalBotId?: string;
+	  }
+	| { id?: string; type: "get_browser_sessions" }
+	| { id?: string; type: "create_browser_session"; name?: string }
+	| { id?: string; type: "rename_browser_session"; browserSessionId: string; name: string }
+	| { id?: string; type: "delete_browser_session"; browserSessionId: string }
+	| { id?: string; type: "attach_personal_browser"; botId: string; cdpUrl: string }
+	| { id?: string; type: "get_browser_run"; browserSessionId?: string }
 	| {
 			id?: string;
 			type: "start_browser_run";
-			model: string;
+			context?: string;
+			browserSessionId?: string;
+			personalBotId?: string;
+			model?: string;
 			reasoning?: ModelThinkingLevel;
 			prompt: string;
 			startUrl?: string;
@@ -528,6 +542,18 @@ export type RpcResponse =
 			success: true;
 			data: { state?: RpcBrowserRunState };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command:
+				| "get_browser_sessions"
+				| "create_browser_session"
+				| "rename_browser_session"
+				| "delete_browser_session";
+			success: true;
+			data: { sessions: Array<{ id: string; name: string }> };
+	  }
+	| { id?: string; type: "response"; command: "attach_personal_browser"; success: true; data: { ready: true } }
 	| {
 			id?: string;
 			type: "response";

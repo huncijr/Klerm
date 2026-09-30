@@ -26,6 +26,7 @@
 		ProviderConnect,
 		ProviderOauthStep,
 		ThinkingLevel,
+		PersonalBot,
 	} from "../lib/model.ts";
 	import ModelSelect from "./ModelSelect.svelte";
 	import { groupProviderAccounts, orderProviderGroups } from "../lib/provider-cards.ts";
@@ -41,6 +42,7 @@
 
 	let {
 		settings,
+		personalAgents,
 		klermConfig,
 		mcpStatus,
 		mcpBusy,
@@ -73,6 +75,7 @@
 		onaddmcpserver,
 	}: {
 		settings: DesktopSettings;
+		personalAgents: PersonalBot[];
 		klermConfig: KlermConfig | undefined;
 		mcpStatus: McpStatus | undefined;
 		mcpBusy: boolean;
@@ -290,7 +293,7 @@
 	}
 
 	async function selectHarness(id: string, kind: CodingHarnessKind): Promise<void> {
-		updateAgent(id, { kind, enabled: harnessAvailable(kind), model: undefined });
+		updateAgent(id, { kind, enabled: harnessAvailable(kind), model: undefined, personalBotId: undefined });
 		if (kind === "klerm") return;
 		await loadHarnessModels(kind);
 	}
@@ -814,13 +817,15 @@
 							{#if value.kind && codingHarnessSetup?.harnesses.find((item) => item.kind === value.kind)?.error}
 								<p class="m-0 mt-2 break-words font-mono text-[9px] text-[#f3a49c]">{codingHarnessSetup.harnesses.find((item) => item.kind === value.kind)?.error}</p>
 							{/if}
+							<label for={`personal-agent-${value.id}`} class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase">Personal Agent</label>
+							<select id={`personal-agent-${value.id}`} class="mt-2 h-10 w-full rounded-md border border-[#303a42] bg-[#05080b] px-3 font-mono text-[10px] text-white" value={value.personalBotId ?? ""} onchange={(event) => { const bot = personalAgents.find((candidate) => candidate.id === event.currentTarget.value); updateAgent(value.id, { personalBotId: bot?.id, kind: bot ? "klerm" : value.kind, model: bot?.model, effort: bot?.effort ?? value.effort }); }}><option value="">Standalone harness configuration</option>{#each personalAgents as agent (agent.id)}<option value={agent.id} disabled={!agent.enabled}>{agent.name} · {agent.model || "No model"}</option>{/each}</select>
 							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`harness-model-${value.id}`}>Harness model</label>
 							<div class="mt-2" id={`harness-model-${value.id}`}>
 								<ModelSelect
 									label={`Agent ${agentNumber(value.id)} model`}
 									options={models.map((model) => ({ value: model, label: model }))}
 									value={value.model ?? ""}
-									disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
+									disabled={!!value.personalBotId || models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
 									placeholder={
 										value.kind === "klerm"
 											? "Use current Klerm model"
@@ -840,8 +845,9 @@
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`role-${value.id}`}>Role</label>
 								<label class="font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`effort-${value.id}`}>Effort</label>
 								<select id={`role-${value.id}`} value={value.role} class="h-9 rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => updateAgent(value.id, { role: event.currentTarget.value as "planner" | "builder" })}><option value="planner">Plan</option><option value="builder">Build</option></select>
-								<select id={`effort-${value.id}`} value={value.effort} class="h-9 rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => updateAgent(value.id, { effort: event.currentTarget.value as ThinkingLevel })}>{#each ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as effort}<option value={effort}>{effort}</option>{/each}</select>
+								<select id={`effort-${value.id}`} value={value.effort} disabled={!!value.personalBotId} class="h-9 rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark] disabled:opacity-50" onchange={(event) => updateAgent(value.id, { effort: event.currentTarget.value as ThinkingLevel })}>{#each ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as effort}<option value={effort}>{effort}</option>{/each}</select>
 							</div>
+							{#if value.personalBotId}<p class="mt-2 text-[9px] text-[#83959b]">Model and reasoning come from the selected Personal Agent. Role and tools stay workspace-specific.</p>{/if}
 							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`tools-${value.id}`}>Tools</label>
 							<input id={`tools-${value.id}`} value={value.tools.join(", ")} placeholder="default, or read, grep, bash" class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white outline-0" onchange={(event) => updateAgent(value.id, { tools: event.currentTarget.value.split(/[\s,]+/).filter(Boolean) })} />
 						</section>

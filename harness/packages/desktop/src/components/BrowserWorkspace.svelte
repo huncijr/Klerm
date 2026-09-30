@@ -23,11 +23,12 @@
 		Sparkles,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
-	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, SelectOption, ThinkingLevel } from "../lib/model.ts";
+	import { visibleBrowserActivity } from "../lib/browser-presentation.ts";
+	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, PersonalBot, ThinkingLevel } from "../lib/model.ts";
 
 	let {
 		sessionId,
-		models,
+		personalAgents,
 		availability,
 		run,
 		activity,
@@ -44,15 +45,17 @@
 		onclose,
 	}: {
 		sessionId: string;
-		models: SelectOption[];
+		personalAgents: PersonalBot[];
 		availability?: BrowserAvailability;
 		run?: BrowserRunState;
 		activity: BrowserActivityEvent[];
 		loading: boolean;
 		onrefresh: () => Promise<void>;
-		onprobe: (model: string, reasoning: ThinkingLevel) => Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }>;
+		onprobe: (model: string, reasoning: ThinkingLevel, personalBotId: string) => Promise<{ status: "passed" | "failed"; code: string; reason: string; levels: ThinkingLevel[] }>;
 		onstart: (input: {
+			context?: string;
 			model: string;
+			personalBotId: string;
 			reasoning: ThinkingLevel;
 			prompt: string;
 			startUrl?: string;
@@ -75,8 +78,8 @@
 	type BrowserMessage = { id: number; role: "user" | "assistant"; text: string; tone?: "normal" | "error" };
 
 	let selectedModel = $state("");
+	let selectedPersonalBotId = $state("");
 	let selectedReasoning = $state<ThinkingLevel>("off");
-	let reasoningLevels = $state<ThinkingLevel[]>(["off"]);
 	let probeRetry = $state(0);
 	let placement = $state<ChatPlacement>("right");
 	let chatRatio = $state(40);
@@ -94,14 +97,30 @@
 	let localRunId = $state<string | undefined>(undefined);
 	let renderedSettlement = $state<string | undefined>(undefined);
 	let messages = $state<BrowserMessage[]>([]);
+	let chatLoaded = $state(false);
+	$effect(() => {
+		if (!chatLoaded) return;
+		localStorage.setItem(`klerm-browser-chat-${sessionId}`, JSON.stringify({ messages: messages.slice(-100), localRunId, renderedSettlement, selectedPersonalBotId }));
+	});
 	let modelProbe = $state<{ model: string; reasoning: ThinkingLevel; status: "checking" | "passed" | "failed"; code?: string; reason: string } | undefined>();
 	let probeGeneration = 0;
+	let cursorRunId = $state("");
+	let lastCursor = $state<{ x: number; y: number; action: string } | undefined>();
+	const cursorModel = $derived(run?.model.split("/").slice(1).join("/") || run?.model || "AI");
+	$effect(() => {
+		if (cursorRunId !== run?.runId) {
+			cursorRunId = run?.runId ?? "";
+			lastCursor = undefined;
+		}
+		if (run?.agentCursor) lastCursor = { ...run.agentCursor };
+		if (run?.control !== "ai" || !["queued", "running", "waiting-approval"].includes(run?.status ?? "")) lastCursor = undefined;
+	});
 
 	const running = $derived(run?.status === "queued" || run?.status === "running" || run?.status === "waiting-approval");
 	const humanControl = $derived(run?.control === "human");
 	const pausingControl = $derived(run?.control === "pausing");
 	const browserFirst = $derived(placement === "left");
-	const currentActivity = $derived(activity.filter((item) => !run || !item.runId || item.runId === run.runId));
+	const currentActivity = $derived(activity.filter((item) => (!run || !item.runId || item.runId === run.runId) && visibleBrowserActivity(item)));
 	const runStageLabel = $derived.by(() => {
 		if (!running) return "Browser task running";
 		if (run?.status === "waiting-approval")
@@ -126,6 +145,9 @@
 		if (loading && !availability) return "Checking browser runtime";
 		if (!availability) return "Browser runtime is not checked yet";
 		if (!availability.available) return availability.reason;
+		const selectedAgent = personalAgents.find((agent) => agent.id === selectedPersonalBotId);
+		if (!selectedAgent?.enabled) return "Select an enabled Personal Agent";
+		if (!selectedAgent.browserEnabled) return "Enable Browser access in Personal Agent settings";
 		if (!selectedModel) return "Select a model";
 		if (!modelProbe || modelProbe.model !== selectedModel || modelProbe.reasoning !== selectedReasoning) return "Checking the selected model";
 		if (modelProbe.status === "checking") return "Checking the selected model";
@@ -135,8 +157,10 @@
 	});
 
 	$effect(() => {
-		if (models.some((option) => option.value === selectedModel)) return;
-		selectedModel = models[0]?.value ?? "";
+		if (!selectedPersonalBotId) selectedPersonalBotId = personalAgents.find((agent) => agent.enabled && agent.browserEnabled && agent.model)?.id ?? "";
+		const agent = personalAgents.find((candidate) => candidate.id === selectedPersonalBotId);
+		selectedModel = agent?.model ?? "";
+		selectedReasoning = agent?.effort ?? "off";
 	});
 
 	$effect(() => {
@@ -146,14 +170,9 @@
 		if (!model || !availability?.available) return;
 		const generation = ++probeGeneration;
 		modelProbe = { model, reasoning, status: "checking", reason: "Checking provider tool-request support…" };
-		void onprobe(model, reasoning).then(
+		void onprobe(model, reasoning, selectedPersonalBotId).then(
 			(result) => {
 				if (generation !== probeGeneration) return;
-			reasoningLevels = result.levels;
-				if (result.levels.length && !result.levels.includes(reasoning)) {
-					selectedReasoning = result.levels[0];
-					return;
-				}
 				modelProbe = { model, reasoning, ...result };
 			},
 			() => { if (generation === probeGeneration) modelProbe = { model, reasoning, status: "failed", code: "probe_failed", reason: "Model check failed. Retry the check." }; },
@@ -187,6 +206,15 @@
 	}
 
 	onMount(() => {
+		try {
+			const stored = JSON.parse(localStorage.getItem(`klerm-browser-chat-${sessionId}`) ?? "{}");
+			if (Array.isArray(stored.messages)) messages = stored.messages.filter((message: BrowserMessage) => message && typeof message.text === "string" && typeof message.id === "number" && ["user", "assistant"].includes(message.role)).slice(-100);
+			messageId = Math.max(0, ...messages.map((message) => message.id));
+			localRunId = typeof stored.localRunId === "string" ? stored.localRunId : undefined;
+			renderedSettlement = typeof stored.renderedSettlement === "string" ? stored.renderedSettlement : undefined;
+			if (typeof stored.selectedPersonalBotId === "string") selectedPersonalBotId = stored.selectedPersonalBotId;
+		} catch { messages = []; }
+		chatLoaded = true;
 		const savedRatio = Number(localStorage.getItem("klerm-browser-chat-ratio"));
 		if (Number.isFinite(savedRatio) && savedRatio >= 25 && savedRatio <= 75) chatRatio = savedRatio;
 		let mounted = true;
@@ -301,7 +329,9 @@
 		try {
 			if (!cdpUrl) throw new Error(hostError || "The in-app Chromium browser is not ready yet.");
 			const started = await onstart({
+				context: messages.slice(0, -1).slice(-6).map((message) => `${message.role}: ${message.text.slice(0, 2000)}`).join("\n").slice(-8000),
 				model: selectedModel,
+				personalBotId: selectedPersonalBotId,
 				reasoning: selectedReasoning,
 				prompt: text,
 				cdpUrl,
@@ -488,8 +518,8 @@
 
 	<div class="flex min-h-0 flex-1 flex-col p-3 sm:p-4">
 		<div class="mx-auto flex w-full max-w-[1480px] shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#27353c] bg-[linear-gradient(110deg,rgba(14,21,26,.96),rgba(9,15,19,.96))] p-2 shadow-[0_14px_40px_rgba(0,0,0,.2)]">
-			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser model</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedModel} disabled={models.length === 0 || running} onchange={() => { selectedReasoning = "off"; reasoningLevels = ["off"]; }} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="" disabled>Choose a model</option>{#each models as model (model.value)}<option value={model.value}>{model.label}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
-			<label class="flex h-9 items-center gap-2 rounded-xl border border-[#34434a] bg-[#0a1014] px-2.5 font-mono text-[9px] text-[#d8e2e4]"><span class="text-[#8c9b9c]">Reasoning</span><select aria-label="Browser reasoning" bind:value={selectedReasoning} disabled={running || reasoningLevels.length < 2} class="bg-transparent text-[#d8e2e4] outline-none disabled:opacity-45">{#each reasoningLevels as level}<option value={level}>{level}</option>{/each}</select></label>
+			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser Personal Agent</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedPersonalBotId} disabled={personalAgents.length === 0 || running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="">Choose a Personal Agent</option>{#each personalAgents as agent (agent.id)}<option value={agent.id} disabled={!agent.enabled || !agent.browserEnabled}>{agent.name} · {agent.model || "No model"}{!agent.browserEnabled ? " · Browser disabled" : ""}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
+			<span class="px-2 font-mono text-[9px] text-[#8c9b9c]">{selectedModel} · {selectedReasoning} — configured in Personal Agents</span>
 			<button type="button" aria-label="Refresh browser runtime" disabled={loading || running} class="grid h-9 w-9 place-items-center rounded-xl border border-[#303e44] bg-[#080e12] text-[#7f9297] transition hover:text-white disabled:opacity-40" onclick={() => void onrefresh()}><RefreshCw size={12} class={loading ? "animate-spin" : ""} /></button>
 			<div class="ml-auto flex items-center gap-1 rounded-xl border border-[#303e44] bg-[#080e12] p-1" aria-label="Prompt placement">
 				<button type="button" aria-label="Prompt left" aria-pressed={placement === "left"} class={`grid h-7 w-8 place-items-center rounded-lg transition ${placement === "left" ? "bg-[#344b2a] text-[#d7f2b8]" : "text-[#697a80] hover:text-white"}`} onclick={() => (placement = "left")}><LayoutPanelLeft size={13} /></button>
@@ -529,8 +559,8 @@
 				{/if}
 				<button type="button" bind:this={browserSurface} aria-label="Interactive Chromium page" class="relative block min-h-0 w-full flex-1 overflow-hidden bg-white p-0 text-left outline-none" onpointermove={(event) => { handleViewportPointerMove(event); forwardPointer(event, "move"); }} onpointerdown={(event) => { handleViewportPointerDown(); forwardPointer(event, "down"); }} onpointerup={(event) => forwardPointer(event, "up")} onwheel={(event) => { handleViewportWheel(); forwardWheel(event); }} onkeydown={forwardKey}>
 					{#if frame}<img alt="Chromium browser page" src={frame} draggable="false" class="h-full w-full select-none" />{:else}<div class="grid h-full place-items-center bg-[#0b1115] p-6 text-center text-[11px] text-[#8fa2a4]">{hostError || (hostReady ? "Loading Chromium page…" : "Starting embedded Chromium…")}</div>{/if}
-					{#if running && run?.control === "ai" && run.agentCursor}
-						<div class="pointer-events-none absolute z-10 flex items-start gap-1 text-[#d6fa9c] drop-shadow-[0_2px_5px_#000] motion-safe:transition-[top,left] motion-safe:duration-200" style={`left: ${run.agentCursor.x}px; top: ${run.agentCursor.y}px;`} aria-label={`Agent ${run.agentCursor.action}`}><span class="text-xl leading-none">◆</span><span class="rounded bg-[#19271c] px-1.5 py-0.5 text-[9px]">AI {run.agentCursor.action}</span></div>
+					{#if running && run?.control === "ai" && lastCursor}
+						<div class="pointer-events-none absolute z-10 flex items-start gap-1 text-[#d6fa9c] drop-shadow-[0_2px_5px_#000] motion-safe:transition-[top,left] motion-safe:duration-200" style={`left: ${lastCursor.x}px; top: ${lastCursor.y}px;`} aria-label={`${cursorModel} cursor`}><span class="text-xl leading-none">◆</span><span class="rounded bg-[#19271c] px-1.5 py-0.5 text-[9px]">{cursorModel} · {run.agentCursor?.action ?? "AI cursor"}</span></div>
 					{/if}
 				</button>
 			</section>

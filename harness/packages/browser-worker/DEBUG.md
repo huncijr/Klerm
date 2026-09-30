@@ -2,6 +2,13 @@
 
 ## Current findings
 
+- Automatic origin decisions now carry decidedBy=policy and are hidden from
+  desktop activity while remaining in the authoritative audit. Manual action
+  approvals remain visible. Cursor overlays identify the run's pinned model,
+  retain the last AI target between actions, and clear on takeover/settlement.
+  Agent instructions now require a missing-information reason before scrolling
+  and prefer summarizing once the requested evidence is collected. This is
+  model guidance, not a claim that scroll efficiency has been live-benchmarked.
 - Final answers previously reused the 500-character error sanitizer, truncating
   the ten-post Reddit summary despite complete result metadata. Final answers
   now retain paragraphs up to 32,000 characters; intermediate next_goal updates

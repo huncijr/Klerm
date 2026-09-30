@@ -67,6 +67,8 @@ type BrowserCoordinatorModelRuntime = Pick<ModelRuntime, "completeSimple" | "get
 export type BrowserControlOwner = "ai" | "pausing" | "human";
 
 export interface BrowserRunStartInput {
+	instructions?: string;
+	personalBotId?: string;
 	model: string;
 	reasoning?: ModelThinkingLevel;
 	prompt: string;
@@ -108,6 +110,7 @@ export interface BrowserRunResultMetadata {
 }
 
 export interface BrowserRunPublicState {
+	personalBotId?: string;
 	runId: string;
 	sessionId?: string;
 	taskId: string;
@@ -330,6 +333,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				...ids,
 				...(this.sessionId ? { sessionId: this.sessionId } : {}),
 				agentId: BROWSER_AGENT_ID,
+				...(input.personalBotId ? { personalBotId: input.personalBotId } : {}),
 				model: modelReference(pinnedModel),
 				reasoning,
 				status: "queued",
@@ -391,7 +395,9 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 				await runner.start({
 					...ids,
 					agentId: BROWSER_AGENT_ID,
-					prompt: input.prompt,
+					prompt: input.instructions
+						? `${input.instructions.slice(0, Math.min(8000, 32768 - input.prompt.length - 40))}\n\nRequested browser task:\n${input.prompt}`
+						: input.prompt,
 					model: modelReference(pinnedModel),
 					...(url?.allowed ? { startUrl: url.url } : {}),
 					baseUrl: active.gateway.url,
@@ -650,6 +656,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 
 		switch (event.event) {
 			case "assistant_message":
+				this.current = { ...this.requiredState(), resultSummary: event.text };
 				await this.record("ASSISTANT_MESSAGE", event.text, "running");
 				break;
 			case "run_started":
@@ -735,6 +742,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					{
 						approvalId: pendingApproval.approvalId,
 						origin: pendingApproval.origin,
+						decidedBy: "policy",
 					},
 				);
 				await active.runner.approve({
@@ -763,6 +771,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 					origin: pending.origin,
 					decision: "approved",
 					scope: event.scope,
+					decidedBy: "policy",
 				});
 				break;
 			}
@@ -809,7 +818,8 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			}
 			case "run_completed": {
 				const summary = event.result.present
-					? `Browser run completed; result metadata reports ${event.result.length} bytes.`
+					? (this.current?.resultSummary ??
+						`Browser run completed; result metadata reports ${event.result.length} bytes.`)
 					: this.current?.currentOrigin
 						? `Browser opened ${this.current.currentOrigin}.`
 						: "Browser run completed without result content.";
@@ -944,6 +954,7 @@ export class BrowserRunCoordinator implements BrowserRunCoordinatorApi {
 			taskId: state.taskId,
 			correlationId: state.correlationId,
 			...(state.sessionId ? { sessionId: state.sessionId } : {}),
+			...(state.personalBotId ? { personalBotId: state.personalBotId } : {}),
 			agentId: state.agentId,
 			status,
 			reason,

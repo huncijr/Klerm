@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { type BrowserSessionInfo, normalizeBrowserSessions } from "../klerm/browser-sessions.ts";
 import { type CodingHarnessSlots, normalizeCodingHarnessSlots } from "../klerm/coding-harness-setup.ts";
 import { type KanbanRegistry, normalizeKanbanRegistry } from "../klerm/kanban.ts";
 import {
@@ -183,6 +184,7 @@ export interface Settings {
 	projectRegistry?: KlermProjectRegistry;
 	personalBots?: PersonalBotRegistry;
 	kanbanRegistry?: KanbanRegistry;
+	browserSessions?: BrowserSessionInfo[];
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -910,17 +912,49 @@ export class SettingsManager {
 	}
 
 	getCodingHarnessSlots(): CodingHarnessSlots {
-		return normalizeCodingHarnessSlots(this.globalSettings.codingHarnessSlots);
+		const slots = normalizeCodingHarnessSlots(this.globalSettings.codingHarnessSlots);
+		const bots = this.getPersonalBots().bots;
+		return {
+			...slots,
+			agents: slots.agents.map((agent) => {
+				if (!agent.personalBotId) return agent;
+				const bot = bots.find((candidate) => candidate.id === agent.personalBotId);
+				return {
+					...agent,
+					model: bot?.model,
+					effort: bot?.effort ?? "off",
+					enabled: agent.enabled && bot?.enabled === true,
+				};
+			}),
+		};
 	}
 
 	setCodingHarnessSlots(slots: CodingHarnessSlots): void {
-		this.globalSettings.codingHarnessSlots = normalizeCodingHarnessSlots(slots);
+		const normalized = normalizeCodingHarnessSlots(slots);
+		this.globalSettings.codingHarnessSlots = {
+			...normalized,
+			agents: normalized.agents.map((agent) => {
+				if (!agent.personalBotId) return agent;
+				const { model: _model, ...reference } = agent;
+				return reference;
+			}),
+		};
 		this.markModified("codingHarnessSlots");
 		this.save();
 	}
 
 	getPersonalBots(): PersonalBotRegistry {
 		return normalizePersonalBotRegistry(this.globalSettings.personalBots);
+	}
+
+	getBrowserSessions(): BrowserSessionInfo[] {
+		return normalizeBrowserSessions(this.globalSettings.browserSessions);
+	}
+	setBrowserSessions(sessions: BrowserSessionInfo[]): BrowserSessionInfo[] {
+		this.globalSettings.browserSessions = normalizeBrowserSessions(sessions);
+		this.markModified("browserSessions");
+		this.save();
+		return this.getBrowserSessions();
 	}
 
 	getKanbanRegistry(): KanbanRegistry {

@@ -5,7 +5,7 @@
 	import { onMount } from "svelte";
 	import { webSourceIdentity } from "../lib/web-activity.ts";
 
-	let { sessionId, url, sources, onclose }: { sessionId: string; url: string; sources: string[]; onclose: () => void } = $props();
+	let { sessionId, url, sources, onclose, openRequest = 0 }: { sessionId: string; url: string; sources: string[]; onclose: () => void; openRequest?: number } = $props();
 	let surface: HTMLElement;
 	let frame = $state("");
 	let pageUrl = $state("");
@@ -55,9 +55,22 @@
 	});
 
 	$effect(() => {
+		openRequest;
 		if (!ready || !url) return;
 		void command({ type: "navigate", url }).catch((cause) => { error = cause instanceof Error ? cause.message : String(cause); });
 	});
+
+	function pointer(event: PointerEvent, kind: "move" | "down" | "up"): void {
+		if (!ready) return;
+		const bounds = surface.getBoundingClientRect();
+		void command({ type: "mouse", kind, x: Math.round(event.clientX - bounds.left), y: Math.round(event.clientY - bounds.top), button: event.button === 2 ? "right" : "left" }).catch((cause) => { error = String(cause); });
+	}
+	function wheel(event: WheelEvent): void {
+		if (!ready) return;
+		event.preventDefault();
+		const bounds = surface.getBoundingClientRect();
+		void command({ type: "mouse", kind: "wheel", x: Math.round(event.clientX - bounds.left), y: Math.round(event.clientY - bounds.top), delta_y: Math.round(-event.deltaY) }).catch((cause) => { error = String(cause); });
+	}
 </script>
 
 <section aria-label="External browser" class="flex min-h-0 flex-1 flex-col border-t border-[#34424d] bg-[#0b1116]">
@@ -68,18 +81,18 @@
 		<button type="button" aria-label="Close web activity" class="text-[#84939a] hover:text-white" onclick={onclose}><X size={13} /></button>
 	</header>
 	<div class="min-w-0 truncate border-b border-[#27343b] px-3 py-1 font-mono text-[8px] text-[#81949b]" title={pageUrl || url}>{pageUrl || url}</div>
-	<div bind:this={surface} class="relative min-h-0 flex-1 bg-white">
+	<button type="button" aria-label="Interactive external browser page" bind:this={surface} class="relative block min-h-0 w-full flex-1 bg-white p-0 text-left" onpointermove={(event) => pointer(event, "move")} onpointerdown={(event) => pointer(event, "down")} onpointerup={(event) => pointer(event, "up")} onwheel={wheel}>
 		{#if frame}<img src={frame} alt="Page opened by agent web tool" draggable="false" class="h-full w-full select-none" />{:else}<p class="p-3 text-[10px] text-[#68818a]">{error || "Opening page…"}</p>{/if}
-	</div>
+	</button>
 	<div class="group relative shrink-0 border-t border-[#27343b] px-3 py-2">
 		<button type="button" class="flex items-center gap-1.5 text-[9px] text-[#8fc4ed]" aria-label="Show website sources"><Globe2 size={11} /> Source <span class="text-[#81949b]">{sources.length}</span></button>
-		<div class="absolute right-2 bottom-full left-2 z-40 hidden max-h-64 overflow-y-auto rounded-lg border border-[#34424d] bg-[#10171d] p-2 shadow-xl group-hover:block group-focus-within:block" aria-label="Website sources">
+		<div class="absolute right-2 bottom-full left-2 z-40 hidden max-h-64 flex-wrap gap-1 overflow-y-auto rounded-lg border border-[#34424d] bg-[#10171d] p-2 shadow-xl group-hover:flex group-focus-within:flex" aria-label="Website sources">
 			{#each [...sources].reverse() as source (source)}
 				{@const identity = webSourceIdentity(source)}
-				<a href={source} target="_blank" rel="noopener noreferrer" class="flex min-w-0 items-center gap-2 rounded px-2 py-2 hover:bg-[#1c2933] focus-visible:bg-[#1c2933]" title={source}>
+				<button type="button" onclick={() => void command({ type: "navigate", url: source })} class="flex min-w-0 items-center gap-1.5 rounded-full border border-[#34424d] px-2 py-1.5 hover:bg-[#1c2933] focus-visible:bg-[#1c2933]" title={source}>
 					<span class="relative grid h-5 w-5 shrink-0 place-items-center"><Globe2 size={14} class="text-[#81949b]" /><img src={identity.icon} alt="" referrerpolicy="no-referrer" class="absolute h-4 w-4" onerror={(event) => { if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.style.display = "none"; }} /></span>
-					<span class="min-w-0"><strong class="block truncate text-[9px] font-medium text-[#cbd9dd]">{identity.hostname}</strong><span class="block truncate font-mono text-[8px] text-[#81949b]">{source}</span></span>
-				</a>
+					<span class="max-w-48 truncate font-mono text-[9px] text-[#cbd9dd]">{source.replace(/^https?:\/\//, "").replace(/^www\./, "")}</span>
+				</button>
 			{/each}
 		</div>
 	</div>

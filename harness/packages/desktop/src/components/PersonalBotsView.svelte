@@ -5,17 +5,23 @@
 		PersonalBot,
 		PersonalBotConversation,
 		ThinkingLevel,
+		BrowserRunState,
 	} from "../lib/model.ts";
 	import { KLERM_PROFILE_FACES } from "../lib/model.ts";
 	import { profileIcon } from "../lib/profiles.ts";
 	import MarkdownLite from "./MarkdownLite.svelte";
 	import ModelSelect from "./ModelSelect.svelte";
+	import PersonalBrowserPanel from "./PersonalBrowserPanel.svelte";
+	import { tick } from "svelte";
 
 	let {
 		bots,
 		profiles,
 		harnessSetup,
 		conversations,
+		browserRuns,
+		onbrowserattach,
+		onbrowsercommand,
 		busy = false,
 		generationModel = "",
 		focusBotId,
@@ -32,6 +38,9 @@
 		profiles: KlermProfile[];
 		harnessSetup?: CodingHarnessSetup;
 		conversations: Record<string, PersonalBotConversation | undefined>;
+		browserRuns: Record<string, BrowserRunState>;
+		onbrowserattach: (botId: string, cdpUrl: string) => Promise<void>;
+		onbrowsercommand: (command: string, input: Record<string, unknown>) => Promise<void>;
 		busy?: boolean;
 		generationModel?: string;
 		focusBotId?: string;
@@ -56,6 +65,8 @@
 	let profileId = $state("");
 	let model = $state("");
 	let effort = $state<PersonalBot["effort"]>("medium");
+	let browserEnabled = $state(false);
+	let kanbanEnabled = $state(false);
 	let botBrief = $state("");
 	let personalMemory = $state("");
 	let generatingMemory = $state(false);
@@ -72,6 +83,14 @@
 	let profileMemoryFormat = $state<KlermProfile["memoryFormat"]>("md");
 	let profileMemory = $state("");
 	let profileReadme = $state("");
+	let chatScroll = $state<HTMLElement>();
+	let lastChatPosition = "";
+	$effect(() => {
+		const position = `${selected?.id ?? ""}:${conversation?.messages.length ?? 0}`;
+		if (!chatScroll || position === lastChatPosition) return;
+		lastChatPosition = position;
+		void tick().then(() => chatScroll?.scrollTo({ top: chatScroll.scrollHeight, behavior: "smooth" }));
+	});
 
 	const selected = $derived(bots.find((bot) => bot.id === selectedId) ?? bots[0]);
 	const conversation = $derived(selected ? conversations[selected.id] : undefined);
@@ -110,6 +129,8 @@
 		profileId = selected.profileId;
 		model = selected.harness === "klerm" ? selected.model ?? "" : "";
 		effort = selected.effort;
+		browserEnabled = selected.browserEnabled === true;
+		kanbanEnabled = selected.kanbanEnabled === true;
 		notice = "";
 	});
 
@@ -139,6 +160,8 @@
 		profileId = "";
 		model = "";
 		effort = "medium";
+		browserEnabled = false;
+		kanbanEnabled = false;
 		botBrief = "";
 		personalMemory = "";
 		generatingMemory = false;
@@ -194,6 +217,8 @@
 			profileId = nextProfileId;
 		}
 		const value: PersonalBot = {
+			browserEnabled,
+			kanbanEnabled,
 			id: creating ? botId(name) : selected?.id ?? botId(name),
 			name: name.trim(),
 			face,
@@ -247,6 +272,8 @@
 		model = selected.harness === "klerm" ? selected.model ?? "" : "";
 		effort = selected.effort;
 		settingsSection = section;
+		browserEnabled = selected.browserEnabled === true;
+		kanbanEnabled = selected.kanbanEnabled === true;
 		configuring = true;
 		profileEditing = false;
 	}
@@ -348,7 +375,7 @@
 				{#if conversationBusy}<span class="ml-auto rounded-full bg-[#382f18] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#e1c66b]">Thinking</span>{/if}
 			</header>
 
-			<div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+			<div bind:this={chatScroll} class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 				{#if conversation?.messages.length}
 					<div class="mx-auto flex max-w-3xl flex-col gap-4">
 						{#each conversation.messages as message (message.id)}
@@ -373,6 +400,7 @@
 						</div>
 					</div>
 				{/if}
+				{#if selected.browserEnabled}{#key selected.id}<PersonalBrowserPanel botId={selected.id} run={browserRuns[selected.id]} onattach={onbrowserattach} oncommand={onbrowsercommand} />{/key}{/if}
 			</div>
 
 			<div class="border-t border-[#20262a] px-5 py-4">
@@ -450,6 +478,8 @@
 					<header class="mb-5 flex items-start justify-between gap-3"><div><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-[#68747a]">{settingsSection === "ai" ? "AI settings" : settingsSection === "model" ? "Model settings" : "Reasoning settings"}</p><h2 class="mt-1 mb-0 text-[14px] text-[#e5eaed]">{creating ? "New Personal Bot" : selected?.name}</h2></div><button type="button" class="border-0 bg-transparent text-[13px] text-[#68747a] hover:text-white" onclick={closeConfiguration}>x</button></header>
 					{#if settingsSection === "ai"}
 						<div class="space-y-3">
+							<label class="flex items-center gap-2 text-[10px] text-[#b8c1c5]"><input type="checkbox" bind:checked={browserEnabled} /> Browser access</label>
+							<label class="flex items-center gap-2 text-[10px] text-[#b8c1c5]"><input type="checkbox" bind:checked={kanbanEnabled} /> Kanban access</label>
 							<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Name</span><input class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white outline-none focus:border-[#537269]" bind:value={name} /></label>
 							<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[13px] ${face === option ? "border-[#69cdb4] bg-[#163029] text-[#9ce5d2]" : "border-[#293238] bg-[#080d10] text-[#748087]"}`} onclick={() => face = option}>{profileIcon(option)}</button>{/each}</div></div>
 							{#if creating}

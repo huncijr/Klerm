@@ -20,6 +20,8 @@ export interface PersonalBot {
 	effort: CodingHarnessEffort;
 	enabled: boolean;
 	createdSequence: number;
+	browserEnabled?: boolean;
+	kanbanEnabled?: boolean;
 }
 
 export interface PersonalBotRegistry {
@@ -91,6 +93,8 @@ function normalizeBot(value: unknown): PersonalBot | undefined {
 		effort: bot.effort as CodingHarnessEffort,
 		enabled: bot.enabled && Boolean(model),
 		createdSequence,
+		...(bot.browserEnabled === true ? { browserEnabled: true } : {}),
+		...(bot.kanbanEnabled === true ? { kanbanEnabled: true } : {}),
 	};
 }
 
@@ -124,6 +128,26 @@ export function validatePersonalBot(value: unknown, profileIds: ReadonlySet<stri
 	if (typeof record.name !== "string" || record.name.trim().length > 40) return undefined;
 	if (typeof record.profileId !== "string" || record.profileId.trim().length > 80) return undefined;
 	if (typeof record.model === "string" && record.model.trim().length > 300) return undefined;
+	if (
+		(record.browserEnabled !== undefined && typeof record.browserEnabled !== "boolean") ||
+		(record.kanbanEnabled !== undefined && typeof record.kanbanEnabled !== "boolean")
+	)
+		return undefined;
 	const bot = normalizeBot(value);
 	return bot && profileIds.has(bot.profileId) ? bot : undefined;
+}
+
+export function resolvePersonalAgent(
+	registry: PersonalBotRegistry,
+	id: string,
+	purpose: "browser" | "kanban" | "harness",
+): PersonalBot {
+	const bot = registry.bots.find((candidate) => candidate.id === id);
+	if (!bot?.enabled || !bot.model) throw new Error("The selected Personal Agent is unavailable or has no model.");
+	if (bot.harness !== "klerm") throw new Error("This workspace requires a Klerm Personal Agent.");
+	if (purpose === "browser" && !bot.browserEnabled)
+		throw new Error("Browser access is disabled for this Personal Agent.");
+	if (purpose === "kanban" && !bot.kanbanEnabled)
+		throw new Error("Kanban access is disabled for this Personal Agent.");
+	return { ...bot };
 }

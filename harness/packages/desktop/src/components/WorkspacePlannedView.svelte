@@ -22,13 +22,13 @@
 		KanbanTask,
 		KanbanTaskKind,
 		KanbanTaskStatus,
-		SelectOption,
+		PersonalBot,
 	} from "../lib/model.ts";
 
 	let {
 		registry,
 		workspaceRoot,
-		models,
+		personalAgents,
 		activity,
 		onclose,
 		onsave,
@@ -38,7 +38,7 @@
 	}: {
 		registry: KanbanRegistry;
 		workspaceRoot: string;
-		models: SelectOption[];
+		personalAgents: PersonalBot[];
 		activity: KanbanActivityEvent[];
 		onclose: () => void;
 		onsave: (registry: KanbanRegistry) => Promise<void>;
@@ -56,7 +56,6 @@
 		{ id: "review", label: "Review", accent: "bg-[#b791df]" },
 		{ id: "done", label: "Done", accent: "bg-[#70c891]" },
 	];
-	const reasoningOptions = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 	const kindOptions: KanbanTaskKind[] = ["build", "fix", "review", "research", "maintenance"];
 
 	let selectedBoardId = $state("");
@@ -68,6 +67,7 @@
 	let draftTaskKind = $state<KanbanTaskKind>("build");
 	let draftTaskWorkspaceRoot = $state("");
 	let draftTaskModel = $state("");
+	let draftPersonalBotId = $state("");
 	let draftTaskReasoning = $state("");
 	let draftTaskTargetMinutes = $state("");
 	let draftTargetMode = $state<"auto" | "custom">("auto");
@@ -133,6 +133,7 @@
 		draftTaskKind = selectedTask.kind;
 		draftTaskWorkspaceRoot = selectedTask.workspaceRoot;
 		draftTaskModel = selectedTask.model ?? "";
+		draftPersonalBotId = selectedTask.personalBotId ?? "";
 		draftTaskReasoning = selectedTask.reasoning || (selectedTask.model ? "medium" : "");
 		draftTaskTargetMinutes = selectedTask.targetMinutes?.toString() ?? "";
 		draftTargetMode = selectedTask.targetMinutes ? "custom" : "auto";
@@ -222,6 +223,7 @@
 		if (!draftTaskTitle.trim()) missing.push("title");
 		if (!draftPrompt.trim()) missing.push("task brief");
 		if (!draftTaskWorkspaceRoot.trim()) missing.push("task folder");
+		if (!draftPersonalBotId) missing.push("Personal Agent");
 		return missing;
 	}
 	async function saveTask(closeAfter = false, requireRunnable = false): Promise<boolean> {
@@ -258,7 +260,8 @@
 												kind: draftTaskKind,
 												workspaceRoot: root,
 												reasoning: draftTaskModel ? draftTaskReasoning : "",
-												model: draftTaskModel || undefined,
+												model: draftPersonalBotId ? undefined : draftTaskModel || undefined,
+												personalBotId: draftPersonalBotId || undefined,
 												targetMinutes:
 													draftTargetMode === "custom" && Number.isFinite(targetMinutes) && targetMinutes > 0
 														? Math.round(targetMinutes)
@@ -534,7 +537,7 @@
 												>
 												<span
 													class="rounded-full bg-[#1a272d] px-1.5 py-0.5 font-mono text-[7px] text-[#93a8ad]"
-													>{providerOf(task.model)}</span
+													>{task.personalBotId ? personalAgents.find((agent) => agent.id === task.personalBotId)?.name ?? "Agent unavailable" : providerOf(task.model)}</span
 												>
 											{#if task.targetMinutes}
 												<span
@@ -669,34 +672,20 @@
 						</div>
 					</div>
 					<label class="mt-3 block">
-						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">AI model</span>
+						<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Personal Agent</span>
 						<select
-							bind:value={draftTaskModel}
+							bind:value={draftPersonalBotId}
 							disabled={selectedTask.runStatus === "running"}
 							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
 						>
-							<option value="">Auto / current workspace model</option>
-							{#if draftTaskModel && !models.some((model) => model.value === draftTaskModel)}
-								<option value={draftTaskModel}>{draftTaskModel} (saved)</option>
-							{/if}
-							{#each models as model (model.value)}
-								<option value={model.value}>{model.label}</option>
+							<option value="">Select a Personal Agent</option>
+							{#each personalAgents as agent (agent.id)}
+								<option value={agent.id} disabled={!agent.enabled || !agent.kanbanEnabled}>{agent.name} · {agent.model || "No model"}{!agent.kanbanEnabled ? " · Kanban disabled" : ""}</option>
 							{/each}
 						</select>
 					</label>
-					{#if draftTaskModel}
-						<label class="mt-3 block">
-							<span class="mb-1.5 block font-mono text-[8px] text-[#83959b] uppercase">Reasoning</span>
-							<select
-								bind:value={draftTaskReasoning}
-								disabled={selectedTask.runStatus === "running"}
-								class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] capitalize text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
-							>
-								{#each reasoningOptions as level (level)}
-									<option value={level}>{level}</option>
-								{/each}
-							</select>
-						</label>
+					{#if draftPersonalBotId}
+						<p class="mt-2 text-[9px] text-[#83959b]">Model and reasoning are configured in Personal Agents: {personalAgents.find((agent) => agent.id === draftPersonalBotId)?.model} · {personalAgents.find((agent) => agent.id === draftPersonalBotId)?.effort}</p>
 					{/if}
 					<div class="mt-3 grid grid-cols-2 gap-2">
 						<label>

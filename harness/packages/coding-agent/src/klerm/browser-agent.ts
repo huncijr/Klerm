@@ -74,6 +74,7 @@ export type BrowserEventType =
 	| "BROWSER_RESET";
 
 export interface BrowserEventInput {
+	personalBotId?: string;
 	event: BrowserEventType;
 	runId: string;
 	sessionId?: string;
