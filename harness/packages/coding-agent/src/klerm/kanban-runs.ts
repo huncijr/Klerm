@@ -78,7 +78,7 @@ export function effectiveKanbanTaskPrompt(task: Pick<KanbanTask, "prompt" | "tit
 	return task.prompt.trim();
 }
 
-const kanbanTaskGuidance: Record<KanbanTaskKind, string> = {
+const kanbanTaskGuidance: Record<Exclude<KanbanTaskKind, "auto">, string> = {
 	build: "Implement the requested behavior in the workspace. Inspect the relevant code first, make the required changes, run relevant verification, and report concrete results.",
 	fix: "Reproduce or establish the reported failure and identify its root cause. Make the smallest correct fix, add regression coverage where practical, run relevant verification, and report concrete results.",
 	review:
@@ -90,11 +90,14 @@ const kanbanTaskGuidance: Record<KanbanTaskKind, string> = {
 };
 
 export function kanbanTaskSystemGuidance(kind: KanbanTaskKind, autoModel: boolean): string {
-	const selected = `Current task type: ${kind}. Follow the ${kind} guidance for this run.`;
-	if (!autoModel) return `${selected}\n${kanbanTaskGuidance[kind]}`;
-	const definitions = (Object.entries(kanbanTaskGuidance) as Array<[KanbanTaskKind, string]>)
+	const definitions = (Object.entries(kanbanTaskGuidance) as Array<[Exclude<KanbanTaskKind, "auto">, string]>)
 		.map(([taskKind, guidance]) => `${taskKind}: ${guidance}`)
 		.join("\n");
+	if (kind === "auto") {
+		return `Kanban task type guidance:\n${definitions}\n\nCurrent task type: auto. Infer the best matching concrete task type from the task brief, state that choice briefly, and follow its guidance for this run.`;
+	}
+	const selected = `Current task type: ${kind}. Follow the ${kind} guidance for this run.`;
+	if (!autoModel) return `${selected}\n${kanbanTaskGuidance[kind]}`;
 	return `Kanban task type guidance:\n${definitions}\n\n${selected}`;
 }
 

@@ -1,6 +1,6 @@
 export const KANBAN_REGISTRY_VERSION = 1;
 
-export type KanbanTaskKind = "build" | "fix" | "review" | "research" | "maintenance";
+export type KanbanTaskKind = "auto" | "build" | "fix" | "review" | "research" | "maintenance";
 export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "waiting" | "review" | "done";
 
 export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
@@ -73,7 +73,7 @@ export interface KanbanRegistry {
 }
 
 const statuses = new Set<KanbanTaskStatus>(["ideas", "planned", "ready", "running", "waiting", "review", "done"]);
-const kinds = new Set<KanbanTaskKind>(["build", "fix", "review", "research", "maintenance"]);
+const kinds = new Set<KanbanTaskKind>(["auto", "build", "fix", "review", "research", "maintenance"]);
 
 export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 	if (!value || typeof value !== "object" || Array.isArray(value))
@@ -105,7 +105,7 @@ export function normalizeKanbanRegistry(value: unknown): KanbanRegistry {
 				const kind =
 					typeof task.kind === "string" && kinds.has(task.kind as KanbanTaskKind)
 						? (task.kind as KanbanTaskKind)
-						: "build";
+						: "auto";
 				const attempts: KanbanRunAttempt[] = [];
 				if (Array.isArray(task.attempts))
 					for (const attemptValue of task.attempts.slice(-20)) {
