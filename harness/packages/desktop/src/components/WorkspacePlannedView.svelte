@@ -76,6 +76,7 @@
 	let draftScheduleEnabled = $state(false);
 	let draggedTaskId = $state("");
 	let nowMs = $state(Date.now());
+	let detailTab = $state<"execution" | "schedule">("execution");
 	let operationBusy = $state(false);
 	let pageError = $state("");
 	let drawerMessage = $state("");
@@ -83,11 +84,15 @@
 
 	const board = $derived(registry.boards.find((item) => item.id === selectedBoardId) ?? registry.boards[0]);
 	const selectedTask = $derived(board?.tasks.find((task) => task.id === selectedTaskId));
+	const runnableAgents = $derived(
+		personalAgents.filter((agent) => agent.enabled && agent.kanbanEnabled && agent.model),
+	);
 	const taskActivity = $derived(
 		selectedTask
 			? activity.filter((event) => event.taskId === selectedTask.id).slice(-30)
 			: [],
 	);
+	const upcomingSchedule = $derived(selectedTask ? nextSchedule(selectedTask) : undefined);
 
 	function blankTask(status: KanbanTaskStatus, sequence: number, now: string): KanbanTask {
 		return {
@@ -140,8 +145,15 @@
 		draftTaskScheduledAt = selectedTask.scheduledAt ? toLocalInput(selectedTask.scheduledAt) : "";
 		draftTaskRepeatMinutes = selectedTask.repeatMinutes?.toString() ?? "";
 		draftScheduleEnabled = Boolean(selectedTask.scheduledAt || selectedTask.repeatMinutes);
+		detailTab = selectedTask.scheduledAt || selectedTask.repeatMinutes ? "schedule" : "execution";
 		drawerMessage = "";
 		drawerError = "";
+	});
+	$effect(() => {
+		if (!selectedTask) return;
+		if (!draftPersonalBotId) {
+			draftPersonalBotId = runnableAgents[0]?.id ?? "";
+		}
 	});
 	$effect(() => {
 		if (draftTaskModel && !draftTaskReasoning) draftTaskReasoning = "medium";
@@ -241,6 +253,7 @@
 		drawerMessage = "";
 		drawerError = "";
 		operationBusy = true;
+		let saved = false;
 		try {
 			await persist({
 				...registry,
@@ -278,14 +291,14 @@
 				),
 			});
 			drawerMessage = "Saved";
-			if (closeAfter) closeDrawer();
-			return true;
+			saved = true;
 		} catch (error) {
 			drawerError = error instanceof Error ? error.message : String(error);
-			return false;
 		} finally {
 			operationBusy = false;
 		}
+		if (saved && closeAfter) closeDrawer();
+		return saved;
 	}
 	function closeDrawer(): void {
 		if (operationBusy) return;
@@ -342,6 +355,43 @@
 	}
 	function activeStep(task: KanbanTask): string | undefined {
 		return latestAttempt(task)?.steps.find((step) => step.status === "active")?.label;
+	}
+	function cardActivity(task: KanbanTask): KanbanActivityEvent[] {
+		return activity.filter((event) => event.taskId === task.id).slice(-3);
+	}
+	function runAgentLabel(task: KanbanTask): string {
+		const agent = task.personalBotId ? personalAgents.find((candidate) => candidate.id === task.personalBotId) : undefined;
+		const attemptModel = latestAttempt(task)?.model;
+		if (agent) return `${agent.name} · ${attemptModel ?? agent.model ?? ""}`.trim();
+		return attemptModel ?? providerOf(task.model);
+	}
+	function nextSchedule(task: KanbanTask): { label: string; detail: string } | undefined {
+		if (task.scheduledAt) {
+			const ms = Date.parse(task.scheduledAt);
+			if (Number.isFinite(ms)) {
+				const date = new Date(ms);
+				const when = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+				if (ms > nowMs)
+					return {
+						label: `Next run ${when}`,
+						detail: task.repeatMinutes
+							? `Repeats every ${task.repeatMinutes}m after the first run`
+							: "One-time run while the app is open",
+					};
+				return {
+					label: "Scheduled time reached",
+					detail: task.repeatMinutes
+						? `Repeats every ${task.repeatMinutes}m while the app is open`
+						: "Runs once while the app is open",
+				};
+			}
+		}
+		if (task.repeatMinutes)
+			return {
+				label: "Repeating schedule",
+				detail: `Every ${task.repeatMinutes}m while the app is open${task.lastRunAt ? ` · last run ${formatTime(task.lastRunAt)}` : ""}`,
+			};
+		return undefined;
 	}
 	function stepMarker(status: string): string {
 		if (status === "completed") return "x";
@@ -560,8 +610,18 @@
 										{#if scheduleText(task)}
 											<span class="mt-1.5 block font-mono text-[7px] text-[#7f9298]">{scheduleText(task)}</span>
 										{/if}
-										{#if task.runStatus === "running" && activeStep(task)}
-											<span class="mt-1.5 flex items-center gap-1 font-mono text-[7px] text-[#b9ea78]"><span class="h-1 w-1 animate-pulse rounded-full bg-[#b9ea78]"></span>{activeStep(task)}</span>
+										{#if task.runStatus === "running"}
+											<span class="mt-1.5 block font-mono text-[7px] leading-snug">
+												<span class="flex items-center gap-1 text-[#b9ea78]"><span class="h-1 w-1 shrink-0 animate-pulse rounded-full bg-[#b9ea78]"></span><span class="truncate">{runAgentLabel(task)}</span></span>
+												<span class="block truncate pl-2 text-[#8fa3b0]">{activeStep(task) ?? `Run #${task.runCount ?? 1} · ${elapsedText(task.runStartedAt)}`}</span>
+											</span>
+											{#if cardActivity(task).length > 0}
+												<span class="mt-1 block space-y-0.5 border-t border-[#26363d] pt-1 font-mono text-[7px] leading-snug">
+													{#each cardActivity(task) as event (event.timestamp + event.kind + event.text)}
+														<span class="block truncate text-[#7f9298]"><span class="text-[#667980]">{event.kind}</span> · {event.text}</span>
+													{/each}
+												</span>
+											{/if}
 										{/if}
 										{#if task.prompt}
 											<span class="mt-0 max-h-0 overflow-hidden text-[8px] leading-snug text-[#91a3a8] opacity-0 transition-all duration-200 group-hover:mt-2 group-hover:max-h-12 group-hover:opacity-100 group-focus-visible:mt-2 group-focus-visible:max-h-12 group-focus-visible:opacity-100"><span class="line-clamp-3">{task.prompt}</span></span>
@@ -576,7 +636,11 @@
 													>{task.runError}</span
 												>
 											{/if}
-										<span class="mt-2 block border-t border-[#26363d] pt-1.5 font-mono text-[7px] text-[#6f8389] opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">Open workspace details</span>
+										<span class="mt-2 flex gap-2 border-t border-[#26363d] pt-1.5 font-mono text-[8px] text-[#9bbc79]">
+											{#if task.runStatus === "running"}<button type="button" class="rounded px-2 py-1 text-[#e7aaa4] hover:bg-[#301a1a]" onclick={(event) => { event.stopPropagation(); void onstop(board.id, task.id); }}>Stop</button>
+											{:else}<button type="button" class="rounded px-2 py-1 hover:bg-[#26391c]" onclick={(event) => { event.stopPropagation(); void onrun(board.id, task.id).catch((error) => { pageError = String(error); }); }}>{task.runCount ? "Retry" : "Run"}</button>{/if}
+											<span class="px-1 py-1">{task.runStatus || task.status}</span>
+										</span>
 									</div>
 									{/each}
 								</div>
@@ -588,7 +652,6 @@
 							This board is empty. Capture a lightweight idea or add a planned task to begin.
 						</p>
 					{/if}
-					{@render taskDetails()}
 				</div>
 			{:else}
 				<div class="mx-auto max-w-[1680px]">
@@ -599,9 +662,14 @@
 			{/if}
 		</section>
 	</div>
+	{#if selectedTask}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}>
+			<div class="max-h-[94vh] w-full max-w-[1350px] overflow-y-auto rounded-2xl bg-[#080d11] p-3 shadow-2xl">{@render taskDetails()}</div>
+		</div>
+	{/if}
 	{#snippet taskDetails()}
 		{#if selectedTask && board}
-		<section class="mt-1 scroll-mt-4 rounded-2xl border border-[#34444b] bg-[linear-gradient(145deg,rgba(14,24,29,.98),rgba(8,15,19,.98))] p-4 shadow-[0_18px_50px_rgba(0,0,0,.2)]" aria-label="Selected task workspace">
+		<section class="rounded-2xl border border-[#34444b] bg-[linear-gradient(145deg,rgba(14,24,29,.98),rgba(8,15,19,.98))] p-4" aria-label="Selected task workspace">
 			<div
 				class="grid min-w-0 grid-cols-[minmax(0,1.1fr)_minmax(340px,.9fr)] gap-4 max-[1100px]:grid-cols-1"
 			>
@@ -609,7 +677,7 @@
 					class="min-w-0 rounded-2xl border border-[#2b3a40] bg-[#0a1115] p-4"
 					onsubmit={(event) => {
 						event.preventDefault();
-						void saveTask(false);
+						void saveTask(true);
 					}}
 				>
 					<div class="flex items-center gap-2">
@@ -678,7 +746,7 @@
 							disabled={selectedTask.runStatus === "running"}
 							class="h-10 w-full rounded-xl border border-[#34444b] bg-[#080e12] px-2 text-[10px] text-[#dce6e8] outline-none focus:border-[#73905d] disabled:opacity-50"
 						>
-							<option value="">Select a Personal Agent</option>
+							{#if runnableAgents.length === 0}<option value="" disabled>No runnable Personal Agent available</option>{/if}
 							{#each personalAgents as agent (agent.id)}
 								<option value={agent.id} disabled={!agent.enabled || !agent.kanbanEnabled}>{agent.name} · {agent.model || "No model"}{!agent.kanbanEnabled ? " · Kanban disabled" : ""}</option>
 							{/each}
@@ -761,6 +829,22 @@
 					>
 				</form>
 				<div class="min-w-0 space-y-3">
+				<div class="flex gap-1" role="tablist" aria-label="Task detail tabs">
+					<button type="button" role="tab" aria-selected={detailTab === "execution"} class={`h-8 flex-1 rounded-lg font-mono text-[8px] uppercase ${detailTab === "execution" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`} onclick={() => (detailTab = "execution")}>Execution</button>
+					<button type="button" role="tab" aria-selected={detailTab === "schedule"} class={`h-8 flex-1 rounded-lg font-mono text-[8px] uppercase ${detailTab === "schedule" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`} onclick={() => (detailTab = "schedule")}>Schedule</button>
+				</div>
+				{#if detailTab === "schedule"}
+					<div class="rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
+						<p class="m-0 font-mono text-[8px] tracking-[.12em] text-[#71858a] uppercase">Next schedule</p>
+						{#if upcomingSchedule}
+							<p class="mt-1.5 mb-0 font-mono text-[10px] text-[#d6e1e3]">{upcomingSchedule.label}</p>
+							<p class="mt-1 mb-0 text-[9px] leading-snug text-[#8ca0a3]">{upcomingSchedule.detail}</p>
+							{#if selectedTask.targetMinutes}<p class="mt-1 mb-0 text-[9px] text-[#8ca0a3]">Target {selectedTask.targetMinutes}m (advisory only)</p>{/if}
+						{:else}
+							<p class="mt-1.5 mb-0 text-[9px] leading-snug text-[#8ca0a3]">No schedule set. Enable “Schedule this task” in the form and add a first run or repeat interval.</p>
+						{/if}
+					</div>
+				{:else}
 				<div class="rounded-2xl border border-[#2f4046] bg-[#091116] p-3">
 					<p class="m-0 font-mono text-[8px] tracking-[.12em] text-[#71858a] uppercase">Execution</p>
 					{#if selectedTask.runStatus === "running"}
@@ -865,6 +949,7 @@
 						</ul>
 					{/if}
 				</div>
+				{/if}
 				</div>
 			</div>
 		</section>
