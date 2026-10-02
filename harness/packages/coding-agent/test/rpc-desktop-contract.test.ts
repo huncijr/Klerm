@@ -804,6 +804,185 @@ describe("Klerm desktop RPC contract", () => {
 					await send({ id: "personal-card-settled", type: "get_personal_bot_conversation", botId: "bot-builder" }),
 				).toMatchObject({ data: { status: "idle" } });
 			});
+			const kanbanBoard = harness.session.settingsManager
+				.getKanbanRegistry()
+				.boards.find((board) => board.tasks.some((task) => task.title === "Personal card"))!;
+			const kanbanTask = kanbanBoard.tasks.find((task) => task.title === "Personal card")!;
+			harness.setResponses([fauxAssistantMessage("Review findings: no implementation requested.")]);
+			expect(
+				await send({
+					id: "run-review-card",
+					type: "run_kanban_task",
+					boardId: kanbanBoard.id,
+					taskId: kanbanTask.id,
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				const task = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)?.tasks[0];
+				expect(task).toMatchObject({
+					runStatus: "succeeded",
+					status: "review",
+					attempts: [
+						expect.objectContaining({
+							mode: "review",
+							evidence: expect.objectContaining({ outcome: "analysis-only" }),
+							activity: expect.arrayContaining([expect.objectContaining({ kind: "settled" })]),
+						}),
+					],
+				});
+			});
+			const buildRegistry = harness.session.settingsManager.getKanbanRegistry();
+			const buildTask = buildRegistry.boards
+				.find((board) => board.id === kanbanBoard.id)!
+				.tasks.find((task) => task.id === kanbanTask.id)!;
+			buildTask.kind = "build";
+			buildTask.prompt = "Create a working application";
+			harness.session.settingsManager.setKanbanRegistry(buildRegistry);
+			harness.setResponses([fauxAssistantMessage("Implementation is done.")]);
+			expect(
+				await send({
+					id: "run-unproven-build",
+					type: "run_kanban_task",
+					boardId: kanbanBoard.id,
+					taskId: kanbanTask.id,
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				const task = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)
+					?.tasks.find((candidate) => candidate.id === kanbanTask.id);
+				expect(task).toMatchObject({
+					runStatus: "failed",
+					status: "waiting",
+					runError: expect.stringContaining("No implementation changes"),
+				});
+			});
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('working');\n" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxToolCall("bash", { command: "node --check kanban-smoke.js" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Created kanban-smoke.js and checked its syntax."),
+			]);
+			expect(
+				await send({
+					id: "run-proven-build",
+					type: "run_kanban_task",
+					boardId: kanbanBoard.id,
+					taskId: kanbanTask.id,
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				const task = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)
+					?.tasks.find((candidate) => candidate.id === kanbanTask.id);
+				expect(task?.runStatus).toBe("succeeded");
+				expect(task?.attempts?.at(-1)).toMatchObject({
+					evidence: {
+						outcome: "implemented-verified",
+						changedFiles: expect.arrayContaining(["kanban-smoke.js"]),
+						verification: ["node --check kanban-smoke.js"],
+					},
+					activity: expect.arrayContaining([expect.objectContaining({ text: "Writing kanban-smoke.js" })]),
+				});
+			});
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('updated');\n" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxToolCall("bash", { command: "node --check kanban-smoke.js" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage([fauxToolCall("bash", { command: "node --check missing-kanban-check.js" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Everything passed."),
+			]);
+			expect(
+				await send({
+					id: "run-failed-final-check",
+					type: "run_kanban_task",
+					boardId: kanbanBoard.id,
+					taskId: kanbanTask.id,
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				const task = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)
+					?.tasks.find((candidate) => candidate.id === kanbanTask.id);
+				expect(task).toMatchObject({
+					runStatus: "failed",
+					runError: "One or more verification commands still fail.",
+				});
+			});
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('initial');\n" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxToolCall("bash", { command: "node --check kanban-smoke.js" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[fauxToolCall("bash", { command: "npm test; printf 'console.log(123);' > kanban-smoke.js" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("Implementation verified."),
+			]);
+			expect(
+				await send({
+					id: "run-mutation-after-check",
+					type: "run_kanban_task",
+					boardId: kanbanBoard.id,
+					taskId: kanbanTask.id,
+				}),
+			).toMatchObject({ success: true });
+			await vi.waitFor(() => {
+				const task = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)
+					?.tasks.find((candidate) => candidate.id === kanbanTask.id);
+				expect(task).toMatchObject({
+					runStatus: "failed",
+					runError: expect.stringContaining("after the last modifying"),
+				});
+			});
+			const runningRegistry = harness.session.settingsManager.getKanbanRegistry();
+			const guardedTask = runningRegistry.boards
+				.find((board) => board.id === kanbanBoard.id)!
+				.tasks.find((candidate) => candidate.id === kanbanTask.id)!;
+			guardedTask.runStatus = "running";
+			harness.session.settingsManager.setKanbanRegistry(runningRegistry);
+			expect(
+				await send({ id: "delete-running-board", type: "delete_kanban_board", boardId: kanbanBoard.id }),
+			).toMatchObject({ success: false });
+			expect(
+				await send({
+					id: "remove-running-via-registry",
+					type: "set_kanban_registry",
+					registry: { ...runningRegistry, boards: [] },
+				}),
+			).toMatchObject({ success: false });
+			guardedTask.runStatus = "succeeded";
+			harness.session.settingsManager.setKanbanRegistry(runningRegistry);
+			expect(
+				await send({ id: "delete-finished-board", type: "delete_kanban_board", boardId: kanbanBoard.id }),
+			).toMatchObject({
+				success: true,
+				data: { boards: expect.not.arrayContaining([expect.objectContaining({ id: kanbanBoard.id })]) },
+			});
+			expect(
+				await send({ id: "delete-missing-board", type: "delete_kanban_board", boardId: kanbanBoard.id }),
+			).toMatchObject({ success: false });
 			const addedBot = await send({
 				id: "personal-bot-add",
 				type: "upsert_personal_bot",

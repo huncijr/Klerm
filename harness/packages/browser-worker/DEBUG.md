@@ -2,6 +2,13 @@
 
 ## Current findings
 
+- October 2 live smoke: native CEF paint, click-to-DOM and CDP checks passed.
+  `openai-codex/gpt-6-luna` with medium reasoning and real browser-use completed
+  reading the example.com heading/paragraph (13 ordered events). A separate
+  five-step link-destination task executed DOM inspection but exhausted its
+  budget and correctly failed. This does not establish link-attribute extraction
+  or full Tauri UI coverage. Traces are in `/tmp/opencode/.klerm/browser-events.jsonl`
+  and `/tmp/opencode/.klerm/browser-debug.jsonl` for this local smoke.
 - Automatic origin decisions now carry decidedBy=policy and are hidden from
   desktop activity while remaining in the authoritative audit. Manual action
   approvals remain visible. Cursor overlays identify the run's pinned model,

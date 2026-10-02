@@ -419,6 +419,9 @@
 		}
 	}
 
+	async function deleteKanbanBoard(boardId: string): Promise<void> {
+		kanbanRegistry = await bridge.send<KanbanRegistry>("delete_kanban_board", { boardId });
+	}
 	async function stopKanbanTask(boardId: string, taskId: string): Promise<void> {
 		if (!supportsCommand("stop_kanban_task")) {
 			const error = new Error("The backend does not support Kanban runs. Restart Klerm to upgrade the sidecar.");
@@ -1500,6 +1503,8 @@
 							taskId: event.taskId,
 							timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
 							text: event.text,
+							...(typeof event.sequence === "number" ? { sequence: event.sequence } : {}),
+							...(typeof event.attemptId === "string" ? { attemptId: event.attemptId } : {}),
 						},
 					];
 				}
@@ -3320,6 +3325,7 @@
 				onpickfolder={pickKanbanFolder}
 				onrun={runKanbanTask}
 				onstop={stopKanbanTask}
+				ondelete={deleteKanbanBoard}
 			/>
 		{:else if workspaceView === "browser"}
 			<div class="flex min-h-0 flex-1 overflow-hidden">

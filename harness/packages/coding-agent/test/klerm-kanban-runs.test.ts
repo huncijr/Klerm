@@ -122,7 +122,7 @@ describe("kanban run attempts", () => {
 		expect(attempt.sequence).toBe(3);
 		expect(attempt.steps.map((step) => step.status)).toEqual(["completed", "active", "pending", "pending"]);
 		const advanced = advanceKanbanRunAttempt(attempt, "execute");
-		expect(advanced.steps.map((step) => step.status)).toEqual(["completed", "completed", "active", "pending"]);
+		expect(advanced.steps.map((step) => step.status)).toEqual(["completed", "pending", "active", "pending"]);
 		const failed = finishKanbanRunAttempt(advanced, "failed", "2026-09-20T10:01:00.000Z", {
 			error: "Provider returned an error.",
 			stopReason: "error",

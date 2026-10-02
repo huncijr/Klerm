@@ -1,12 +1,20 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { KanbanAttemptStatus, KanbanRegistry, KanbanRunAttempt, KanbanTask, KanbanTaskKind } from "./kanban.ts";
+import type {
+	KanbanAttemptEvidence,
+	KanbanAttemptStatus,
+	KanbanRegistry,
+	KanbanRunAttempt,
+	KanbanTask,
+	KanbanTaskKind,
+} from "./kanban.ts";
 
 export const KANBAN_RUN_LOG_DIRECTORY = ".klerm";
 export const KANBAN_RUN_LOG_FILE = "kanban-runs.jsonl";
 
 export type KanbanRunEventType =
 	| "RUN_STARTED"
+	| "RUN_ACTIVITY"
 	| "RUN_SUCCEEDED"
 	| "RUN_FAILED"
 	| "RUN_STOPPED"
@@ -21,13 +29,18 @@ export interface KanbanRunEvent {
 	taskId: string;
 	/** Deterministic per-task run number, persisted as KanbanTask.runCount. */
 	sequence: number;
-	sender: "user" | "klerm-scheduler" | "personal-agent";
+	sender: "user" | "klerm-scheduler" | "personal-agent" | "klerm";
 	personalBotId?: string;
 	recipient: "kanban-task";
 	status: "running" | "succeeded" | "failed" | "stopped" | "scheduled" | "interrupted";
 	reason: string;
 	model?: string;
 	resultDigest?: string;
+	activitySequence?: number;
+	attemptId?: string;
+	workspaceRoot?: string;
+	mode?: string;
+	evidence?: KanbanAttemptEvidence;
 }
 
 export interface DueKanbanTask {
@@ -124,10 +137,10 @@ export function createKanbanRunAttempt(
 		reasoning: task.reasoning,
 		workspaceRoot: task.workspaceRoot,
 		steps: [
-			{ id: "brief", label: "Read the task brief", status: "completed" },
+			{ id: "brief", label: "Task brief captured", status: "completed" },
 			{ id: "inspect", label: "Inspect the selected folder", status: "active" },
 			{ id: "execute", label: "Execute the task", status: "pending" },
-			{ id: "report", label: "Verify and report the result", status: "pending" },
+			{ id: "report", label: "Report the result", status: "pending" },
 		],
 	};
 }
@@ -142,7 +155,7 @@ export function advanceKanbanRunAttempt(
 		...attempt,
 		steps: attempt.steps.map((step, index) => ({
 			...step,
-			status: index < activeIndex ? "completed" : index === activeIndex ? "active" : "pending",
+			status: index === activeIndex ? "active" : step.status === "active" ? "pending" : step.status,
 		})),
 	};
 }
@@ -151,7 +164,7 @@ export function finishKanbanRunAttempt(
 	attempt: KanbanRunAttempt,
 	status: KanbanAttemptStatus,
 	finishedAt: string,
-	detail: { error?: string; result?: string; stopReason?: string },
+	detail: { error?: string; result?: string; stopReason?: string; evidence?: KanbanAttemptEvidence },
 ): KanbanRunAttempt {
 	return {
 		...attempt,
@@ -160,9 +173,23 @@ export function finishKanbanRunAttempt(
 		...(detail.error ? { error: detail.error } : {}),
 		...(detail.result ? { result: detail.result } : {}),
 		...(detail.stopReason ? { stopReason: detail.stopReason } : {}),
+		...(detail.evidence ? { evidence: detail.evidence } : {}),
 		steps: attempt.steps.map((step) => ({
 			...step,
-			status: status === "succeeded" ? "completed" : step.status === "active" ? "failed" : step.status,
+			status:
+				status === "succeeded"
+					? step.status === "completed" ||
+						step.id === "brief" ||
+						step.id === "report" ||
+						(step.id === "execute" &&
+							(detail.evidence?.outcome === "implemented-verified" ||
+								detail.evidence?.outcome === "analysis-only")) ||
+						(step.id === "verify" && detail.evidence?.outcome === "implemented-verified")
+						? "completed"
+						: "skipped"
+					: step.status === "active"
+						? "failed"
+						: step.status,
 		})),
 	};
 }

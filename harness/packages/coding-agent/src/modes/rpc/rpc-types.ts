@@ -269,6 +269,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_projects" }
 	| { id?: string; type: "get_kanban_registry" }
 	| { id?: string; type: "set_kanban_registry"; registry: RpcKanbanRegistry }
+	| { id?: string; type: "delete_kanban_board"; boardId: string }
 	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "stop_kanban_task"; boardId: string; taskId: string }
 	| { id?: string; type: "get_browser_availability" }
@@ -517,7 +518,12 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
-			command: "get_kanban_registry" | "set_kanban_registry" | "run_kanban_task" | "stop_kanban_task";
+			command:
+				| "get_kanban_registry"
+				| "set_kanban_registry"
+				| "delete_kanban_board"
+				| "run_kanban_task"
+				| "stop_kanban_task";
 			success: true;
 			data: RpcKanbanRegistry;
 	  }

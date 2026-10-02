@@ -35,6 +35,7 @@
 		onpickfolder,
 		onrun,
 		onstop,
+		ondelete,
 	}: {
 		registry: KanbanRegistry;
 		workspaceRoot: string;
@@ -45,6 +46,7 @@
 		onpickfolder: (initial?: string) => Promise<string | undefined>;
 		onrun: (boardId: string, taskId: string) => Promise<void>;
 		onstop: (boardId: string, taskId: string) => Promise<void>;
+		ondelete: (boardId: string) => Promise<void>;
 	} = $props();
 
 	const columns: Array<{ id: KanbanTaskStatus; label: string; accent: string }> = [
@@ -79,6 +81,7 @@
 	let detailTab = $state<"execution" | "schedule">("execution");
 	let operationBusy = $state(false);
 	let pageError = $state("");
+	let confirmDelete = $state(false);
 	let drawerMessage = $state("");
 	let drawerError = $state("");
 
@@ -89,7 +92,7 @@
 	);
 	const taskActivity = $derived(
 		selectedTask
-			? activity.filter((event) => event.taskId === selectedTask.id).slice(-30)
+			? history(selectedTask).slice(-100)
 			: [],
 	);
 	const upcomingSchedule = $derived(selectedTask ? nextSchedule(selectedTask) : undefined);
@@ -131,6 +134,10 @@
 		if (board && selectedBoardId !== board.id) selectedBoardId = board.id;
 	});
 	$effect(() => {
+		selectedBoardId;
+		confirmDelete = false;
+	});
+	$effect(() => {
 		if (!selectedTask || selectedTask.id === draftTaskId) return;
 		draftTaskId = selectedTask.id;
 		draftTaskTitle = selectedTask.title;
@@ -168,6 +175,20 @@
 			await persist({ ...registry, boards: [...registry.boards, next] });
 			selectedBoardId = next.id;
 			boardName = "";
+		} catch (error) {
+			pageError = error instanceof Error ? error.message : String(error);
+		} finally {
+			operationBusy = false;
+		}
+	}
+	async function deleteBoard(): Promise<void> {
+		if (!board || operationBusy) return;
+		operationBusy = true;
+		pageError = "";
+		try {
+			await ondelete(board.id);
+			selectedTaskId = "";
+			confirmDelete = false;
 		} catch (error) {
 			pageError = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -357,11 +378,20 @@
 		return latestAttempt(task)?.steps.find((step) => step.status === "active")?.label;
 	}
 	function cardActivity(task: KanbanTask): KanbanActivityEvent[] {
-		return activity.filter((event) => event.taskId === task.id).slice(-3);
+		return history(task).slice(-3);
+	}
+	function history(task: KanbanTask): KanbanActivityEvent[] {
+		const events = [...(task.attempts?.flatMap((attempt) => attempt.activity ?? []) ?? []), ...activity.filter((event) => event.boardId === board?.id && event.taskId === task.id)];
+		const unique = new Map(events.map((event) => [activityKey(event), event]));
+		return [...unique.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+	}
+	function activityKey(event: KanbanActivityEvent): string {
+		return event.attemptId && event.sequence ? `${event.attemptId}:${event.sequence}` : event.timestamp + event.kind + event.text;
 	}
 	function runAgentLabel(task: KanbanTask): string {
 		const agent = task.personalBotId ? personalAgents.find((candidate) => candidate.id === task.personalBotId) : undefined;
 		const attemptModel = latestAttempt(task)?.model;
+		if (latestAttempt(task)?.agentName) return `${latestAttempt(task)?.agentName} · ${attemptModel ?? ""}`;
 		if (agent) return `${agent.name} · ${attemptModel ?? agent.model ?? ""}`.trim();
 		return attemptModel ?? providerOf(task.model);
 	}
@@ -397,6 +427,7 @@
 		if (status === "completed") return "x";
 		if (status === "active") return ">";
 		if (status === "failed") return "!";
+		if (status === "skipped") return "-";
 		return "o";
 	}
 	function displayTitle(task: KanbanTask): string {
@@ -522,6 +553,13 @@
 							</p>
 						</div>
 						<div class="flex gap-2">
+							{#if confirmDelete}
+								<span class="self-center text-[9px] text-[#d99a8c]">Delete this board and its {board.tasks.length} cards?</span>
+								<button type="button" disabled={operationBusy} class="rounded-xl border border-[#71453c] px-3 text-[9px] text-[#efb2a3]" onclick={() => void deleteBoard()}>Confirm delete</button>
+								<button type="button" class="px-2 text-[9px] text-[#a7b4b9]" onclick={() => (confirmDelete = false)}>Cancel</button>
+							{:else}
+								<button type="button" disabled={operationBusy || board.tasks.some((task) => task.runStatus === "running")} class="rounded-xl border border-[#71453c] px-3 text-[9px] text-[#efb2a3] disabled:opacity-40" onclick={() => (confirmDelete = true)}>Delete board</button>
+							{/if}
 							<button
 								type="button"
 								disabled={operationBusy}
@@ -615,24 +653,17 @@
 												<span class="flex items-center gap-1 text-[#b9ea78]"><span class="h-1 w-1 shrink-0 animate-pulse rounded-full bg-[#b9ea78]"></span><span class="truncate">{runAgentLabel(task)}</span></span>
 												<span class="block truncate pl-2 text-[#8fa3b0]">{activeStep(task) ?? `Run #${task.runCount ?? 1} · ${elapsedText(task.runStartedAt)}`}</span>
 											</span>
-											{#if cardActivity(task).length > 0}
-												<span class="mt-1 block space-y-0.5 border-t border-[#26363d] pt-1 font-mono text-[7px] leading-snug">
-													{#each cardActivity(task) as event (event.timestamp + event.kind + event.text)}
-														<span class="block truncate text-[#7f9298]"><span class="text-[#667980]">{event.kind}</span> · {event.text}</span>
-													{/each}
-												</span>
-											{/if}
 										{/if}
 										{#if task.prompt}
 											<span class="mt-0 max-h-0 overflow-hidden text-[8px] leading-snug text-[#91a3a8] opacity-0 transition-all duration-200 group-hover:mt-2 group-hover:max-h-12 group-hover:opacity-100 group-focus-visible:mt-2 group-focus-visible:max-h-12 group-focus-visible:opacity-100"><span class="line-clamp-3">{task.prompt}</span></span>
 										{/if}
 											{#if task.lastResult && task.runStatus !== "running"}
-												<span class="mt-1.5 line-clamp-2 block text-[8px] leading-snug text-[#9fb0b4]"
+												<span class="mt-1.5 max-h-8 overflow-hidden line-clamp-2 text-[8px] leading-snug text-[#9fb0b4]"
 													>{task.lastResult}</span
 												>
 											{/if}
 											{#if task.runError}
-												<span class="mt-1.5 line-clamp-2 block text-[8px] leading-snug text-[#d99a8c]"
+												<span class="mt-1.5 max-h-8 overflow-hidden line-clamp-2 text-[8px] leading-snug text-[#d99a8c]"
 													>{task.runError}</span
 												>
 											{/if}
@@ -642,6 +673,16 @@
 											<span class="px-1 py-1">{task.runStatus || task.status}</span>
 										</span>
 									</div>
+									{#if latestAttempt(task)}
+										<div class="rounded-lg border border-[#26363d] bg-[#0a1115] p-2 font-mono text-[7px] leading-snug" aria-label={`Run history for ${displayTitle(task)}`}>
+											<p class="m-0 text-[#9bbc79]">{latestAttempt(task)?.mode ?? "Mode not recorded"} · {latestAttempt(task)?.evidence?.outcome ?? task.runStatus}</p>
+											<p class="my-1 line-clamp-2 text-[#8fa3b0]" title={runAgentLabel(task)}>{runAgentLabel(task)}</p>
+											<p class="my-1 break-all text-[#8fa3b0]">Folder: {latestAttempt(task)?.workspaceRoot}</p>
+											{#each cardActivity(task) as event (activityKey(event))}
+												<p class="my-0.5 line-clamp-2 text-[#7f9298]" title={event.text}>{event.text}</p>
+											{/each}
+										</div>
+									{/if}
 									{/each}
 								</div>
 							</div>
@@ -875,8 +916,13 @@
 							{#each [...selectedTask.attempts].reverse() as attempt (attempt.id)}
 								<li class="rounded-xl bg-[#0c1419] p-2">
 									<span class="block font-mono text-[8px] text-[#9fb0b4]">
-										Attempt {attempt.sequence} · {attempt.status} · {attempt.model}
+										Attempt {attempt.sequence} · {attempt.status} · {attempt.agentName ?? "Klerm"} · {attempt.model}
 									</span>
+									<p class="my-1 break-all text-[8px] text-[#8fa3b0]">{attempt.mode ?? "Mode not recorded"} · {attempt.workspaceRoot}</p>
+									{#if attempt.evidence}
+										<p class="my-1 text-[9px] text-[#b9cd9d]">Evidence: {attempt.evidence.outcome}</p>
+										<pre class="max-h-48 overflow-auto text-[8px] whitespace-pre-wrap text-[#a7b4b9]">Changed files: {attempt.evidence.changedFiles.join(", ") || "none"}{"\n"}Successful checks: {attempt.evidence.verification.join("\n") || "none"}</pre>
+									{/if}
 									<span class="mt-1 block">
 										{#each attempt.steps as step (step.id)}
 											<span
@@ -889,7 +935,7 @@
 										<span class="mt-1 block text-[8px] leading-snug text-[#d99a8c]">{attempt.error}</span>
 									{/if}
 									{#if attempt.result}
-										<span class="mt-1 line-clamp-3 block text-[8px] leading-snug whitespace-pre-wrap text-[#c4d2d5]">{attempt.result}</span>
+										<details class="mt-1 text-[9px] text-[#c4d2d5]"><summary class="cursor-pointer">Full attempt report</summary><p class="max-h-96 overflow-auto whitespace-pre-wrap">{attempt.result}</p></details>
 									{/if}
 								</li>
 							{/each}
@@ -938,7 +984,7 @@
 						</p>
 					{:else}
 						<ul class="mt-2 mb-0 list-none space-y-1.5 p-0">
-							{#each taskActivity as event (event.timestamp + event.kind + event.text)}
+							{#each taskActivity as event (activityKey(event))}
 								<li class="rounded-lg bg-[#0c1419] px-2 py-1.5">
 									<span class="block font-mono text-[7px] text-[#667980]"
 										>{event.kind} · {formatTime(event.timestamp)}</span

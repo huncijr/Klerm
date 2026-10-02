@@ -48,6 +48,56 @@ Existing standalone configuration and historical Kanban attempts are retained.
 New Browser/Kanban UI assignments use Personal Agents; old scheduled cards should
 be assigned explicitly before depending on this configuration source.
 
+## Kanban evidence and history
+
+Each attempt captures its actual operating mode, folder and agent. Review,
+research and explicit planning runs have read-only tool allowlists. Builds,
+fixes and maintenance require real source changes and a successful recognized
+check that started after the last modifying tool finished. A text-only claim
+does not complete a build. Checks record execution, not proof that every product
+requirement is satisfied; successful runs still await human review.
+
+The compact card retains the latest three activity entries below it after
+settlement. Execution details include up to 100 persisted entries per attempt,
+changed files, successful commands and an expandable report up to 32,000
+characters. Up to 20 attempts are retained. The full ordered activity audit is
+written to the active coding workspace's `.klerm/kanban-runs.jsonl`, which may
+differ from the card's target folder. Source evidence excludes dependency,
+build-output and runtime directories and symlinks; it rejects folders exceeding
+5,000 source files or a 10 MiB source-file limit rather than claiming completion
+from incomplete evidence. Older attempts have no reconstructed evidence.
+
+Delete board requires explicit confirmation and is rejected by the backend while
+any task on the board runs. It removes the saved board/cards, not project files
+or existing logs.
+
+### How To Test Kanban
+
+From `harness/packages/coding-agent`:
+
+```bash
+node ../../node_modules/vitest/dist/cli.js --run test/klerm-kanban-evidence.test.ts test/klerm-kanban-runs.test.ts test/rpc-desktop-contract.test.ts
+```
+
+From `harness`, run `npm run check`, then launch `./klermapp`:
+
+1. Create a Review card in a small existing folder with brief "Define acceptance
+   criteria and provide an implementation outline." Run it. Expect analysis-only
+   evidence, no implementation/check claim, and a retained timeline in Review.
+2. Create a Build card: "Create hello.js printing hello; run node --check hello.js
+   after writing it." Expect a Writing entry with the path, the exact check command,
+   changed-file evidence and implemented-verified status. A syntax check is only
+   syntax verification; inspect/run the program yourself before marking Done.
+3. Restart the app and reopen the board. Completed-card history should persist.
+   Open Execution and expand Full attempt report. Long results should not expand
+   the compact card. Save an edit and verify the overlay closes.
+4. Start a task: Delete board is disabled and direct deletion RPC is rejected.
+   Stop/settle it, choose Delete board, then Cancel; it must remain. Repeat and
+   Confirm delete; only the saved board/cards disappear.
+
+Automated runs use a fake model with real local file/shell tools. UI appearance,
+restart rendering and arbitrary model behavior still require these human checks.
+
 ## Sources
 
 Sources are compact favicon/link chips without the HTTP scheme. Clicking one

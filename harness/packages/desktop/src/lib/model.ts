@@ -12,13 +12,17 @@ export type KanbanTaskStatus = "ideas" | "planned" | "ready" | "running" | "wait
 export type KanbanTaskKind = "auto" | "build" | "fix" | "review" | "research" | "maintenance";
 export type KanbanRunStatus = "idle" | "running" | "succeeded" | "failed" | "stopped";
 export type KanbanAttemptStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
-export type KanbanAttemptStepStatus = "pending" | "active" | "completed" | "failed";
+export type KanbanAttemptStepStatus = "pending" | "active" | "completed" | "failed" | "skipped";
 export interface KanbanAttemptStep {
 	id: string;
 	label: string;
 	status: KanbanAttemptStepStatus;
 }
 export interface KanbanRunAttempt {
+	mode?: string;
+	agentName?: string;
+	activity?: KanbanActivityEvent[];
+	evidence?: { mode: string; workspaceRoot: string; changedFiles: string[]; verification: string[]; outcome: string };
 	id: string;
 	sequence: number;
 	status: KanbanAttemptStatus;
@@ -57,6 +61,8 @@ export interface KanbanTask {
 	createdSequence: number;
 }
 export interface KanbanActivityEvent {
+	sequence?: number;
+	attemptId?: string;
 	kind: string;
 	boardId: string;
 	taskId: string;
