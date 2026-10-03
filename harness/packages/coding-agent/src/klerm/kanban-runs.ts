@@ -15,6 +15,9 @@ export const KANBAN_RUN_LOG_FILE = "kanban-runs.jsonl";
 export type KanbanRunEventType =
 	| "RUN_STARTED"
 	| "RUN_ACTIVITY"
+	| "RUN_BLOCKED"
+	| "WORKSPACE_RESERVED"
+	| "WORKSPACE_RELEASED"
 	| "RUN_SUCCEEDED"
 	| "RUN_FAILED"
 	| "RUN_STOPPED"
@@ -32,7 +35,16 @@ export interface KanbanRunEvent {
 	sender: "user" | "klerm-scheduler" | "personal-agent" | "klerm";
 	personalBotId?: string;
 	recipient: "kanban-task";
-	status: "running" | "succeeded" | "failed" | "stopped" | "scheduled" | "interrupted";
+	status:
+		| "running"
+		| "succeeded"
+		| "failed"
+		| "stopped"
+		| "scheduled"
+		| "interrupted"
+		| "blocked"
+		| "reserved"
+		| "released";
 	reason: string;
 	model?: string;
 	resultDigest?: string;
@@ -41,6 +53,7 @@ export interface KanbanRunEvent {
 	workspaceRoot?: string;
 	mode?: string;
 	evidence?: KanbanAttemptEvidence;
+	blockedBy?: { boardId: string; taskId: string; workspaceRoot: string };
 }
 
 export interface DueKanbanTask {

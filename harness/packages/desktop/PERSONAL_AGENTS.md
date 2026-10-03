@@ -71,6 +71,62 @@ Delete board requires explicit confirmation and is rejected by the backend while
 any task on the board runs. It removes the saved board/cards, not project files
 or existing logs.
 
+### Kanban workspace reservations
+
+One backend coordinates the folders used by all its Kanban boards. A build,
+fix or maintenance run reserves its canonical folder for writing before the
+initial source snapshot. A conflicting writer or reader is rejected with
+`KANBAN_WORKSPACE_BUSY` before model execution. The error identifies the owning
+board/task and folder; the rejected card keeps its existing state and run count.
+Parent/child folders and symlink aliases also conflict. Different folders may
+run independently, and read-only review/research/plan tasks may share a folder.
+
+Reservations remain held through the final evidence snapshot and settlement.
+Stop, setup errors, provider failures and coding-session changes drain active
+work and release its reservation. Duplicate starts, edits and board deletion
+are also blocked during setup. Scheduled cards keep their due time while a
+folder is busy and retry on a later 20-second scheduler tick; blocked cards do
+not consume the tick's three-start limit or prevent independent folders starting.
+
+The active coding workspace's `.klerm/kanban-runs.jsonl` records
+`WORKSPACE_RESERVED`, `RUN_BLOCKED` (including `blockedBy`) and
+`WORKSPACE_RELEASED`, with board/task, run sequence, attempt ID and reason.
+Pending setup decisions do not create a fake completed/failed execution attempt.
+Queued audit writes keep the workspace selected when the event occurred.
+
+This is an in-process Kanban reservation, not an OS lock or isolated worktree.
+Other backend processes, ordinary CLI/harness tasks, detached commands and
+external editors do not participate. Cross-process locking and durable recovery
+remain later milestones; this change does not establish unattended-run safety.
+
+### How To Test workspace reservations
+
+From `harness/packages/coding-agent`:
+
+```bash
+node ../../node_modules/vitest/dist/cli.js --run test/klerm-kanban-workspaces.test.ts test/rpc-kanban-workspaces.test.ts test/klerm-kanban-evidence.test.ts test/klerm-kanban-runs.test.ts test/rpc-desktop-contract.test.ts
+```
+
+Expect the unit/RPC tests to pass without provider credentials or paid model calls.
+They cover simultaneous writers, nested/symlink folders, shared readers,
+reservation release after Stop/startup failure, final-snapshot ownership,
+startup cancellation, session-change draining and scheduler progress.
+
+Launch `./klermapp` from `harness` for the human check:
+
+1. Assign two Build cards to the same existing folder (different boards are fine).
+   Start the first with enough work to keep it running. Run the second while the
+   first is Running: expect a busy-folder error and no new attempt on the second.
+2. Stop the first, then retry the second: it should start once Stop finishes.
+3. Repeat with a parent folder and one of its subfolders; expect the same conflict.
+   Two read-only Review cards should be admitted together instead.
+4. Schedule three cards in a busy folder and one in another folder for now. The
+   independent card should start on the next tick, while blocked cards remain due.
+
+Inspect the reservation/block/release records in `.klerm/kanban-runs.jsonl`.
+Backend behavior is automated; real desktop timing/notifications remain a human
+check, and symlink coverage is Linux-tested (the Windows test is skipped).
+
 ### How To Test Kanban
 
 From `harness/packages/coding-agent`:

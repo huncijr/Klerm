@@ -117,6 +117,11 @@ import {
 	nextRepeatAt,
 	validateRunnableKanbanTask,
 } from "../../klerm/kanban-runs.ts";
+import {
+	KanbanWorkspaceBusyError,
+	type KanbanWorkspaceReservation,
+	KanbanWorkspaceReservations,
+} from "../../klerm/kanban-workspaces.ts";
 import { discoverLocalRuntimes } from "../../klerm/local-runtime-discovery.ts";
 import { getMcpRuntimeStatus } from "../../klerm/mcp/extension.ts";
 import { redactMcpSecretText } from "../../klerm/mcp/redact.ts";
@@ -519,9 +524,19 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			checks: string[];
 			inspected: boolean;
 			failedChecks: Set<string>;
+			reservation: KanbanWorkspaceReservation;
+			completion: Promise<void>;
+			complete: () => void;
+			settling: boolean;
 			unsubscribe: () => void;
 		}
 	>();
+	const kanbanWorkspaces = new KanbanWorkspaceReservations();
+	const kanbanStarts = new Map<
+		string,
+		{ boardId: string; taskId: string; stopped: boolean; finished: Promise<void> }
+	>();
+	let kanbanDraining = false;
 	let kanbanWriteQueue: Promise<void> = Promise.resolve();
 	const kanbanRunKey = (boardId: string, taskId: string): string => `${boardId}::${taskId}`;
 	let activeCodingHarnessSession: CodingHarnessSessionRef | undefined;
@@ -574,40 +589,52 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		throw new Error("Unknown browser session.");
 	};
 	const closeCodingHarnessSessions = async () => {
-		await Promise.all(
-			[...codingHarnessSessions.values()].map((adapterSession) =>
-				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
-			),
-		);
-		await Promise.all(
-			[...personalBotKlermSessions.values()].map(async ({ session: botSession }) => {
-				await botSession.abort();
-				botSession.dispose();
-			}),
-		);
-		await Promise.all(
-			[...personalBotSessions.values()].map((adapterSession) =>
-				codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
-			),
-		);
-		await Promise.all(
-			[...kanbanSessions.values()].map(async ({ session: kanbanSession, unsubscribe }) => {
-				unsubscribe();
-				await kanbanSession.abort();
-				kanbanSession.dispose();
-			}),
-		);
-		kanbanSessions.clear();
-		await bridgeTransitionQueue;
-		codingHarnessSessions.clear();
-		personalBotSessions.clear();
-		personalBotKlermSessions.clear();
-		personalBotRuns.clear();
-		activeCodingHarnessSession = undefined;
-		activeCodingHarnessBridge = undefined;
-		await bridgeWriteQueue;
-		await personalBotWriteQueue.catch(() => undefined);
-		await aiDebugTrace?.flush().catch(() => undefined);
+		kanbanDraining = true;
+		try {
+			await Promise.all(
+				[...kanbanStarts.values()].map((start) => {
+					start.stopped = true;
+					return start.finished;
+				}),
+			);
+			await Promise.all(
+				[...codingHarnessSessions.values()].map((adapterSession) =>
+					codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
+				),
+			);
+			await Promise.all(
+				[...personalBotKlermSessions.values()].map(async ({ session: botSession }) => {
+					await botSession.abort();
+					botSession.dispose();
+				}),
+			);
+			await Promise.all(
+				[...personalBotSessions.values()].map((adapterSession) =>
+					codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession),
+				),
+			);
+			await Promise.all(
+				[...kanbanSessions.values()].map(async (run) => {
+					run.stopped = true;
+					await run.session.abort();
+					await run.completion;
+				}),
+			);
+			kanbanSessions.clear();
+			await bridgeTransitionQueue;
+			codingHarnessSessions.clear();
+			personalBotSessions.clear();
+			personalBotKlermSessions.clear();
+			personalBotRuns.clear();
+			activeCodingHarnessSession = undefined;
+			activeCodingHarnessBridge = undefined;
+			await bridgeWriteQueue;
+			await personalBotWriteQueue.catch(() => undefined);
+			await kanbanWriteQueue;
+			await aiDebugTrace?.flush().catch(() => undefined);
+		} finally {
+			kanbanDraining = false;
+		}
 	};
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -721,9 +748,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		return personalBotWriteQueue;
 	};
 	const queueKanbanRunEvent = (event: KanbanRunEvent): Promise<void> => {
+		const cwd = session.sessionManager.getCwd();
 		kanbanWriteQueue = kanbanWriteQueue
 			.catch(() => undefined)
-			.then(() => appendKanbanRunEvent(session.sessionManager.getCwd(), event))
+			.then(() => appendKanbanRunEvent(cwd, event))
 			.catch((logError) => {
 				output({
 					type: "backend_error",
@@ -734,6 +762,27 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	};
 	const emitKanbanRegistry = (registry: KanbanRegistry): void => {
 		output({ type: "kanban_registry_changed", registry });
+	};
+	const releaseKanbanWorkspace = async (
+		reservation: KanbanWorkspaceReservation,
+		sequence: number,
+		attemptId: string,
+	): Promise<void> => {
+		if (!reservation.release()) return;
+		await queueKanbanRunEvent({
+			version: 1,
+			timestamp: new Date().toISOString(),
+			event: "WORKSPACE_RELEASED",
+			boardId: reservation.boardId,
+			taskId: reservation.taskId,
+			sequence,
+			attemptId,
+			sender: "klerm",
+			recipient: "kanban-task",
+			status: "released",
+			workspaceRoot: reservation.workspaceRoot,
+			reason: "Kanban workspace reservation released after work drained.",
+		});
 	};
 	const emitKanbanActivity = (boardId: string, taskId: string, kind: string, text: string): void => {
 		const task = session.settingsManager
@@ -846,97 +895,111 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 	): Promise<void> => {
 		const key = kanbanRunKey(boardId, taskId);
 		const run = kanbanSessions.get(key);
-		let effectiveOutcome = run?.stopped === true ? "stopped" : outcome;
-		let evidence: KanbanEvidence | undefined;
-		if (run && effectiveOutcome === "succeeded") {
-			try {
-				evidence = assessKanbanEvidence(
-					run.mode,
-					run.before,
-					await captureKanbanFolder(run.before.root),
-					run.mutationSequence,
-					run.failedChecks.size > 0 ? 0 : run.verificationSequence,
-					run.checks,
-				);
-				if (evidence.outcome === "no-changes" || evidence.outcome === "unverified") {
+		if (run?.settling) return run.completion;
+		if (run) run.settling = true;
+		try {
+			let effectiveOutcome = run?.stopped === true ? "stopped" : outcome;
+			let evidence: KanbanEvidence | undefined;
+			if (run && effectiveOutcome === "succeeded") {
+				try {
+					evidence = assessKanbanEvidence(
+						run.mode,
+						run.before,
+						await captureKanbanFolder(run.before.root),
+						run.mutationSequence,
+						run.failedChecks.size > 0 ? 0 : run.verificationSequence,
+						run.checks,
+					);
+					if (evidence.outcome === "no-changes" || evidence.outcome === "unverified") {
+						effectiveOutcome = "failed";
+						detail.error =
+							run.failedChecks.size > 0
+								? "One or more verification commands still fail."
+								: evidence.outcome === "no-changes"
+									? "No implementation changes were observed in the selected folder."
+									: "Changes were observed, but no successful verification started after the last modifying operation.";
+					}
+				} catch (error) {
 					effectiveOutcome = "failed";
-					detail.error =
-						run.failedChecks.size > 0
-							? "One or more verification commands still fail."
-							: evidence.outcome === "no-changes"
-								? "No implementation changes were observed in the selected folder."
-								: "Changes were observed, but no successful verification started after the last modifying operation.";
+					detail.error = `Could not verify task folder evidence: ${error instanceof Error ? error.message : String(error)}`;
 				}
-			} catch (error) {
-				effectiveOutcome = "failed";
-				detail.error = `Could not verify task folder evidence: ${error instanceof Error ? error.message : String(error)}`;
+			}
+			if (run?.stopped) effectiveOutcome = "stopped";
+			const now = new Date().toISOString();
+			const registry = session.settingsManager.getKanbanRegistry();
+			const task = registry.boards
+				.find((board) => board.id === boardId)
+				?.tasks.find((candidate) => candidate.id === taskId);
+			const runCount = task?.runCount ?? 1;
+			const attemptId =
+				run?.attemptId ?? [...(task?.attempts ?? [])].reverse().find((attempt) => attempt.status === "running")?.id;
+			const error = effectiveOutcome === "stopped" ? "Task stopped by the user." : detail.error;
+			const eventReason =
+				effectiveOutcome === "succeeded"
+					? evidence?.outcome === "analysis-only"
+						? "Analysis completed; implementation and verification were not requested."
+						: "Implementation changes and successful checks recorded; awaiting review."
+					: (error ?? "Run failed.");
+			updateKanbanTask(boardId, taskId, (candidate) => ({
+				...candidate,
+				status: effectiveOutcome === "succeeded" ? "review" : "waiting",
+				runStatus: effectiveOutcome,
+				...(effectiveOutcome === "failed" || effectiveOutcome === "stopped"
+					? { runError: error?.slice(0, 500), lastResult: undefined }
+					: { runError: undefined, lastResult: detail.result?.slice(0, 32_000) }),
+				lastRunAt: now,
+				attempts: candidate.attempts?.map((attempt) =>
+					attempt.id === attemptId
+						? finishKanbanRunAttempt(attempt, effectiveOutcome, now, {
+								error,
+								result: detail.result,
+								stopReason: detail.stopReason,
+								evidence,
+							})
+						: attempt,
+				),
+				...(candidate.repeatMinutes && candidate.repeatMinutes > 0 && effectiveOutcome !== "stopped"
+					? { scheduledAt: nextRepeatAt(Date.parse(now), candidate.repeatMinutes) }
+					: {}),
+			}));
+			emitKanbanActivity(boardId, taskId, "settled", `Run ${effectiveOutcome}: ${eventReason.slice(0, 300)}`);
+			await session.settingsManager.flush();
+			emitKanbanRegistry(session.settingsManager.getKanbanRegistry());
+			await queueKanbanRunEvent({
+				version: 1,
+				timestamp: now,
+				event:
+					effectiveOutcome === "succeeded"
+						? "RUN_SUCCEEDED"
+						: effectiveOutcome === "stopped"
+							? "RUN_STOPPED"
+							: "RUN_FAILED",
+				boardId,
+				taskId,
+				sequence: runCount,
+				sender: effectiveOutcome === "stopped" ? "user" : "klerm",
+				recipient: "kanban-task",
+				status: effectiveOutcome,
+				reason: eventReason.slice(0, 500),
+				...(evidence ? { evidence } : {}),
+				...(detail.result ? { resultDigest: crypto.createHash("sha256").update(detail.result).digest("hex") } : {}),
+			});
+		} finally {
+			if (run) {
+				run.unsubscribe();
+				run.session.dispose();
+				await releaseKanbanWorkspace(
+					run.reservation,
+					session.settingsManager
+						.getKanbanRegistry()
+						.boards.find((board) => board.id === boardId)
+						?.tasks.find((task) => task.id === taskId)?.runCount ?? 1,
+					run.attemptId,
+				);
+				kanbanSessions.delete(key);
+				run.complete();
 			}
 		}
-		if (run?.stopped) effectiveOutcome = "stopped";
-		if (run) {
-			run.unsubscribe();
-			kanbanSessions.delete(key);
-			run.session.dispose();
-		}
-		const now = new Date().toISOString();
-		const registry = session.settingsManager.getKanbanRegistry();
-		const task = registry.boards
-			.find((board) => board.id === boardId)
-			?.tasks.find((candidate) => candidate.id === taskId);
-		const runCount = task?.runCount ?? 1;
-		const attemptId =
-			run?.attemptId ?? [...(task?.attempts ?? [])].reverse().find((attempt) => attempt.status === "running")?.id;
-		const error = effectiveOutcome === "stopped" ? "Task stopped by the user." : detail.error;
-		const eventReason =
-			effectiveOutcome === "succeeded"
-				? evidence?.outcome === "analysis-only"
-					? "Analysis completed; implementation and verification were not requested."
-					: "Implementation changes and successful checks recorded; awaiting review."
-				: (error ?? "Run failed.");
-		updateKanbanTask(boardId, taskId, (candidate) => ({
-			...candidate,
-			status: effectiveOutcome === "succeeded" ? "review" : "waiting",
-			runStatus: effectiveOutcome,
-			...(effectiveOutcome === "failed" || effectiveOutcome === "stopped"
-				? { runError: error?.slice(0, 500), lastResult: undefined }
-				: { runError: undefined, lastResult: detail.result?.slice(0, 32_000) }),
-			lastRunAt: now,
-			attempts: candidate.attempts?.map((attempt) =>
-				attempt.id === attemptId
-					? finishKanbanRunAttempt(attempt, effectiveOutcome, now, {
-							error,
-							result: detail.result,
-							stopReason: detail.stopReason,
-							evidence,
-						})
-					: attempt,
-			),
-			...(candidate.repeatMinutes && candidate.repeatMinutes > 0 && effectiveOutcome !== "stopped"
-				? { scheduledAt: nextRepeatAt(Date.parse(now), candidate.repeatMinutes) }
-				: {}),
-		}));
-		emitKanbanActivity(boardId, taskId, "settled", `Run ${effectiveOutcome}: ${eventReason.slice(0, 300)}`);
-		await session.settingsManager.flush();
-		emitKanbanRegistry(session.settingsManager.getKanbanRegistry());
-		void queueKanbanRunEvent({
-			version: 1,
-			timestamp: now,
-			event:
-				effectiveOutcome === "succeeded"
-					? "RUN_SUCCEEDED"
-					: effectiveOutcome === "stopped"
-						? "RUN_STOPPED"
-						: "RUN_FAILED",
-			boardId,
-			taskId,
-			sequence: runCount,
-			sender: effectiveOutcome === "stopped" ? "user" : "klerm",
-			recipient: "kanban-task",
-			status: effectiveOutcome,
-			reason: eventReason.slice(0, 500),
-			...(evidence ? { evidence } : {}),
-			...(detail.result ? { resultDigest: crypto.createHash("sha256").update(detail.result).digest("hex") } : {}),
-		});
 	};
 	const startKanbanRun = async (
 		boardId: string,
@@ -945,7 +1008,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		reason: string,
 	): Promise<KanbanRegistry> => {
 		const key = kanbanRunKey(boardId, taskId);
-		if (kanbanSessions.has(key)) throw new Error("This Kanban task is already running.");
+		if (shuttingDown || kanbanDraining)
+			throw new Error("Kanban is stopping active work; retry after the session change.");
+		if (kanbanSessions.has(key) || kanbanStarts.has(key))
+			throw new Error("This Kanban task is already starting or running.");
 		const registry = session.settingsManager.getKanbanRegistry();
 		const board = registry.boards.find((candidate) => candidate.id === boardId);
 		const storedTask = board?.tasks.find((candidate) => candidate.id === taskId);
@@ -959,8 +1025,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const missing = validateRunnableKanbanTask(task);
 		if (missing.length > 0) throw new Error(`Complete these required fields before running: ${missing.join(", ")}.`);
 		const brief = effectiveKanbanTaskPrompt(task);
-		const cwd = task.workspaceRoot.trim();
-		const before = await captureKanbanFolder(cwd);
 		const mode = kanbanMode(task.kind, brief);
 		const snapshot = [...session.modelRuntime.getAvailableSnapshot()];
 		const modelRef = task.model?.trim();
@@ -969,56 +1033,99 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const now = new Date().toISOString();
 		const runCount = (task.runCount ?? 0) + 1;
 		const attemptId = crypto.randomUUID();
-		const modelLabel = task.model ?? `${model.provider}/${model.id}`;
-		const attempt = createKanbanRunAttempt(task, attemptId, modelLabel, now);
-		attempt.mode = mode;
-		attempt.workspaceRoot = before.root;
-		attempt.agentName = personalAgent?.name ?? "Klerm";
-		attempt.steps = attempt.steps.map((step) =>
-			step.id === "execute"
-				? { ...step, label: mode === "build" ? "Implement file changes" : "Produce findings or a plan" }
-				: step,
-		);
-		attempt.steps.splice(3, 0, {
-			id: "verify",
-			label: "Run checks after the final modifying operation",
-			status: mode === "build" ? "pending" : "skipped",
-		});
-		updateKanbanTask(boardId, taskId, (candidate) => ({
-			...candidate,
-			status: "running",
-			runStatus: "running",
-			runCount,
-			runError: undefined,
-			lastResult: undefined,
-			runStartedAt: now,
-			scheduledAt: undefined,
-			attempts: [...(candidate.attempts ?? []), attempt].slice(-20),
-		}));
-		await session.settingsManager.flush();
-		const runningRegistry = session.settingsManager.getKanbanRegistry();
-		emitKanbanRegistry(runningRegistry);
-		void queueKanbanRunEvent({
-			version: 1,
-			timestamp: now,
-			event: "RUN_STARTED",
+		let finishStart = () => {};
+		const pending = {
 			boardId,
 			taskId,
-			sequence: runCount,
-			sender,
-			recipient: "kanban-task",
-			status: "running",
-			reason,
-			model: modelLabel,
-			...(personalAgent ? { personalBotId: personalAgent.id } : {}),
-		});
-		emitKanbanActivity(
-			boardId,
-			taskId,
-			"started",
-			`Run #${runCount}: ${mode} mode · ${before.root} · ${modelLabel}. ${reason}`,
-		);
+			stopped: false,
+			finished: new Promise<void>((resolve) => {
+				finishStart = resolve;
+			}),
+		};
+		kanbanStarts.set(key, pending);
+		let reservation: KanbanWorkspaceReservation | undefined;
+		let pendingSession: AgentSession | undefined;
+		let attemptRecorded = false;
+		const assertStartupActive = (): void => {
+			if (pending.stopped || shuttingDown || kanbanDraining)
+				throw new Error("Kanban start stopped before model execution.");
+		};
 		try {
+			reservation = await kanbanWorkspaces.acquire(
+				task.workspaceRoot.trim(),
+				{ boardId, taskId },
+				mode === "build" ? "write" : "read",
+			);
+			const cwd = reservation.workspaceRoot;
+			await queueKanbanRunEvent({
+				version: 1,
+				timestamp: now,
+				event: "WORKSPACE_RESERVED",
+				boardId,
+				taskId,
+				sequence: runCount,
+				attemptId,
+				sender: "klerm",
+				recipient: "kanban-task",
+				status: "reserved",
+				workspaceRoot: cwd,
+				mode,
+				reason: `Kanban workspace reserved for ${mode === "build" ? "exclusive writing" : "shared reading"}.`,
+			});
+			assertStartupActive();
+			const before = await captureKanbanFolder(cwd);
+			assertStartupActive();
+			const modelLabel = task.model ?? `${model.provider}/${model.id}`;
+			const attempt = createKanbanRunAttempt(task, attemptId, modelLabel, now);
+			attempt.mode = mode;
+			attempt.workspaceRoot = before.root;
+			attempt.agentName = personalAgent?.name ?? "Klerm";
+			attempt.steps = attempt.steps.map((step) =>
+				step.id === "execute"
+					? { ...step, label: mode === "build" ? "Implement file changes" : "Produce findings or a plan" }
+					: step,
+			);
+			attempt.steps.splice(3, 0, {
+				id: "verify",
+				label: "Run checks after the final modifying operation",
+				status: mode === "build" ? "pending" : "skipped",
+			});
+			updateKanbanTask(boardId, taskId, (candidate) => ({
+				...candidate,
+				status: "running",
+				runStatus: "running",
+				runCount,
+				runError: undefined,
+				lastResult: undefined,
+				runStartedAt: now,
+				scheduledAt: undefined,
+				attempts: [...(candidate.attempts ?? []), attempt].slice(-20),
+			}));
+			attemptRecorded = true;
+			await session.settingsManager.flush();
+			const runningRegistry = session.settingsManager.getKanbanRegistry();
+			emitKanbanRegistry(runningRegistry);
+			void queueKanbanRunEvent({
+				version: 1,
+				timestamp: now,
+				event: "RUN_STARTED",
+				boardId,
+				taskId,
+				sequence: runCount,
+				sender,
+				recipient: "kanban-task",
+				status: "running",
+				reason,
+				model: modelLabel,
+				...(personalAgent ? { personalBotId: personalAgent.id } : {}),
+			});
+			emitKanbanActivity(
+				boardId,
+				taskId,
+				"started",
+				`Run #${runCount}: ${mode} mode · ${before.root} · ${modelLabel}. ${reason}`,
+			);
+			assertStartupActive();
 			const sessionDir = join(personalBotStorageDir, "kanban", board.id, task.id, "sessions");
 			const taskSessionManager = SessionManager.create(cwd, sessionDir);
 			const taskSettings = SettingsManager.inMemory();
@@ -1051,6 +1158,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				],
 			});
 			await resourceLoader.reload();
+			assertStartupActive();
 			const created = await createAgentSession({
 				cwd,
 				agentDir: personalBotStorageDir,
@@ -1062,7 +1170,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				sessionManager: taskSessionManager,
 				...(mode !== "build" ? { tools: ["read", "grep", "find", "ls", "webfetch"] } : {}),
 			});
+			pendingSession = created.session;
+			assertStartupActive();
 			await created.session.bindExtensions({ mode: "rpc" });
+			assertStartupActive();
 			let operationSequence = 0;
 			const toolCalls = new Map<string, { name: string; args: unknown; start: number }>();
 			const unsubscribe = created.session.subscribe((event) => {
@@ -1133,6 +1244,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					emitKanbanActivity(boardId, taskId, "message", "Assistant message completed.");
 				}
 			});
+			let complete = () => {};
 			kanbanSessions.set(key, {
 				session: created.session,
 				boardId,
@@ -1147,60 +1259,109 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				checks: [],
 				inspected: false,
 				failedChecks: new Set(),
+				reservation,
+				completion: new Promise<void>((resolve) => {
+					complete = resolve;
+				}),
+				complete: () => complete(),
+				settling: false,
 				unsubscribe,
 			});
+			reservation = undefined;
+			pendingSession = undefined;
 			const messageStartIndex = created.session.messages.length;
 			void created.session
 				.prompt(brief, { expandPromptTemplates: false, source: "rpc" })
-				.then(() => {
-					advanceKanbanAttemptPhase(boardId, taskId, attemptId, "report");
-					const assistant = [...created.session.messages.slice(messageStartIndex)]
-						.reverse()
-						.find((message): message is AssistantMessage => message.role === "assistant");
-					const text = assistantMessageText(assistant);
-					if (!assistant) {
-						void settleKanbanRun(boardId, taskId, "failed", {
-							error: created.session.state.errorMessage ?? "Run settled without an assistant response.",
-						});
-						return;
-					}
-					if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
-						void settleKanbanRun(boardId, taskId, "failed", {
-							error:
-								assistant.errorMessage ??
-								created.session.state.errorMessage ??
-								(assistant.stopReason === "aborted" ? "Model run was aborted." : "Provider returned an error."),
-							...(text ? { result: text } : {}),
+				.then(
+					() => {
+						advanceKanbanAttemptPhase(boardId, taskId, attemptId, "report");
+						const assistant = [...created.session.messages.slice(messageStartIndex)]
+							.reverse()
+							.find((message): message is AssistantMessage => message.role === "assistant");
+						const text = assistantMessageText(assistant);
+						if (!assistant) {
+							return settleKanbanRun(boardId, taskId, "failed", {
+								error: created.session.state.errorMessage ?? "Run settled without an assistant response.",
+							});
+						}
+						if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
+							return settleKanbanRun(boardId, taskId, "failed", {
+								error:
+									assistant.errorMessage ??
+									created.session.state.errorMessage ??
+									(assistant.stopReason === "aborted"
+										? "Model run was aborted."
+										: "Provider returned an error."),
+								...(text ? { result: text } : {}),
+								stopReason: assistant.stopReason,
+							});
+						}
+						if (!text) {
+							return settleKanbanRun(boardId, taskId, "failed", {
+								error: "Assistant completed without final text.",
+								stopReason: assistant.stopReason,
+							});
+						}
+						return settleKanbanRun(boardId, taskId, "succeeded", {
+							result: text,
 							stopReason: assistant.stopReason,
 						});
-						return;
-					}
-					if (!text) {
-						void settleKanbanRun(boardId, taskId, "failed", {
-							error: "Assistant completed without final text.",
-							stopReason: assistant.stopReason,
+					},
+					(promptError) => {
+						return settleKanbanRun(boardId, taskId, "failed", {
+							error: promptError instanceof Error ? promptError.message : String(promptError),
 						});
-						return;
-					}
-					void settleKanbanRun(boardId, taskId, "succeeded", {
-						result: text,
-						stopReason: assistant.stopReason,
-					});
-				})
-				.catch((promptError) => {
-					void settleKanbanRun(boardId, taskId, "failed", {
-						error: promptError instanceof Error ? promptError.message : String(promptError),
+					},
+				)
+				.catch((settlementError) => {
+					output({
+						type: "backend_error",
+						message: `Could not settle the Kanban run: ${settlementError instanceof Error ? settlementError.message : String(settlementError)}`,
 					});
 				});
 		} catch (setupError) {
-			await settleKanbanRun(boardId, taskId, "failed", {
-				error: setupError instanceof Error ? setupError.message : String(setupError),
-			});
+			if (attemptRecorded) {
+				await settleKanbanRun(boardId, taskId, pending.stopped ? "stopped" : "failed", {
+					error: setupError instanceof Error ? setupError.message : String(setupError),
+				});
+			} else {
+				await queueKanbanRunEvent({
+					version: 1,
+					timestamp: new Date().toISOString(),
+					event: "RUN_BLOCKED",
+					boardId,
+					taskId,
+					sequence: runCount,
+					attemptId,
+					sender,
+					recipient: "kanban-task",
+					status: "blocked",
+					mode,
+					workspaceRoot: reservation?.workspaceRoot ?? task.workspaceRoot,
+					reason: (setupError instanceof Error ? setupError.message : String(setupError)).slice(0, 500),
+					...(setupError instanceof KanbanWorkspaceBusyError
+						? { blockedBy: { ...setupError.owner, workspaceRoot: setupError.workspaceRoot } }
+						: {}),
+				});
+				throw setupError;
+			}
+		} finally {
+			pendingSession?.dispose();
+			if (reservation) await releaseKanbanWorkspace(reservation, runCount, attemptId);
+			kanbanStarts.delete(key);
+			finishStart();
 		}
 		return session.settingsManager.getKanbanRegistry();
 	};
 	const stopKanbanRun = async (boardId: string, taskId: string): Promise<KanbanRegistry> => {
-		const run = kanbanSessions.get(kanbanRunKey(boardId, taskId));
+		const key = kanbanRunKey(boardId, taskId);
+		const run = kanbanSessions.get(key);
+		const starting = kanbanStarts.get(key);
+		if (!run && starting) {
+			starting.stopped = true;
+			await starting.finished;
+			return session.settingsManager.getKanbanRegistry();
+		}
 		if (!run) {
 			const registry = session.settingsManager.getKanbanRegistry();
 			const task = registry.boards
@@ -1233,6 +1394,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		run.stopped = true;
 		emitKanbanActivity(boardId, taskId, "stopping", "Stop requested by the user.");
 		await run.session.abort();
+		await run.completion;
 		return session.settingsManager.getKanbanRegistry();
 	};
 	const handlePersonalBotEvent = (event: CodingHarnessAdapterEvent): boolean => {
@@ -3159,12 +3321,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			}
 		}
 	}
+	let kanbanSchedulerRunning = false;
 	const kanbanScheduler = setInterval(() => {
+		if (kanbanSchedulerRunning || kanbanDraining || shuttingDown) return;
+		kanbanSchedulerRunning = true;
 		void (async () => {
 			try {
 				const registry = session.settingsManager.getKanbanRegistry();
-				const due = findDueKanbanTasks(registry, Date.now()).slice(0, 3);
+				const due = findDueKanbanTasks(registry, Date.now());
+				let started = 0;
 				for (const item of due) {
+					if (started >= 3 || kanbanDraining || shuttingDown) break;
 					try {
 						await startKanbanRun(
 							item.boardId,
@@ -3172,12 +3339,15 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 							"klerm-scheduler",
 							"Scheduled Kanban run reached its start time.",
 						);
+						started += 1;
 					} catch {
 						// The task may have been started manually in the meantime.
 					}
 				}
 			} catch {
 				// Scheduler ticks must never break the RPC loop.
+			} finally {
+				kanbanSchedulerRunning = false;
 			}
 		})();
 	}, 20_000);
@@ -3471,7 +3641,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			case "set_kanban_registry": {
 				const previous = session.settingsManager.getKanbanRegistry();
 				for (const board of previous.boards) {
-					for (const task of board.tasks.filter((item) => item.runStatus === "running")) {
+					for (const task of board.tasks.filter(
+						(item) => item.runStatus === "running" || kanbanStarts.has(kanbanRunKey(board.id, item.id)),
+					)) {
 						const next = command.registry.boards
 							.find((item) => item.id === board.id)
 							?.tasks.find((item) => item.id === task.id);
@@ -3513,7 +3685,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				if (!board) return error(id, "delete_kanban_board", "Kanban board not found.", "INVALID_KANBAN_BOARD");
 				if (
 					board.tasks.some((task) => task.runStatus === "running") ||
-					[...kanbanSessions.values()].some((run) => run.boardId === board.id)
+					[...kanbanSessions.values()].some((run) => run.boardId === board.id) ||
+					[...kanbanStarts.values()].some((start) => start.boardId === board.id)
 				)
 					return error(
 						id,
@@ -3552,7 +3725,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 						id,
 						"run_kanban_task",
 						runError instanceof Error ? runError.message : String(runError),
-						"KANBAN_RUN_FAILED",
+						runError instanceof KanbanWorkspaceBusyError ? "KANBAN_WORKSPACE_BUSY" : "KANBAN_RUN_FAILED",
 					);
 				}
 			}

@@ -64,6 +64,7 @@
 
 ### Fixed
 
+- Fixed concurrent Kanban runs interfering with each other's source evidence by reserving overlapping canonical folders per backend, allowing shared read-only work, draining reservations on Stop/session changes, and letting independent scheduled folders progress past blocked cards.
 - Fixed Kanban builds reporting completion without source changes and successful post-mutation checks; persisted mode, folder, file/command activity and review evidence, retained completed-card timelines and longer reports, and added guarded board deletion.
 - Fixed Browser Task stopping after explicit navigation by preserving the original task, disabling duplicate browser-use URL opening, forwarding bounded screenshots to image-capable models, and tying the visible cursor to actual click/input/scroll dispatch.
 - Fixed shared-memory preset selection overwriting the reusable default memory, kept default edits from deselecting an active saved memory, and redesigned desktop Memory settings around a persistent default and separate saved-memory flow.
