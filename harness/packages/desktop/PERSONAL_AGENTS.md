@@ -14,8 +14,9 @@ conversation histories.
 
 ## Browser sessions
 
-The Browser workspace has its own left session list: New, rename with Enter and
-delete. These operations do not create or switch ordinary coding sessions.
+The Browser workspace has its own left session list with New and AI-proposed
+titles from the first step update. These operations do not create or switch
+ordinary coding sessions. There is no inline rename/delete row.
 Each browser session owns a different CEF surface/worker and its selected
 Personal Agent. Names are stored in settings; recent chat text and selection are
 stored under the browser session ID in desktop local storage. Current page,
@@ -38,8 +39,10 @@ kanban_create and kanban_run in the agent's chat. Created cards are Planned and
 assigned to that agent in the current workspace; creation does not execute work.
 Chat-triggered runs accept only cards assigned to that same agent.
 
-Settings > Agents can link a Klerm slot to a Personal Agent. Its model selector
-becomes read-only and the backend resolves model/effort from the agent. Slot
+Settings > Agents can link a Klerm slot to a Personal Agent. The model selector
+remains usable in Settings and the composer: selecting a model updates the
+linked Personal Agent, so there is still one model source. Reasoning remains
+configured on that agent. The backend resolves model/effort from it. Slot
 Plan/Build role and tools remain workspace-specific. Native external harnesses
 retain their own model namespaces and authentication; selecting a Klerm Personal
 Agent binds a Klerm slot, not an external harness's account.
@@ -170,13 +173,16 @@ cd /home/abro/Desktop/Klerm/harness
 
 1. Open Personal Bots, choose/create an agent, and select its model and effort.
    In AI settings enable Browser access and Kanban access, then save.
+   In the chat, model and thinking selectors sit inside the composer next to
+   Send rather than in a separate row above the text field. Changing either
+   persists to the same Personal Agent without resetting its conversation.
 2. In its chat ask: "Use browser_task to open YouTube and search for jazz."
    Confirm the small browser appears, Expand enlarges it, and action approval,
    human takeover, Continue and Stop apply to this bot's browser.
 3. Open Browser workspace. Select the agent, run a task, create another Browser
    session and verify it starts with a separate page/chat. Switching back should
-   restore the first page while the app stays open. Rename a session with Enter;
-   verify the ordinary coding-session list is unchanged.
+    restore the first page while the app stays open. Its title should change
+    from New browser to the first AI step; the coding-session list stays unchanged.
 4. Ask the agent to create a planned Kanban card. Open Kanban and verify the card
    is assigned to that agent. Choose it on another card, run it, and inspect the
    captured model/effort in its attempt. Disable Kanban access and verify a new
@@ -192,6 +198,13 @@ Logs: .klerm/browser-events.jsonl includes browser owner/run and personalBotId;
 records personal-chat lifecycle. Native Personal Bot sessions retain ordered tool
 calls/results. No private-input observation lock is provided by this work; the
 separate PRIVATE_INPUT_PLAN.md still describes that future boundary.
+
+Transient pointer-shake takeover alone resumes after a 3-second grace period
+and re-observes the page. Explicit Take control, clicks, CAPTCHA and login
+handoffs do not auto-resume. Browser workspace does not repeat the Personal
+Agent model/effort beneath the picker. Profile level is a prompt hint, not a
+model-strength control. Kanban cards keep Run/Stop/Retry on-card and open a
+fixed overlay for task editing without moving the board.
 
 Automated registry, RPC and coordinator checks use fake providers/workers,
 including personal-chat card creation, opt-in browser tool invocation and

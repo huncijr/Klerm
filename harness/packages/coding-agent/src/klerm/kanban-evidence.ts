@@ -35,7 +35,19 @@ export function kanbanMode(kind: KanbanTaskKind, brief: string): KanbanMode {
 		: "plan";
 }
 
-const ignored = new Set([".git", ".klerm", "node_modules", ".venv", "dist", "build", "target", ".next", "__pycache__"]);
+const ignored = new Set([
+	".git",
+	".klerm",
+	".assets",
+	".cache",
+	"node_modules",
+	".venv",
+	"dist",
+	"build",
+	"target",
+	".next",
+	"__pycache__",
+]);
 /** Snapshot source files even in an empty, non-Git task folder. Never follow symlinks. */
 export async function captureKanbanFolder(cwd: string): Promise<KanbanFolderSnapshot> {
 	const root = await realpath(cwd);

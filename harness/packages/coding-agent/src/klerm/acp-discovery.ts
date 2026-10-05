@@ -18,7 +18,7 @@ export interface AcpAgentScan {
 
 export type AcpScanRunner = (kind: CodingHarnessScanKind) => Promise<AcpAgentScan | undefined>;
 
-export type CodingHarnessScanKind = "pi" | "claude-code" | "codex" | "opencode" | "cline";
+export type CodingHarnessScanKind = "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes";
 
 /** Known ACP adapter commands per harness kind, mirroring the agents Zed connects to. */
 export const ACP_AGENT_COMMANDS: Readonly<Record<CodingHarnessScanKind, readonly string[]>> = {
@@ -27,6 +27,7 @@ export const ACP_AGENT_COMMANDS: Readonly<Record<CodingHarnessScanKind, readonly
 	codex: ["codex-acp"],
 	opencode: ["opencode-acp"],
 	cline: ["cline-acp"],
+	hermes: ["hermes"],
 };
 
 const ACP_INITIALIZE_TIMEOUT_MS = 5_000;
@@ -37,7 +38,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-export async function probeAcpAgent(command: string, args: readonly string[] = []): Promise<AcpAgentScan | undefined> {
+export async function probeAcpAgent(
+	command: string,
+	args: readonly string[] = [],
+	timeoutMs = ACP_INITIALIZE_TIMEOUT_MS,
+): Promise<AcpAgentScan | undefined> {
 	return new Promise((resolve) => {
 		let child: ReturnType<typeof spawn>;
 		try {
@@ -65,7 +70,7 @@ export async function probeAcpAgent(command: string, args: readonly string[] = [
 			resolve(scan);
 		};
 
-		timer = setTimeout(() => finish(), ACP_INITIALIZE_TIMEOUT_MS);
+		timer = setTimeout(() => finish(), timeoutMs);
 		child.on("error", () => finish());
 		out.on("data", (chunk: Buffer) => {
 			stdout += chunk.toString("utf8");
@@ -83,7 +88,7 @@ export async function probeAcpAgent(command: string, args: readonly string[] = [
 					continue;
 				}
 				const record = asRecord(message);
-				if (!record || record.id !== 0) continue;
+				if (!record || record.id !== 1) continue;
 				if (record.error) return finish();
 				const result = asRecord(record.result);
 				if (!result || typeof result.protocolVersion !== "number") return finish();
@@ -103,11 +108,11 @@ export async function probeAcpAgent(command: string, args: readonly string[] = [
 		stdin.write(
 			`${JSON.stringify({
 				jsonrpc: "2.0",
-				id: 0,
+				id: 1,
 				method: "initialize",
 				params: {
 					protocolVersion: ACP_PROTOCOL_VERSION,
-					clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
+					clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
 					clientInfo: { name: "klerm", title: "Klerm", version: "0.0.3" },
 				},
 			})}\n`,
@@ -118,7 +123,12 @@ export async function probeAcpAgent(command: string, args: readonly string[] = [
 /** Try every known ACP adapter command for a harness kind; the first completed handshake wins. */
 export async function scanAcpHarness(kind: CodingHarnessScanKind): Promise<AcpAgentScan | undefined> {
 	for (const command of ACP_AGENT_COMMANDS[kind] ?? []) {
-		const scan = await probeAcpAgent(command);
+		// Hermes cold-starts a Python runtime before accepting ACP frames.
+		const scan = await probeAcpAgent(
+			command,
+			kind === "hermes" ? ["acp"] : [],
+			kind === "hermes" ? 15_000 : ACP_INITIALIZE_TIMEOUT_MS,
+		);
 		if (scan) return scan;
 	}
 	return undefined;

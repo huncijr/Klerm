@@ -11,6 +11,15 @@ license = "MIT"
 name = "klerm_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+browser-host = ["dep:cef", "dep:png", "dep:base64"]
+
+[[bin]]
+name = "klerm-browser-host"
+path = "src/bin/klerm-browser-host.rs"
+required-features = ["browser-host"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
@@ -21,6 +30,6 @@ tauri = { version = "2.11.5", default-features = false, features = ["wry"] }
 tauri-plugin-dialog = "2.7.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cef = { version = "=154.0.0", default-features = false, features = ["sandbox"] }
-png = "=0.17.16"
-base64 = "=0.23.1"
+cef = { version = "=154.0.0", default-features = false, features = ["sandbox"], optional = true }
+png = { version = "=0.17.16", optional = true }
+base64 = { version = "=0.23.1", optional = true }

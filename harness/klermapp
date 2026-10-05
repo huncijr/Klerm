@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# macOS has neither GNU realpath/sha256sum nor setsid. Use the shared Node launcher.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	SOURCE="${BASH_SOURCE[0]}"
+	for _ in {1..40}; do
+		[[ -L "$SOURCE" ]] || break
+		DIRECTORY="$(cd -- "$(dirname -- "$SOURCE")" && pwd -P)"
+		TARGET="$(readlink "$SOURCE")"
+		if [[ "$TARGET" == /* ]]; then SOURCE="$TARGET"; else SOURCE="$DIRECTORY/$TARGET"; fi
+	done
+	HARNESS="$(cd -- "$(dirname -- "$SOURCE")" && pwd -P)"
+	exec node "$HARNESS/packages/desktop/scripts/launch-desktop.mjs" "$@"
+fi
+
 SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
 HARNESS="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 DESKTOP="$HARNESS/packages/desktop"
@@ -14,14 +27,14 @@ LAUNCH_CWD="$PWD"
 
 mkdir -p "$LOG_DIR"
 
-DESKTOP_SOURCE_HASH="$(find "$DESKTOP/src-tauri" -path "$DESKTOP/src-tauri/target" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+DESKTOP_SOURCE_HASH="$(find "$DESKTOP/src-tauri" -path "$DESKTOP/src-tauri/target" -prune -o -path "$DESKTOP/src-tauri/.assets" -prune -o -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 DESKTOP_BUILT_HASH=""
 if [[ -f "$DESKTOP_SOURCE_STAMP" ]]; then
 	DESKTOP_BUILT_HASH="$(<"$DESKTOP_SOURCE_STAMP")"
 fi
 if [[ ! -x "$BINARY" ]] || { [[ "$DESKTOP_SOURCE_HASH" != "$DESKTOP_BUILT_HASH" ]] && [[ "${KLERM_REBUILD_DESKTOP_APP:-}" == "1" ]]; }; then
 	printf 'Rebuilding the Klerm desktop app...\n'
-	if cargo build --manifest-path "$DESKTOP/src-tauri/Cargo.toml"; then
+	if node "$DESKTOP/scripts/prepare-desktop.mjs" --dev --no-server && cargo build --manifest-path "$DESKTOP/src-tauri/Cargo.toml" --bin klerm-desktop; then
 		printf '%s\n' "$DESKTOP_SOURCE_HASH" >"$DESKTOP_SOURCE_STAMP"
 	elif [[ -x "$BINARY" ]]; then
 		printf 'Klerm desktop app rebuild failed; using the existing debug binary. Native app icons update after the next successful Tauri rebuild.\n' >&2
@@ -49,9 +62,7 @@ pkill -f -- "$BINARY" 2>/dev/null || true
 pkill -f -- "$HARNESS/node_modules/.bin/vite" 2>/dev/null || true
 
 for _ in {1..20}; do
-	if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
-		break
-	fi
+	if ! curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then break; fi
 	sleep 0.1
 done
 
@@ -60,9 +71,7 @@ setsid nohup npm --prefix "$HARNESS" run dev --workspace=@klerm/desktop \
 VITE_PID=$!
 
 for _ in {1..50}; do
-	if curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then
-		break
-	fi
+	if curl --fail --silent --show-error "http://localhost:1420/" >/dev/null 2>&1; then break; fi
 	sleep 0.1
 done
 
@@ -74,5 +83,4 @@ fi
 
 setsid nohup env KLERM_DESKTOP_CWD="$LAUNCH_CWD" "$BINARY" \
 	>"$LOG_DIR/app.log" 2>&1 </dev/null &
-
 printf 'Klerm app started for %s.\n' "$LAUNCH_CWD"

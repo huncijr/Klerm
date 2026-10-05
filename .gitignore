@@ -28,6 +28,7 @@ npm-debug.log*
 *.swp
 .idea/
 .vscode/
+/.opencode/
 .~lock.*#
 
 # Logs
@@ -47,3 +48,18 @@ npm-debug.log*
 /AGENTS.md
 /PLAN.md
 /APP_PLAN.md
+/SERVER_PLAN.md
+
+# Self-hosted deployment: machine-specific state, credentials, and backups
+/deploy/docker/.env
+/deploy/docker/.env.*
+!/deploy/docker/.env.example
+/deploy/docker/compose.override.yaml
+/deploy/docker/compose.override.yml
+/deploy/docker/data/
+/deploy/docker/workspaces/
+/deploy/docker/harness-state/
+/deploy/docker/secrets/
+/deploy/docker/certs/
+/deploy/docker/backups/
+/deploy/local/

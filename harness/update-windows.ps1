@@ -43,7 +43,7 @@ function Sync-SourceToLocalBuild {
 	Write-Host "Syncing source to local Windows build directory: $harnessDir"
 	$sourceModelData = Join-Path $sourceDir "packages\ai\src\providers\data"
 	$localModelData = Join-Path $harnessDir "packages\ai\src\providers\data"
-	$robocopyArgs = @($sourceDir, $harnessDir, "/MIR", "/R:2", "/W:1", "/XD", "node_modules", ".cache", "dist", "target", ".git", $sourceModelData, $localModelData, "/XF", "*.log", "/NFL", "/NDL", "/NJH", "/NJS")
+	$robocopyArgs = @($sourceDir, $harnessDir, "/MIR", "/R:2", "/W:1", "/XD", "node_modules", ".cache", ".assets", "dist", "target", ".git", $sourceModelData, $localModelData, "/XF", "*.log", "/NFL", "/NDL", "/NJH", "/NJS")
 	& robocopy @robocopyArgs
 	if ($LASTEXITCODE -gt 7) { exit $LASTEXITCODE }
 }

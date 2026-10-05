@@ -1898,7 +1898,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			adapterSession &&
 			(adapterSession.harness !== target.harness ||
 				adapterSession.model !== target.model ||
-				adapterSession.role !== configuredAgent.role)
+				adapterSession.role !== configuredAgent.role ||
+				(adapterSession.harness === "hermes" &&
+					adapterSession.executionProfile !== (configuredAgent.executionProfile ?? "native")))
 		) {
 			await codingHarnessAdapters.get(adapterSession.harness)?.closeSession(adapterSession);
 			codingHarnessSessions.delete(target.agentId);
@@ -2744,6 +2746,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		const builder = mode === "prompt-together" ? rankedPeers[0] : undefined;
 		const reviewers = mode === "prompt-together" ? rankedPeers.slice(1) : [];
 		if (mode === "prompt-together" && (!builder || reviewers.length === 0)) return undefined;
+		if (
+			mode === "prompt-together" &&
+			[coordinator, ...reviewers].some((agent) => !agent.adapterCapabilities.roleEnforcement)
+		) {
+			throw new Error("Prompt Together requires enforced read-only Planner and Reviewer adapters.");
+		}
 		if (mode === "prompt-together") {
 			if (!builder) return undefined;
 			coordinator.role = "planner";
@@ -3785,7 +3793,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				let sessions = session.settingsManager.getBrowserSessions();
 				if (!sessions.length)
 					sessions = session.settingsManager.setBrowserSessions([
-						{ id: `browser-${crypto.randomUUID()}`, name: "Browser 1" },
+						{ id: `browser-${crypto.randomUUID()}`, name: "New browser" },
 					]);
 				await session.settingsManager.flush();
 				return success(id, "get_browser_sessions", { sessions });
@@ -3799,7 +3807,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					...sessions,
 					{
 						id: `browser-${crypto.randomUUID()}`,
-						name: command.name?.trim() || `Browser ${sessions.length + 1}`,
+						name: command.name?.trim() || "New browser",
 					},
 				]);
 				await session.settingsManager.flush();

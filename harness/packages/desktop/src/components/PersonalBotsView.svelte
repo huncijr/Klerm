@@ -20,6 +20,9 @@
 		harnessSetup,
 		conversations,
 		browserRuns,
+		browserOpen,
+		onopenbrowser,
+		onclosebrowser,
 		onbrowserattach,
 		onbrowsercommand,
 		busy = false,
@@ -39,6 +42,9 @@
 		harnessSetup?: CodingHarnessSetup;
 		conversations: Record<string, PersonalBotConversation | undefined>;
 		browserRuns: Record<string, BrowserRunState>;
+		browserOpen: Record<string, boolean>;
+		onopenbrowser: (botId: string) => Promise<void>;
+		onclosebrowser: (botId: string) => void;
 		onbrowserattach: (botId: string, cdpUrl: string) => Promise<void>;
 		onbrowsercommand: (command: string, input: Record<string, unknown>) => Promise<void>;
 		busy?: boolean;
@@ -400,30 +406,32 @@
 						</div>
 					</div>
 				{/if}
-				{#if selected.browserEnabled}{#key selected.id}<PersonalBrowserPanel botId={selected.id} run={browserRuns[selected.id]} onattach={onbrowserattach} oncommand={onbrowsercommand} />{/key}{/if}
+				{#if selected.browserEnabled && (browserOpen[selected.id] || browserRuns[selected.id]?.status === "running" || browserRuns[selected.id]?.status === "waiting-approval")}
+					<div class="mt-3"><button type="button" class="mb-1 text-[9px] text-[#8fc4ed]" onclick={() => onclosebrowser(selected.id)}>Hide browser</button>{#key selected.id}<PersonalBrowserPanel botId={selected.id} run={browserRuns[selected.id]} onattach={onbrowserattach} oncommand={onbrowsercommand} />{/key}</div>
+				{:else if selected.browserEnabled}<button type="button" class="mt-3 rounded-md border border-[#34424d] px-2 py-1 text-[9px] text-[#8fc4ed]" onclick={() => void onopenbrowser(selected.id)}>Open browser</button>{/if}
 			</div>
 
 			<div class="border-t border-[#20262a] px-5 py-4">
-				<div class="mx-auto mb-2 flex max-w-3xl items-end gap-2 rounded-lg border border-[#253036] bg-[#0d1316] px-2.5 py-2">
-					<div class="min-w-0 flex-1"><span class="mb-1 block text-[8px] font-semibold uppercase tracking-[0.12em] text-[#68747a]">Model & thinking</span><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={busy || klermHarness?.available !== true} placeholder="Select model" onchange={(value: string) => { model = value; void save(); }} /></div>
-					<label class="w-24 shrink-0"><span class="mb-1 block text-[8px] font-semibold uppercase tracking-[0.12em] text-[#68747a]">Thinking</span><select class="h-8 w-full rounded-md border border-[#293238] bg-[#080d10] px-2 text-[9px] text-white" value={effort} disabled={busy} onchange={(event) => { effort = event.currentTarget.value as PersonalBot["effort"]; void save(); }}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
-				</div>
 				{#if !isRunnable(selected)}
-					<p class="mx-auto mb-2 max-w-3xl text-[10px] text-[#7e8a90]">Select a Klerm model above to start chatting.</p>
+					<p class="mx-auto mb-2 max-w-3xl text-[10px] text-[#7e8a90]">Choose a model beside Send to start chatting.</p>
 				{/if}
-				<div class="mx-auto flex max-w-3xl items-end gap-2 rounded-xl border border-[#2a3439] bg-[#11171a] p-2 focus-within:border-[#4e6964]">
+				<div class="mx-auto flex max-w-3xl flex-col gap-1.5 rounded-xl border border-[#2a3439] bg-[#11171a] p-2 focus-within:border-[#4e6964]">
 					<textarea
-						class="max-h-32 min-h-10 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-[12px] text-[#e5e9ea] outline-none placeholder:text-[#4f5a60]"
+						class="max-h-32 min-h-10 w-full resize-none border-0 bg-transparent px-2 py-2 text-[12px] text-[#e5e9ea] outline-none placeholder:text-[#4f5a60]"
 						placeholder={`Message ${selected.name}`}
 						bind:value={chatDraft}
 						disabled={!isRunnable(selected) || conversationBusy}
 						onkeydown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
 					></textarea>
+					<div class="flex min-w-0 items-center justify-end gap-1.5">
+						<div class="w-[min(210px,50%)] min-w-0" title="Model"><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={busy || klermHarness?.available !== true || conversationBusy} placeholder="Model" onchange={(value: string) => { model = value; void save(); }} /></div>
+						<label class="w-[74px] shrink-0"><span class="sr-only">Thinking</span><select aria-label="Thinking" class="h-8 w-full rounded-md border border-[#293238] bg-[#080d10] px-1 text-[9px] text-white" value={effort} disabled={busy || conversationBusy} onchange={(event) => { effort = event.currentTarget.value as PersonalBot["effort"]; void save(); }}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
 					{#if conversationBusy}
-						<button type="button" class="rounded-lg bg-[#4d2929] px-3 py-2 text-[10px] font-semibold text-[#f1b4b4]" onclick={() => onabort(selected.id)}>Stop</button>
+						<button type="button" class="h-8 rounded-lg bg-[#4d2929] px-3 text-[10px] font-semibold text-[#f1b4b4]" onclick={() => onabort(selected.id)}>Stop</button>
 					{:else}
-						<button type="button" class="rounded-lg bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#13201c] disabled:opacity-30" disabled={!chatDraft.trim() || !isRunnable(selected)} onclick={send}>Send</button>
+						<button type="button" class="h-8 rounded-lg bg-[#dce8e4] px-3 text-[10px] font-semibold text-[#13201c] disabled:opacity-30" disabled={!chatDraft.trim() || !isRunnable(selected)} onclick={send}>Send</button>
 					{/if}
+					</div>
 				</div>
 			</div>
 		{:else if creating}
@@ -465,7 +473,7 @@
 					<div class="space-y-3">
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile name</span><input class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white outline-none focus:border-[#537269]" maxlength="40" bind:value={profileName} /></label>
 						<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[13px] ${profileFace === option ? "border-[#69cdb4] bg-[#163029] text-[#9ce5d2]" : "border-[#293238] bg-[#080d10] text-[#748087]"}`} onclick={() => profileFace = option}>{profileIcon(option)}</button>{/each}</div></div>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Strength level</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileLevel}>{#each [1, 2, 3, 4, 5] as value}<option value={value}>{value} / 5</option>{/each}</select></label>
+						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile level</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileLevel}>{#each [1, 2, 3, 4, 5] as value}<option value={value}>{value} / 5</option>{/each}</select><span class="mt-1 block text-[9px] text-[#68747a]">Profile hint in the AI instructions; it does not change model capability or reasoning.</span></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Behaviour</span><textarea class="min-h-24 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileBehaviour}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Discussion workflow</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileWorkPlan}></textarea></label>
 						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="2000" bind:value={profileMemory}></textarea></label>

@@ -23,7 +23,7 @@
 		Sparkles,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
-	import { visibleBrowserActivity } from "../lib/browser-presentation.ts";
+	import { mayAutoResumeBrowser, visibleBrowserActivity } from "../lib/browser-presentation.ts";
 	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, PersonalBot, ThinkingLevel } from "../lib/model.ts";
 
 	let {
@@ -93,6 +93,18 @@
 	let retryHost: () => void = () => undefined;
 	let browserSurface: HTMLButtonElement;
 	let commandBusy = $state(false);
+	let transientResumePending = false;
+	$effect(() => {
+		const paused = mayAutoResumeBrowser(run?.control, run?.controlReason, run?.status);
+		if (!paused) return;
+		const timer = window.setTimeout(() => {
+			if (!transientResumePending) {
+				transientResumePending = true;
+				void onresume().catch(pushError).finally(() => (transientResumePending = false));
+			}
+		}, 3000);
+		return () => window.clearTimeout(timer);
+	});
 	let messageId = 0;
 	let localRunId = $state<string | undefined>(undefined);
 	let renderedSettlement = $state<string | undefined>(undefined);
@@ -511,15 +523,14 @@
 		<button type="button" aria-label="Back to Klerm" class="grid h-9 w-9 place-items-center rounded-xl border border-[#303c43] bg-[#10161a] text-[#a7b3b8] transition hover:-translate-x-0.5 hover:border-[#617078] hover:text-white" onclick={onclose}><ArrowLeft size={15} /></button>
 		<div class="flex min-w-0 items-center gap-2.5">
 			<div class="grid h-8 w-8 place-items-center rounded-xl border border-[rgba(190,240,112,.3)] bg-[linear-gradient(145deg,rgba(178,232,92,.16),rgba(72,103,50,.08))] text-[#cef49b]"><Globe2 size={16} /></div>
-			<div><p class="m-0 text-[12px] font-semibold text-[#f0f5f5]">Klerm <span class="font-normal text-[#617178]">/</span> Browser Task</p><p class="m-0 font-mono text-[7px] tracking-[.15em] text-[#60747a] uppercase">Session browser / guarded actions</p></div>
+			<div><p class="m-0 text-[12px] font-semibold text-[#f0f5f5]">Klerm <span class="font-normal text-[#617178]">/</span> Browser Task</p></div>
 		</div>
-		<div class={`ml-auto hidden items-center gap-2 rounded-full border px-3 py-1.5 sm:flex ${availability?.available ? "border-[#31432f] bg-[#0c1510]" : "border-[#3b3330] bg-[#15100e]"}`}><span class={`h-1.5 w-1.5 rounded-full ${availability?.available ? "bg-[#a9e66f] shadow-[0_0_9px_#a9e66f]" : "bg-[#c9816f]"}`}></span><span class="max-w-[320px] truncate font-mono text-[7px] tracking-[.11em] text-[#7f9297] uppercase">{runtimeLabel}</span></div>
+		{#if !availability?.available}<div class="ml-auto max-w-[320px] truncate font-mono text-[8px] text-[#c9816f]">{runtimeLabel}</div>{/if}
 	</header>
 
 	<div class="flex min-h-0 flex-1 flex-col p-3 sm:p-4">
 		<div class="mx-auto flex w-full max-w-[1480px] shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#27353c] bg-[linear-gradient(110deg,rgba(14,21,26,.96),rgba(9,15,19,.96))] p-2 shadow-[0_14px_40px_rgba(0,0,0,.2)]">
 			<label class="relative min-w-[220px] flex-[1.3] sm:max-w-[390px]"><span class="sr-only">Browser Personal Agent</span><Sparkles size={12} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[#d4df8c]" /><select bind:value={selectedPersonalBotId} disabled={personalAgents.length === 0 || running} class="h-9 w-full appearance-none rounded-xl border border-[#34434a] bg-[#0a1014] pr-8 pl-8 font-mono text-[9px] text-[#d8e2e4] outline-none focus:border-[#718b63] disabled:opacity-45"><option value="">Choose a Personal Agent</option>{#each personalAgents as agent (agent.id)}<option value={agent.id} disabled={!agent.enabled || !agent.browserEnabled}>{agent.name} · {agent.model || "No model"}{!agent.browserEnabled ? " · Browser disabled" : ""}</option>{/each}</select><ChevronDown size={11} class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[#708087]" /></label>
-			<span class="px-2 font-mono text-[9px] text-[#8c9b9c]">{selectedModel} · {selectedReasoning} — configured in Personal Agents</span>
 			<button type="button" aria-label="Refresh browser runtime" disabled={loading || running} class="grid h-9 w-9 place-items-center rounded-xl border border-[#303e44] bg-[#080e12] text-[#7f9297] transition hover:text-white disabled:opacity-40" onclick={() => void onrefresh()}><RefreshCw size={12} class={loading ? "animate-spin" : ""} /></button>
 			<div class="ml-auto flex items-center gap-1 rounded-xl border border-[#303e44] bg-[#080e12] p-1" aria-label="Prompt placement">
 				<button type="button" aria-label="Prompt left" aria-pressed={placement === "left"} class={`grid h-7 w-8 place-items-center rounded-lg transition ${placement === "left" ? "bg-[#344b2a] text-[#d7f2b8]" : "text-[#697a80] hover:text-white"}`} onclick={() => (placement = "left")}><LayoutPanelLeft size={13} /></button>
@@ -559,17 +570,18 @@
 				{/if}
 				<button type="button" bind:this={browserSurface} aria-label="Interactive Chromium page" class="relative block min-h-0 w-full flex-1 overflow-hidden bg-white p-0 text-left outline-none" onpointermove={(event) => { handleViewportPointerMove(event); forwardPointer(event, "move"); }} onpointerdown={(event) => { handleViewportPointerDown(); forwardPointer(event, "down"); }} onpointerup={(event) => forwardPointer(event, "up")} onwheel={(event) => { handleViewportWheel(); forwardWheel(event); }} onkeydown={forwardKey}>
 					{#if frame}<img alt="Chromium browser page" src={frame} draggable="false" class="h-full w-full select-none" />{:else}<div class="grid h-full place-items-center bg-[#0b1115] p-6 text-center text-[11px] text-[#8fa2a4]">{hostError || (hostReady ? "Loading Chromium page…" : "Starting embedded Chromium…")}</div>{/if}
+					{#if running && run?.control === "ai"}<div class="pointer-events-none absolute top-3 right-3 z-10 rounded-lg border border-[#708e50] bg-[#142014]/90 px-2.5 py-1.5 text-[10px] font-semibold text-[#d9f0bd] shadow-[0_4px_20px_rgba(0,0,0,.55)]" aria-label={`Active browser model ${cursorModel}`}>{cursorModel} · {run.agentCursor?.action ?? "observing"}</div>{/if}
 					{#if running && run?.control === "ai" && lastCursor}
-						<div class="pointer-events-none absolute z-10 flex items-start gap-1 text-[#d6fa9c] drop-shadow-[0_2px_5px_#000] motion-safe:transition-[top,left] motion-safe:duration-200" style={`left: ${lastCursor.x}px; top: ${lastCursor.y}px;`} aria-label={`${cursorModel} cursor`}><span class="text-xl leading-none">◆</span><span class="rounded bg-[#19271c] px-1.5 py-0.5 text-[9px]">{cursorModel} · {run.agentCursor?.action ?? "AI cursor"}</span></div>
+						<div class="pointer-events-none absolute z-10 flex items-start gap-1 text-[#d6fa9c] drop-shadow-[0_2px_5px_#000] motion-safe:transition-[top,left] motion-safe:duration-300" style={`left: ${lastCursor.x}px; top: ${lastCursor.y}px;`} aria-label={`${cursorModel} cursor`}><span class="absolute -top-10 -left-10 h-24 w-24 rounded-full border border-[#cefa96]/65 bg-[#cefa96]/15 shadow-[0_0_40px_rgba(206,250,150,.55)] ${run.agentCursor ? "motion-safe:animate-pulse" : "opacity-50"}"></span><span class="relative text-xl leading-none">◆</span><span class="relative rounded border border-[#89ad71] bg-[#19271c]/95 px-1.5 py-0.5 text-[9px]">{cursorModel} · {run.agentCursor?.action ?? "last position"}</span></div>
 					{/if}
 				</button>
 			</section>
 
 			<section class={`flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#2d3c42] bg-[linear-gradient(155deg,#0d1419,#080d11)] shadow-[0_24px_70px_rgba(0,0,0,.24)] ${placement !== "center" && browserFirst ? "order-2" : "order-1"}`}>
-				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#28363c] px-4"><MessageSquareText size={13} class="text-[#b6db8e]" /><span class="text-[10px] font-semibold text-[#dbe5e6]">Browser task</span><span class="ml-auto rounded-full border border-[#2f4046] px-2 py-0.5 font-mono text-[7px] text-[#64787d]">SESSION BROWSER</span></div>
+				<div class="flex h-11 shrink-0 items-center gap-2 border-b border-[#28363c] px-4"><MessageSquareText size={13} class="text-[#b6db8e]" /><span class="text-[10px] font-semibold text-[#dbe5e6]">Browser task</span></div>
 				<div class="min-h-0 flex-1 overflow-y-auto p-4">
 					{#if messages.length === 0}
-						<div class="grid h-full min-h-[170px] place-items-center"><div class="max-w-[390px] text-center"><div class="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-[#34464c] bg-[#10191e] text-[#a8c98b]"><Sparkles size={17} /></div><h3 class="mt-3 mb-1.5 text-[13px] font-semibold text-[#dfe8e9]">Explore a public site</h3><p class="m-0 text-[9px] leading-[1.6] text-[#718489]">New origins require approval. The agent can follow ordinary links and fill search fields; other controls, forms, uploads and downloads require human control.</p></div></div>
+						<div class="grid h-full min-h-[170px] place-items-center"><div class="max-w-[390px] text-center"><div class="mx-auto grid h-10 w-10 place-items-center rounded-xl border border-[#34464c] bg-[#10191e] text-[#a8c98b]"><Sparkles size={17} /></div><h3 class="mt-3 mb-1.5 text-[13px] font-semibold text-[#dfe8e9]">Explore a public site</h3><p class="m-0 text-[9px] leading-[1.6] text-[#718489]">Ask your Personal Agent to browse, read or compare pages.</p></div></div>
 					{:else}
 						<div class="space-y-3">{#each messages as message (message.id)}<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}><article class={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[10px] leading-[1.6] ${message.role === "user" ? "rounded-br-md border border-[#496038] bg-[linear-gradient(135deg,#304526,#22351e)] text-[#ecf7df]" : message.tone === "error" ? "rounded-bl-md border border-[#65413e] bg-[#211313] text-[#e7aaa4]" : "rounded-bl-md border border-[#304148] bg-[#111a1f] text-[#bcc9cc]"}`}><p class="m-0">{message.text}</p></article></div>{/each}{#if running}<div class="flex justify-start"><div class="flex items-center gap-2 rounded-2xl rounded-bl-md border border-[#304148] bg-[#111a1f] px-3.5 py-2.5"><LoaderCircle size={12} class="animate-spin text-[#b9e184]" /><span class="font-mono text-[8px] text-[#84979b]">{runStageLabel}</span></div></div>{/if}</div>
 					{/if}

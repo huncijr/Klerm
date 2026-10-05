@@ -4,9 +4,9 @@
 	"version": "0.0.1",
 	"identifier": "com.klerm.desktop",
 	"build": {
-		"beforeDevCommand": "npm --prefix ../coding-agent run build && node scripts/build-browser-host.mjs && npm run dev",
-		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "npm --prefix ../coding-agent run build && npm run build",
+		"beforeDevCommand": "node scripts/prepare-desktop.mjs --dev",
+		"devUrl": "http://127.0.0.1:1420",
+		"beforeBuildCommand": "node scripts/prepare-desktop.mjs",
 		"frontendDist": "../dist"
 	},
 	"app": {
@@ -30,7 +30,9 @@
 	"bundle": {
 		"active": true,
 		"targets": "all",
-		"icon": ["icons/icon.png", "icons/icon.ico"],
+		"icon": ["icons/icon.png", "icons/icon.ico", ".assets/icons/icon.icns"],
+		"resources": { ".assets/": "" },
+		"macOS": { "minimumSystemVersion": "13.5" },
 		"copyright": "Klerm contributors and upstream Pi contributors",
 		"category": "DeveloperTool",
 		"shortDescription": "Local-first A2A coding agent",

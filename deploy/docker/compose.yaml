@@ -1,0 +1,17 @@
+services:
+  klerm:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: klerm-server:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${KLERM_SERVER_PORT:-8787}:8787"
+    environment:
+      KLERM_SERVER_PUBLIC_ORIGIN: ${KLERM_SERVER_PUBLIC_ORIGIN:-http://localhost:8787}
+    volumes:
+      - klerm-data:/var/lib/klerm
+      - ${KLERM_WORKSPACE_HOST:-./workspaces/project}:/workspaces/project
+    stop_grace_period: 20s
+volumes:
+  klerm-data:

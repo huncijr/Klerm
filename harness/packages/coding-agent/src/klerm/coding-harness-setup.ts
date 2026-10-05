@@ -6,7 +6,7 @@ import { delimiter, join } from "node:path";
 import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
 import { describeModelProfile, type KlermStrengthBand } from "./model-profile.ts";
 
-export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline"] as const;
+export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline", "hermes"] as const;
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type CodingHarnessKind = (typeof CODING_HARNESS_KINDS)[number];
 export type CodingHarnessEffort = (typeof CODING_HARNESS_EFFORTS)[number];
@@ -20,6 +20,7 @@ const CODING_HARNESS_LABELS: Record<CodingHarnessKind, string> = {
 	codex: "Codex",
 	opencode: "OpenCode",
 	cline: "Cline",
+	hermes: "Hermes",
 };
 
 export function codingHarnessLabel(kind: CodingHarnessKind): string {
@@ -36,6 +37,7 @@ export interface CodingHarnessAgentSettings {
 	effort: CodingHarnessEffort;
 	tools: string[];
 	specialties?: string[];
+	executionProfile?: "native" | "full-access";
 }
 
 export interface CodingHarnessSlots {
@@ -108,7 +110,7 @@ export interface CodingHarnessProbeResult {
 }
 
 export type CodingHarnessProbe = (
-	command: "pi" | "claude" | "codex" | "opencode" | "cline",
+	command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes",
 	options: CodingHarnessProbeOptions,
 ) => Promise<CodingHarnessProbeResult>;
 
@@ -200,6 +202,9 @@ function normalizeAgent(value: unknown, fallback: CodingHarnessAgentSettings): C
 		effort,
 		tools,
 		...(specialties && specialties.length > 0 ? { specialties } : {}),
+		...(candidate.executionProfile === "full-access" || candidate.executionProfile === "native"
+			? { executionProfile: candidate.executionProfile }
+			: {}),
 	};
 }
 
@@ -248,14 +253,29 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 	if (
 		Object.keys(agent).some(
 			(key) =>
-				!["id", "kind", "enabled", "model", "role", "effort", "tools", "specialties", "personalBotId"].includes(
-					key,
-				),
+				![
+					"id",
+					"kind",
+					"enabled",
+					"model",
+					"role",
+					"effort",
+					"tools",
+					"specialties",
+					"personalBotId",
+					"executionProfile",
+				].includes(key),
 		)
 	) {
 		return undefined;
 	}
 	if (typeof agent.id !== "string" || !AGENT_ID_PATTERN.test(agent.id)) return undefined;
+	if (
+		agent.executionProfile !== undefined &&
+		agent.executionProfile !== "native" &&
+		agent.executionProfile !== "full-access"
+	)
+		return undefined;
 	if (
 		agent.personalBotId !== undefined &&
 		(typeof agent.personalBotId !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(agent.personalBotId))
@@ -296,6 +316,9 @@ function parseAgent(value: unknown): CodingHarnessAgentSettings | undefined {
 		role: agent.role,
 		effort: agent.effort as CodingHarnessEffort,
 		tools: [...new Set(agent.tools as string[])],
+		...(agent.executionProfile === "full-access" || agent.executionProfile === "native"
+			? { executionProfile: agent.executionProfile }
+			: {}),
 		...(Array.isArray(agent.specialties)
 			? { specialties: [...new Set((agent.specialties as string[]).map((specialty) => specialty.trim()))] }
 			: {}),
@@ -355,6 +378,7 @@ export function createCodingHarnessSetup(
 	): agent is CodingHarnessAgentSettings & { kind: CodingHarnessKind; model: string } => {
 		if (!slots.externalHarnessesEnabled) return false;
 		if (!agent.enabled || !agent.kind || !agent.model || !discovery.get(agent.kind)?.available) return false;
+		if (agent.kind === "hermes" && agent.role === "planner") return false;
 		if (agent.kind === "klerm") return discovery.get("klerm")?.models.includes(agent.model) === true;
 		return connectedAdapters.has(agent.kind);
 	};
@@ -377,7 +401,8 @@ export function createCodingHarnessSetup(
 			adapterCapabilities: {
 				prompt: true as const,
 				abort: true as const,
-				resumeSession: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
+				resumeSession:
+					agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode" || agent.kind === "hermes",
 				roleEnforcement: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
 				childTaskEvents: false as const,
 			},
@@ -395,6 +420,8 @@ export function createCodingHarnessSetup(
 			if (!discovery.get(agent.kind)?.available)
 				return [{ agentId: agent.id, reason: `${label} is not available.` }];
 			if (!agent.model) return [{ agentId: agent.id, reason: `${label} has no configured model.` }];
+			if (agent.kind === "hermes" && agent.role === "planner")
+				return [{ agentId: agent.id, reason: `${label} does not enforce read-only Plan mode. Select Build.` }];
 			if (agent.kind === "klerm" && !discovery.get("klerm")?.models.includes(agent.model)) {
 				return [{ agentId: agent.id, reason: `${label} model is not available.` }];
 			}
@@ -616,6 +643,7 @@ export async function discoverCodingHarnesses(
 				["codex", "codex"],
 				["opencode", "opencode"],
 				["cline", "cline"],
+				["hermes", "hermes"],
 			] as const
 		).map(async ([kind, command]) => {
 			// ACP-first discovery (Zed style): a completed `initialize` handshake
@@ -626,14 +654,20 @@ export async function discoverCodingHarnesses(
 					kind,
 					available: true,
 					builtin: false,
-					models: [],
+					models: kind === "hermes" ? ["native-default"] : [],
 					...(acp.agentVersion ? { version: acp.agentVersion.slice(0, MAX_VERSION_LENGTH) } : {}),
 					acp,
 				};
 			}
 			try {
 				const version = firstOutputLine(await probe(command, VERSION_PROBE_OPTIONS));
-				return { kind, available: true, builtin: false, models: [], ...(version ? { version } : {}) };
+				return {
+					kind,
+					available: true,
+					builtin: false,
+					models: kind === "hermes" ? ["native-default"] : [],
+					...(version ? { version } : {}),
+				};
 			} catch {
 				return { kind, available: false, builtin: false, models: [] };
 			}

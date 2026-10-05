@@ -58,7 +58,7 @@
 		{ id: "review", label: "Review", accent: "bg-[#b791df]" },
 		{ id: "done", label: "Done", accent: "bg-[#70c891]" },
 	];
-	const kindOptions: KanbanTaskKind[] = ["build", "fix", "review", "research", "maintenance"];
+	const kindOptions: KanbanTaskKind[] = ["auto", "build", "fix", "review", "research", "maintenance"];
 
 	let selectedBoardId = $state("");
 	let selectedTaskId = $state("");
@@ -66,7 +66,7 @@
 	let draftPrompt = $state("");
 	let draftTaskId = $state("");
 	let draftTaskTitle = $state("");
-	let draftTaskKind = $state<KanbanTaskKind>("build");
+	let draftTaskKind = $state<KanbanTaskKind>("auto");
 	let draftTaskWorkspaceRoot = $state("");
 	let draftTaskModel = $state("");
 	let draftPersonalBotId = $state("");
@@ -103,7 +103,7 @@
 			title: "",
 			prompt: "",
 			workspaceRoot: "",
-			kind: "build",
+			kind: "auto",
 			reasoning: "",
 			status,
 			createdAt: now,
@@ -364,6 +364,7 @@
 		if (picked) draftTaskWorkspaceRoot = picked;
 	}
 	function kindLabel(kind: KanbanTaskKind): string {
+		if (kind === "auto") return "Auto";
 		return kind === "maintenance" ? "Maintain" : kind[0]!.toUpperCase() + kind.slice(1);
 	}
 	function providerOf(model?: string): string {

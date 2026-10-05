@@ -2,8 +2,9 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { CodingHarnessAgentSettings, CodingHarnessKind, CodingHarnessRole } from "./coding-harness-setup.ts";
+import { HermesAdapter } from "./hermes-adapter.ts";
 
-export const CONNECTED_CODING_HARNESS_ADAPTERS = ["opencode", "codex"] as const;
+export const CONNECTED_CODING_HARNESS_ADAPTERS = ["opencode", "codex", "hermes"] as const;
 export type ConnectedCodingHarnessKind = (typeof CONNECTED_CODING_HARNESS_ADAPTERS)[number];
 
 export interface CodingHarnessSessionRef {
@@ -12,6 +13,7 @@ export interface CodingHarnessSessionRef {
 	harness: ConnectedCodingHarnessKind;
 	model: string;
 	role: CodingHarnessRole;
+	executionProfile?: "native" | "full-access";
 	nativeSessionId?: string;
 }
 
@@ -360,6 +362,7 @@ export function createCodingHarnessAdapters(): Map<ConnectedCodingHarnessKind, C
 	return new Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>([
 		["opencode", new OpenCodeAdapter()],
 		["codex", new CodexAdapter()],
+		["hermes", new HermesAdapter()],
 	]);
 }
 

@@ -94,6 +94,15 @@ describe("kanbanTaskSystemGuidance", () => {
 		}
 		expect(guidance).toContain("Current task type: review. Follow the review guidance for this run.");
 	});
+
+	it("lets Auto task type infer one concrete guidance path from the brief", () => {
+		const guidance = kanbanTaskSystemGuidance("auto", false);
+		for (const kind of ["build", "fix", "review", "research", "maintenance"] as const) {
+			expect(guidance).toContain(`${kind}:`);
+		}
+		expect(guidance).toContain("Current task type: auto.");
+		expect(guidance).toContain("Infer the best matching concrete task type");
+	});
 });
 
 describe("validateRunnableKanbanTask", () => {

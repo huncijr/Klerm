@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
@@ -7,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
+mod runtime;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -18,6 +20,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 struct BackendProcess {
     child: Child,
     stdin: Option<ChildStdin>,
+    cwd: PathBuf,
 }
 
 impl Drop for BackendProcess {
@@ -55,7 +58,9 @@ impl Drop for BrowserHost {
         let _ = self.stdin.flush();
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_))) { return; }
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
             std::thread::sleep(Duration::from_millis(25));
         }
         let _ = self.child.kill();
@@ -86,76 +91,148 @@ struct BrowserHostStartResult {
 
 #[cfg(target_os = "linux")]
 fn valid_browser_session_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 #[cfg(target_os = "linux")]
 #[tauri::command]
-fn start_browser_host(app: AppHandle, state: State<'_, BrowserHostState>, session_id: String) -> Result<BrowserHostStartResult, String> {
-    if !valid_browser_session_id(&session_id) { return Err("Invalid browser session id.".into()); }
-    let mut hosts = state.hosts.lock().map_err(|_| "Browser host state is unavailable.")?;
+fn start_browser_host(
+    app: AppHandle,
+    state: State<'_, BrowserHostState>,
+    session_id: String,
+) -> Result<BrowserHostStartResult, String> {
+    if !valid_browser_session_id(&session_id) {
+        return Err("Invalid browser session id.".into());
+    }
+    let mut hosts = state
+        .hosts
+        .lock()
+        .map_err(|_| "Browser host state is unavailable.")?;
     if let Some(host) = hosts.get_mut(&session_id) {
         if matches!(host.child.try_wait(), Ok(None)) {
-            return Ok(BrowserHostStartResult { cdp_url: format!("http://127.0.0.1:{}", host.port) });
+            return Ok(BrowserHostStartResult {
+                cdp_url: format!("http://127.0.0.1:{}", host.port),
+            });
         }
     }
     hosts.remove(&session_id);
-    let executable = env::current_exe().map_err(|error| format!("Browser host path unavailable: {error}"))?
+    let executable = env::current_exe()
+        .map_err(|error| format!("Browser host path unavailable: {error}"))?
         .with_file_name("klerm-browser-host");
-    if !executable.is_file() { return Err("CEF browser host has not been built. Build the Klerm desktop browser host first.".into()); }
-    let cef_dir = executable.parent().ok_or("CEF runtime directory is unavailable.")?;
+    if !executable.is_file() {
+        return Err(
+            "CEF browser host has not been built. Build the Klerm desktop browser host first."
+                .into(),
+        );
+    }
+    let cef_dir = executable
+        .parent()
+        .ok_or("CEF runtime directory is unavailable.")?;
     let mut libraries = vec![cef_dir.to_path_buf()];
-    if let Some(existing) = env::var_os("LD_LIBRARY_PATH") { libraries.extend(env::split_paths(&existing)); }
+    if let Some(existing) = env::var_os("LD_LIBRARY_PATH") {
+        libraries.extend(env::split_paths(&existing));
+    }
     let library_path = env::join_paths(libraries).map_err(|_| "CEF runtime path is invalid.")?;
     let mut child = Command::new(executable)
         .env("LD_LIBRARY_PATH", library_path)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-        .spawn().map_err(|error| format!("CEF browser host did not start: {error}"))?;
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("CEF browser host did not start: {error}"))?;
     let stdin = child.stdin.take().ok_or("CEF browser input unavailable.")?;
-    let stdout = child.stdout.take().ok_or("CEF browser output unavailable.")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("CEF browser output unavailable.")?;
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let reader_session = session_id.clone();
     std::thread::spawn(move || {
         let mut ready = Some(ready_tx);
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if event.get("type").and_then(Value::as_str) == Some("ready") {
                 if let Some(tx) = ready.take() {
-                    let port = event.get("port").and_then(Value::as_u64).filter(|port| (1..=65535).contains(port));
+                    let port = event
+                        .get("port")
+                        .and_then(Value::as_u64)
+                        .filter(|port| (1..=65535).contains(port));
                     let _ = tx.send(port.map(|port| port as u16));
                 }
             }
-            let _ = app.emit("klerm://browser-host", BrowserHostEvent { session_id: reader_session.clone(), event });
+            let _ = app.emit(
+                "klerm://browser-host",
+                BrowserHostEvent {
+                    session_id: reader_session.clone(),
+                    event,
+                },
+            );
         }
-        if let Some(tx) = ready { let _ = tx.send(None); }
-        let _ = app.emit("klerm://browser-host", BrowserHostEvent {
-            session_id: reader_session,
-            event: serde_json::json!({"type":"crash"}),
-        });
+        if let Some(tx) = ready {
+            let _ = tx.send(None);
+        }
+        let _ = app.emit(
+            "klerm://browser-host",
+            BrowserHostEvent {
+                session_id: reader_session,
+                event: serde_json::json!({"type":"crash"}),
+            },
+        );
     });
-    let Some(port) = ready_rx.recv_timeout(Duration::from_secs(20)).ok().flatten() else {
+    let Some(port) = ready_rx
+        .recv_timeout(Duration::from_secs(20))
+        .ok()
+        .flatten()
+    else {
         let _ = child.kill();
         let _ = child.wait();
         return Err("CEF browser did not report readiness.".into());
     };
     hosts.insert(session_id, BrowserHost { child, stdin, port });
-    Ok(BrowserHostStartResult { cdp_url: format!("http://127.0.0.1:{port}") })
+    Ok(BrowserHostStartResult {
+        cdp_url: format!("http://127.0.0.1:{port}"),
+    })
 }
 
 #[cfg(target_os = "linux")]
 #[tauri::command]
-fn browser_host_command(state: State<'_, BrowserHostState>, session_id: String, command: Value) -> Result<(), String> {
-    if !valid_browser_session_id(&session_id) { return Err("Invalid browser session id.".into()); }
+fn browser_host_command(
+    state: State<'_, BrowserHostState>,
+    session_id: String,
+    command: Value,
+) -> Result<(), String> {
+    if !valid_browser_session_id(&session_id) {
+        return Err("Invalid browser session id.".into());
+    }
     let kind = command.get("type").and_then(Value::as_str).unwrap_or("");
-    if !["resize", "navigate", "back", "forward", "reload", "visible", "mouse", "key"].contains(&kind) {
+    if ![
+        "resize", "navigate", "back", "forward", "reload", "visible", "mouse", "key",
+    ]
+    .contains(&kind)
+    {
         return Err("Invalid browser host command.".into());
     }
     let mut data = serde_json::to_vec(&command).map_err(|_| "Invalid browser host command.")?;
-    if data.len() > 4096 { return Err("Browser host command is too large.".into()); }
+    if data.len() > 4096 {
+        return Err("Browser host command is too large.".into());
+    }
     data.push(b'\n');
-    let mut hosts = state.hosts.lock().map_err(|_| "Browser host state is unavailable.")?;
-    let host = hosts.get_mut(&session_id).ok_or("Browser host is not running.")?;
-    host.stdin.write_all(&data).and_then(|_| host.stdin.flush())
+    let mut hosts = state
+        .hosts
+        .lock()
+        .map_err(|_| "Browser host state is unavailable.")?;
+    let host = hosts
+        .get_mut(&session_id)
+        .ok_or("Browser host is not running.")?;
+    host.stdin
+        .write_all(&data)
+        .and_then(|_| host.stdin.flush())
         .map_err(|error| format!("CEF browser input failed: {error}"))
 }
 
@@ -187,21 +264,21 @@ struct BackendExitPayload {
     code: Option<i32>,
 }
 
-fn rpc_entry_path() -> PathBuf {
-    if let Some(path) = env::var_os("KLERM_DESKTOP_RPC_ENTRY") {
-        return PathBuf::from(path);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../coding-agent/dist/rpc-entry.js")
-}
-
-fn default_working_directory() -> Result<PathBuf, String> {
+fn default_working_directory(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("KLERM_DESKTOP_CWD") {
         return Ok(PathBuf::from(path));
     }
     if cfg!(debug_assertions) {
         return Ok(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../"));
     }
-    env::current_dir().map_err(|error| format!("Could not resolve the working directory: {error}"))
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve the workspace directory: {error}"))?
+        .join("workspace");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("Could not create the workspace directory: {error}"))?;
+    Ok(directory)
 }
 
 fn workspace_store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -238,7 +315,7 @@ fn start_backend(
     app: AppHandle,
     state: State<'_, BackendState>,
     cwd: Option<String>,
-	trusted: Option<bool>,
+    trusted: Option<bool>,
 ) -> Result<BackendStartResult, String> {
     let mut process_guard = state
         .process
@@ -250,7 +327,7 @@ fn start_backend(
             Ok(None) => {
                 return Ok(BackendStartResult {
                     already_running: true,
-                    cwd: cwd.unwrap_or_else(|| ".".to_string()),
+                    cwd: process.cwd.display().to_string(),
                 });
             }
             Ok(Some(_)) => {
@@ -260,19 +337,23 @@ fn start_backend(
         }
     }
 
-    let entry_path = rpc_entry_path();
-    if !entry_path.is_file() {
-        return Err(format!(
-            "Klerm RPC entry was not built at {}. Run the desktop command from the harness workspace.",
-            entry_path.display()
-        ));
-    }
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Could not resolve packaged resources: {error}"))?;
+    let launch = runtime::backend_launch(
+        &resources,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        cfg!(debug_assertions),
+        env::var_os("KLERM_DESKTOP_NODE").map(PathBuf::from),
+        env::var_os("KLERM_DESKTOP_RPC_ENTRY").map(PathBuf::from),
+    )?;
 
     let working_directory = match cwd {
         Some(path) => PathBuf::from(path),
         None => match read_stored_workspace(&app) {
             Some(directory) if directory.is_dir() => directory,
-            _ => default_working_directory()?,
+            _ => default_working_directory(&app)?,
         },
     };
     if !working_directory.is_dir() {
@@ -283,10 +364,13 @@ fn start_backend(
     }
     store_workspace(&app, &working_directory);
 
-    let node = env::var_os("KLERM_DESKTOP_NODE").unwrap_or_else(|| "node".into());
-    let mut command = Command::new(node);
+    let mut command = Command::new(&launch.node);
     command
-        .arg(&entry_path)
+        .arg(&launch.entry)
+        .env(
+            "PATH",
+            runtime::node_search_path(&launch.node, env::var_os("PATH"))?,
+        )
         .current_dir(&working_directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -360,6 +444,7 @@ fn start_backend(
     *process_guard = Some(BackendProcess {
         child,
         stdin: Some(stdin),
+        cwd: working_directory.clone(),
     });
     Ok(BackendStartResult {
         already_running: false,
@@ -397,16 +482,68 @@ fn stop_backend(state: State<'_, BackendState>) {
     state.stop();
 }
 
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn start_browser_host() -> Result<(), String> {
+    Err("The embedded CEF Browser currently requires Linux. Coding, Personal Agents and Kanban are available on this platform.".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn browser_host_command() -> Result<(), String> {
+    Err("The embedded CEF Browser currently requires Linux.".into())
+}
+
 pub fn run() {
+    let smoke_report = if env::args().any(|arg| arg == "--startup-smoke") {
+        Some(PathBuf::from(
+            env::var_os("KLERM_DESKTOP_SMOKE_REPORT")
+                .expect("startup smoke requires a report path"),
+        ))
+    } else {
+        None
+    };
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(BackendState::default());
+        .manage(BackendState::default())
+        .setup(move |app| {
+            if let Some(report) = smoke_report.clone() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let result = startup_smoke(&handle);
+                    let code = if result.is_ok() { 0 } else { 1 };
+                    let payload = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ready":false,"error":error}),
+                    };
+                    if std::fs::write(report, payload.to_string()).is_err() {
+                        handle.exit(1);
+                    } else {
+                        handle.exit(code);
+                    }
+                });
+            }
+            Ok(())
+        });
     #[cfg(target_os = "linux")]
-    let builder = builder.manage(BrowserHostState::default()).invoke_handler(tauri::generate_handler![
-        start_backend, rpc_send, stop_backend, start_browser_host, browser_host_command,
-    ]);
+    let builder =
+        builder
+            .manage(BrowserHostState::default())
+            .invoke_handler(tauri::generate_handler![
+                start_backend,
+                rpc_send,
+                stop_backend,
+                start_browser_host,
+                browser_host_command,
+            ]);
     #[cfg(not(target_os = "linux"))]
-    let builder = builder.invoke_handler(tauri::generate_handler![start_backend, rpc_send, stop_backend]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        start_backend,
+        rpc_send,
+        stop_backend,
+        start_browser_host,
+        browser_host_command
+    ]);
     let app = builder
         .build(tauri::generate_context!())
         .expect("failed to build Klerm desktop application");
@@ -415,7 +552,49 @@ pub fn run() {
         if matches!(event, tauri::RunEvent::Exit) {
             app_handle.state::<BackendState>().stop();
             #[cfg(target_os = "linux")]
-            app_handle.state::<BrowserHostState>().hosts.lock().ok().map(|mut hosts| hosts.clear());
+            app_handle
+                .state::<BrowserHostState>()
+                .hosts
+                .lock()
+                .ok()
+                .map(|mut hosts| hosts.clear());
         }
     });
+}
+
+fn startup_smoke(app: &AppHandle) -> Result<Value, String> {
+    if app.get_webview_window("main").is_none() {
+        return Err("The native Klerm window was not created.".into());
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let listener = app.listen("klerm://rpc", move |event| {
+        if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
+            if value.get("id").and_then(Value::as_str) == Some("desktop-startup-smoke") {
+                let _ = sender.try_send(value);
+            }
+        }
+    });
+    let result = (|| {
+        let started = start_backend(app.clone(), app.state::<BackendState>(), None, Some(false))?;
+        rpc_send(
+            app.state::<BackendState>(),
+            serde_json::json!({"id":"desktop-startup-smoke","type":"desktop_handshake"}),
+        )?;
+        let response = receiver
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "The packaged backend handshake timed out.")?;
+        if response.get("success").and_then(Value::as_bool) != Some(true)
+            || response
+                .pointer("/data/protocolVersion")
+                .and_then(Value::as_u64)
+                != Some(1)
+        {
+            return Err("The packaged backend did not return desktop protocol version 1.".into());
+        }
+        Ok(
+            serde_json::json!({"ready":true,"protocolVersion":1,"platform":env::consts::OS,"cwd":started.cwd,"nativeWindow":true}),
+        )
+    })();
+    app.unlisten(listener);
+    result
 }

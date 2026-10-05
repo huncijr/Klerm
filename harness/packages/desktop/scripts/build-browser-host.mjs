@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 if (process.platform === "linux") {
 	const manifest = fileURLToPath(new URL("../src-tauri/Cargo.toml", import.meta.url));
-	const result = spawnSync("cargo", ["build", "--manifest-path", manifest, "--bin", "klerm-browser-host"], {
+	const result = spawnSync("cargo", ["build", "--manifest-path", manifest, "--bin", "klerm-browser-host", "--features", "browser-host"], {
 		stdio: "inherit",
 	});
 	if (result.error) throw result.error;

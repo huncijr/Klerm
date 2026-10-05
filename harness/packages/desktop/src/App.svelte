@@ -140,7 +140,16 @@
 	let selectedBrowserSessionId = $state("");
 	let browserRuns = $state<Record<string, BrowserRunState>>({});
 	let browserActivities = $state<Record<string, BrowserActivityEvent[]>>({});
+	const namingBrowsers = new Set<string>();
 	let personalBrowserRuns = $state<Record<string, BrowserRunState>>({});
+	let personalBrowserOpen = $state<Record<string, boolean>>({});
+	async function openPersonalBrowser(botId: string): Promise<void> {
+		const bot = personalBots.bots.find((entry) => entry.id === botId);
+		if (!bot?.enabled || !bot.browserEnabled) return;
+		const result = await invoke<{ cdpUrl: string }>("start_browser_host", { sessionId: `personal-${botId}` });
+		await attachPersonalBrowser(botId, result.cdpUrl);
+		personalBrowserOpen = { ...personalBrowserOpen, [botId]: true };
+	}
 	let browserActivity = $state<BrowserActivityEvent[]>([]);
 	let agentWebUrl = $state("");
 	let agentWebSession = $state("");
@@ -743,10 +752,10 @@
 		!externalHarnessesEnabled && hasDistinctSecondKlermModel(currentConfig?.localModel, currentConfig?.frontierModel),
 	);
 	const composerLocalDisabled = $derived(
-		!backendReady || interactionActive || !!firstHarnessAgent?.personalBotId || !composerLocalOptions.some((option) => option.value.length > 0),
+		!backendReady || interactionActive || !composerLocalOptions.some((option) => option.value.length > 0),
 	);
 	const composerFrontierDisabled = $derived(
-		!backendReady || interactionActive || !!secondHarnessAgent?.personalBotId || !composerFrontierOptions.some((option) => option.value.length > 0),
+		!backendReady || interactionActive || !composerFrontierOptions.some((option) => option.value.length > 0),
 	);
 	const routingSelectDisabled = $derived(!backendReady || interactionActive);
 	const localThinkingDisabled = $derived(!backendReady || interactionActive || !!firstHarnessAgent?.personalBotId || localThinking.levels.length < 2);
@@ -1526,6 +1535,11 @@
 				}
 				if (activity && typeof activity.event === "string" && typeof activity.sequence === "number") {
 					const owner = state?.sessionId ?? "";
+					const unnamed = browserSessions.find((entry) => entry.id === owner && (entry.name === "New browser" || /^Browser \d+$/.test(entry.name)));
+					if (unnamed && activity.event === "ASSISTANT_MESSAGE" && typeof activity.reason === "string" && !namingBrowsers.has(owner)) {
+						const title = activity.reason.replace(/\s+/g, " ").trim().slice(0, 60);
+						if (title) { namingBrowsers.add(owner); void bridge.send<{ sessions: Array<{ id: string; name: string }> }>("rename_browser_session", { browserSessionId: owner, name: title }).then((result) => (browserSessions = result.sessions)).catch(() => undefined).finally(() => namingBrowsers.delete(owner)); }
+					}
 					const items = [...(browserActivities[owner] ?? []).slice(-199), activity];
 					browserActivities = { ...browserActivities, [owner]: items };
 					if (owner === selectedBrowserSessionId) browserActivity = items;
@@ -2267,6 +2281,15 @@
 
 	async function setCodingHarnessAgentModel(id: string, model: string): Promise<void> {
 		const agent = codingHarnessSetup?.slots.agents.find((candidate) => candidate.id === id);
+		if (agent?.personalBotId) {
+			const bot = personalBots.bots.find((candidate) => candidate.id === agent.personalBotId);
+			if (!bot || !model) { showError("Select an available model for this Personal Agent."); return; }
+			if (await savePersonalBot({ ...bot, model })) {
+				await refreshCodingHarnessSetup();
+				currentConfig = await bridge.send<KlermConfig>("get_klerm_config");
+			}
+			return;
+		}
 		if (!agent || !(await updateCodingHarnessAgent(id, { model: model || undefined }))) return;
 		if (agent.kind === "klerm" && id === "agent1") await applyConfigUpdate({ localModel: model });
 		if (agent.kind === "klerm" && id === "agent2") await applyConfigUpdate({ frontierModel: model });
@@ -3275,6 +3298,7 @@
 				onrefreshharnesses={() => void refreshCodingHarnessSetup()}
 				onrefreshharnessmodels={refreshCodingHarnessModels}
 				onsaveharnesses={saveCodingHarnessSlots}
+				onpersonalagentmodel={async (botId, model) => { const slot = codingHarnessSetup?.slots.agents.find((candidate) => candidate.personalBotId === botId); if (slot) await setCodingHarnessAgentModel(slot.id, model); }}
 				onaddmodel={addCustomModel}
 				onconnectprovider={connectProvider}
 				ondisconnectprovider={disconnectProvider}
@@ -3295,6 +3319,9 @@
 			{/if}
 		{:else if workspaceView === "personal-bots"}
 			<PersonalBotsView
+				browserOpen={personalBrowserOpen}
+				onopenbrowser={openPersonalBrowser}
+				onclosebrowser={(botId) => (personalBrowserOpen = { ...personalBrowserOpen, [botId]: false })}
 				browserRuns={personalBrowserRuns}
 				onbrowserattach={attachPersonalBrowser}
 				onbrowsercommand={personalBrowserCommand}
@@ -3311,7 +3338,11 @@
 				onprofilesave={savePersonalBotProfile}
 				ongeneratememory={generatePersonalBotMemory}
 				ondelete={deletePersonalBot}
-				onprompt={promptPersonalBot}
+				onprompt={async (botId, message) => {
+				const bot = personalBots.bots.find((entry) => entry.id === botId);
+				if (bot?.browserEnabled && /browser|web|site|youtube|reddit|search|keres|nézd|nyisd|internet/i.test(message)) await openPersonalBrowser(botId);
+				return promptPersonalBot(botId, message);
+			}}
 				onabort={abortPersonalBot}
 			/>
 		{:else if workspaceView === "kanban"}
@@ -3333,7 +3364,7 @@
 					<strong class="px-2 py-3 text-[10px] text-[#cbd9dd]">Browser sessions</strong>
 					<div class="min-h-0 flex-1 overflow-y-auto">{#each browserSessions as entry (entry.id)}
 						<div class="mb-2 rounded-lg border border-[#27353c] p-1"><button type="button" class={`w-full truncate rounded px-2 py-2 text-left text-[10px] ${selectedBrowserSessionId === entry.id ? "bg-[#26391c] text-[#daf5b8]" : "text-[#81949b]"}`} onclick={() => void selectBrowserSession(entry.id)}>{entry.name}</button>
-						{#if selectedBrowserSessionId === entry.id}<div class="flex gap-1"><input aria-label="Rename browser session (Enter to save)" value={entry.name} class="min-w-0 flex-1 bg-transparent px-1 py-1 text-[9px] text-[#81949b]" onkeydown={(event) => { if (event.key === "Enter") void changeBrowserSession("rename_browser_session", entry.id, event.currentTarget.value); }} /><button type="button" aria-label="Delete browser session" class="px-1 text-[#c9827b]" onclick={() => void changeBrowserSession("delete_browser_session", entry.id)}>×</button></div>{/if}</div>
+						</div>
 					{/each}</div>
 					<button type="button" class="rounded-lg border border-[#34424d] px-2 py-2 text-[10px] text-[#cbd9dd]" onclick={() => void changeBrowserSession("create_browser_session")}>+ New browser session</button>
 				</aside>
@@ -3514,12 +3545,12 @@
 			onprompttogether={(text) => void sendMessage(text, [], "prompt_together")}
 			onattachmenterror={showError}
 			onstop={() => void stopTask()}
-			onlocalchange={(value) => {
-				if (externalHarnessesEnabled && firstHarnessAgent) void setCodingHarnessAgentModel(firstHarnessAgent.id, value);
+				onlocalchange={(value) => {
+				if (firstHarnessAgent?.personalBotId || (externalHarnessesEnabled && firstHarnessAgent)) void setCodingHarnessAgentModel(firstHarnessAgent.id, value);
 				else void applyConfigUpdate({ localModel: value });
 			}}
 			onfrontierchange={(value) => {
-				if (externalHarnessesEnabled && secondHarnessAgent) void setCodingHarnessAgentModel(secondHarnessAgent.id, value);
+				if (secondHarnessAgent?.personalBotId || (externalHarnessesEnabled && secondHarnessAgent)) void setCodingHarnessAgentModel(secondHarnessAgent.id, value);
 				else {
 					void applyConfigUpdate(
 						value

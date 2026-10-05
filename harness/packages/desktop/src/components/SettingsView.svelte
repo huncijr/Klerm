@@ -59,6 +59,7 @@
 		onrefreshharnesses,
 		onrefreshharnessmodels,
 		onsaveharnesses,
+		onpersonalagentmodel,
 		onaddmodel,
 		onconnectprovider,
 		ondisconnectprovider,
@@ -96,6 +97,7 @@
 		onrefreshharnesses: () => void;
 		onrefreshharnessmodels: (kind: CodingHarnessKind) => Promise<void>;
 		onsaveharnesses: (slots: CodingHarnessSetup["slots"]) => Promise<boolean>;
+		onpersonalagentmodel: (botId: string, model: string) => Promise<void>;
 		onaddmodel: (model: CustomModelEntry) => Promise<boolean>;
 		onconnectprovider: (account: ProviderConnect) => Promise<boolean>;
 		ondisconnectprovider: (provider: string) => Promise<boolean>;
@@ -825,7 +827,7 @@
 									label={`Agent ${agentNumber(value.id)} model`}
 									options={models.map((model) => ({ value: model, label: model }))}
 									value={value.model ?? ""}
-									disabled={!!value.personalBotId || models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
+									disabled={models.length === 0 || (value.kind !== null && loadingHarnessModels.includes(value.kind))}
 									placeholder={
 										value.kind === "klerm"
 											? "Use current Klerm model"
@@ -838,7 +840,7 @@
 									direction="down"
 									allowEmpty
 									emptyLabel={value.kind === "klerm" ? "Use current Klerm model" : "No model"}
-									onchange={(next) => updateAgent(value.id, { model: next || undefined })}
+									onchange={(next) => { if (value.personalBotId) void onpersonalagentmodel(value.personalBotId, next); else updateAgent(value.id, { model: next || undefined }); }}
 								/>
 							</div>
 							<div class="mt-4 grid grid-cols-2 gap-2">
@@ -847,7 +849,7 @@
 								<select id={`role-${value.id}`} value={value.role} class="h-9 rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark]" onchange={(event) => updateAgent(value.id, { role: event.currentTarget.value as "planner" | "builder" })}><option value="planner">Plan</option><option value="builder">Build</option></select>
 								<select id={`effort-${value.id}`} value={value.effort} disabled={!!value.personalBotId} class="h-9 rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white [color-scheme:dark] disabled:opacity-50" onchange={(event) => updateAgent(value.id, { effort: event.currentTarget.value as ThinkingLevel })}>{#each ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as effort}<option value={effort}>{effort}</option>{/each}</select>
 							</div>
-							{#if value.personalBotId}<p class="mt-2 text-[9px] text-[#83959b]">Model and reasoning come from the selected Personal Agent. Role and tools stay workspace-specific.</p>{/if}
+							{#if value.personalBotId}<p class="mt-2 text-[9px] text-[#83959b]">Changing this model updates the linked Personal Agent. Reasoning is set there.</p>{/if}
 							<label class="mt-4 block font-mono text-[8px] tracking-[.12em] text-[#66747d] uppercase" for={`tools-${value.id}`}>Tools</label>
 							<input id={`tools-${value.id}`} value={value.tools.join(", ")} placeholder="default, or read, grep, bash" class="mt-2 h-9 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[9px] text-white outline-0" onchange={(event) => updateAgent(value.id, { tools: event.currentTarget.value.split(/[\s,]+/).filter(Boolean) })} />
 						</section>

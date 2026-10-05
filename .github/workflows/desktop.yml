@@ -1,0 +1,78 @@
+name: Desktop platforms
+
+on:
+  push:
+    branches: [main]
+    paths: ["harness/**", "Logo/**", "LICENSE*", ".github/workflows/desktop.yml"]
+  pull_request:
+    paths: ["harness/**", "Logo/**", "LICENSE*", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x64
+            arch: x64
+          - os: windows-2022
+            name: windows-x64
+            arch: x64
+          - os: macos-15
+            name: macos-arm64
+            arch: arm64
+          - os: macos-15-intel
+            name: macos-x64
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: harness
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: harness/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev patchelf xvfb
+      - run: npm ci --ignore-scripts
+      - run: npm run hydrate:model-data
+      - name: Shared platform script tests
+        run: node --test packages/desktop/scripts/*.test.mjs
+      - name: Build the same source revision on each native platform
+        run: npm run tauri --workspace=@klerm/desktop -- build --ci
+      - name: Packaged backend smoke (no system Node or auth)
+        run: node packages/desktop/scripts/smoke-desktop.mjs
+      - name: Rust startup path tests
+        run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib
+      - name: Native window and packaged backend startup
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            node packages/desktop/scripts/smoke-desktop.mjs --app=packages/desktop/src-tauri/target/release/klerm-desktop.exe
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            node packages/desktop/scripts/smoke-desktop.mjs --app=packages/desktop/src-tauri/target/release/bundle/macos/Klerm.app/Contents/MacOS/klerm-desktop
+          else
+            xvfb-run -a node packages/desktop/scripts/smoke-desktop.mjs --app=packages/desktop/src-tauri/target/release/klerm-desktop
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Klerm-${{ matrix.name }}-${{ github.sha }}
+          path: |
+            harness/packages/desktop/src-tauri/target/release/bundle/
+            harness/packages/desktop/src-tauri/.assets/desktop-build.json
+          if-no-files-found: error

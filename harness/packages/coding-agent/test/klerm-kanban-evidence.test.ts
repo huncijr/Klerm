@@ -25,6 +25,10 @@ describe("truthful Kanban evidence", () => {
 			await writeFile(join(root, "edited.ts"), "modified");
 			await mkdir(join(root, ".klerm"));
 			await writeFile(join(root, ".klerm", "events.jsonl"), "runtime");
+			for (const generated of [".assets", ".cache"]) {
+				await mkdir(join(root, generated));
+				await writeFile(join(root, generated, "node-runtime"), "generated desktop runtime");
+			}
 			await symlink(join(root, ".klerm"), join(root, "linked"));
 			const after = await captureKanbanFolder(root);
 			expect(kanbanChangedFiles(before, after)).toEqual(["edited.ts", "new.ts", "old.ts"]);

@@ -21,6 +21,7 @@ const codingHarnessMetadata: Record<CodingHarnessKind, CodingHarnessMetadata> = 
 	codex: { label: "Codex", supportsModelDiscovery: true },
 	opencode: { label: "OpenCode", supportsModelDiscovery: true },
 	cline: { label: "Cline", supportsModelDiscovery: false },
+	hermes: { label: "Hermes", supportsModelDiscovery: false },
 };
 
 export function getCodingHarnessMetadata(kind: CodingHarnessKind): CodingHarnessMetadata {

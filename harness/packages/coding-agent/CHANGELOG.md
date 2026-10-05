@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added a single-owner headless Klerm HTTP/SSE server with browser controls, periodic native harness discovery, persistent request audit/deduplication, and Docker Compose deployment files.
+- Added a native Hermes ACP adapter with session reuse/load, attributed tool events, bounded cancellation, a persisted Full access profile, and explicit rejection of unsupported read-only Plan execution.
 - Added Agent Client Protocol (ACP) harness discovery: coding harnesses are scanned Zed-style by launching their known ACP adapter commands (`claude-code-acp`, `codex-acp`, `opencode-acp`, `cline-acp`), completing the JSON-RPC `initialize` handshake over stdio, and reporting the agent's identity, version, and capabilities, with the legacy version probe as fallback.
 - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
 - Added bounded bidirectional Klerm routing with native local/frontier delegation and returns, owner verification, deterministic transition logs, and interactive handback controls.
@@ -47,7 +49,8 @@
 - Changed desktop Memory settings to make the shared team prompt the only Klerm-owned harness memory and show the exact active shared prompt sent to external agents; Personal Bots remain standalone chats.
 - Removed Personal Bot and memory-profile assignment from coding-harness slots, including legacy persisted-field normalization and desktop model-menu controls.
 - Removed automatic Personal Bot summary generation and the desktop summary history, cadence, pending-task, and summary-state controls.
- - Changed the desktop Kanban to separate quick idea capture from planned tasks, show running spinners and hover previews, and move execution plans, attempts, results, and activity into a full-width workspace below the board.
+- Changed the desktop Kanban to separate quick idea capture from planned tasks, show running spinners and hover previews, and move execution plans, attempts, results, and activity into a full-width workspace below the board.
+- Added Auto as the default Kanban task type, with runtime classification against the build, fix, review, research, and maintenance guidance definitions.
 - Moved all Shared Memory editing and saved-memory selection from the composer into desktop Memory settings.
 - Changed sequential Work together orchestration to run every eligible external peer in deterministic capability order before coordinator finalization.
 - Changed Work together to start with the earliest configured available agent, reuse the smallest free agent number, cap setup at four agents, and allow Agent 1 removal when at least three agents are configured.
@@ -64,6 +67,8 @@
 
 ### Fixed
 
+- Fixed fresh desktop/Docker builds failing when live catalogs omit expected providers by restoring a checksummed public model-data baseline; live catalog refresh remains an explicit operation.
+- Fixed desktop release startup depending on the build-machine checkout and system Node; added a shared platform packaging hook with bundled verified Node/backend dependencies, portable Windows/macOS launchers, and native desktop build/startup CI.
 - Fixed concurrent Kanban runs interfering with each other's source evidence by reserving overlapping canonical folders per backend, allowing shared read-only work, draining reservations on Stop/session changes, and letting independent scheduled folders progress past blocked cards.
 - Fixed Kanban builds reporting completion without source changes and successful post-mutation checks; persisted mode, folder, file/command activity and review evidence, retained completed-card timelines and longer reports, and added guarded board deletion.
 - Fixed Browser Task stopping after explicit navigation by preserving the original task, disabling duplicate browser-use URL opening, forwarding bounded screenshots to image-capable models, and tying the visible cursor to actual click/input/scroll dispatch.

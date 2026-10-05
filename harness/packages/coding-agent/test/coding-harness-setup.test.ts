@@ -30,6 +30,22 @@ afterEach(async () => {
 });
 
 describe("coding harness setup", () => {
+	it("persists Hermes Full access and excludes unenforced Plan execution", () => {
+		const slots = {
+			externalHarnessesEnabled: true,
+			agents: [{ ...agent("agent1", "hermes"), model: "native-default", executionProfile: "full-access" as const }],
+		};
+		expect(parseCodingHarnessSlots(slots)).toEqual(slots);
+		expect(normalizeCodingHarnessSlots(slots).agents[0]?.executionProfile).toBe("full-access");
+		const setup = createCodingHarnessSetup(
+			{ ...slots, agents: [{ ...slots.agents[0]!, role: "planner" }] },
+			[{ kind: "hermes", builtin: false, available: true, models: ["native-default"] }],
+			new Set(["hermes"]),
+		);
+		expect(setup.runnableAgents).toHaveLength(0);
+		expect(setup.excludedAgents[0]?.reason).toContain("read-only Plan");
+	});
+
 	it("migrates persisted fixed slots but strictly parses dynamic RPC payloads", () => {
 		expect(normalizeCodingHarnessKind(" Claude Code ")).toBe("claude-code");
 		expect(normalizeCodingHarnessSlots({ agent1: "CODEX", agent2: "unknown" })).toEqual({
@@ -151,7 +167,7 @@ describe("coding harness setup", () => {
 	});
 
 	it("discovers builtin Klerm and probes only fixed external version commands", async () => {
-		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline") => {
+		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes") => {
 			if (command === "codex" || command === "cline") throw new Error("not installed");
 			return { stdout: `${command} 2.0\n${"ignored".repeat(100)}` };
 		});
@@ -163,6 +179,7 @@ describe("coding harness setup", () => {
 			{ kind: "codex", available: false, builtin: false, models: [] },
 			{ kind: "opencode", available: true, builtin: false, models: [], version: "opencode 2.0" },
 			{ kind: "cline", available: false, builtin: false, models: [] },
+			{ kind: "hermes", available: true, builtin: false, models: ["native-default"], version: "hermes 2.0" },
 		]);
 		expect(probe).toHaveBeenNthCalledWith(1, "pi", {
 			args: ["--version"],
@@ -193,7 +210,7 @@ describe("coding harness setup", () => {
 	});
 
 	it("prefers an ACP initialize handshake over the version probe", async () => {
-		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline") => {
+		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes") => {
 			if (command === "opencode") throw new Error("should not be called when ACP succeeds");
 			return { stdout: `${command} 2.0` };
 		});
@@ -230,6 +247,7 @@ describe("coding harness setup", () => {
 				},
 			},
 			{ kind: "cline", available: true, builtin: false, models: [], version: "cline 2.0" },
+			{ kind: "hermes", available: true, builtin: false, models: ["native-default"], version: "hermes 2.0" },
 		]);
 	});
 

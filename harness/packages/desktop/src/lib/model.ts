@@ -4,7 +4,7 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export type WorkerRole = "planner" | "builder";
 export type ApprovalMode = "always" | "risky" | "never";
 export type DesktopAppearance = "dark" | "light" | "system";
-export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline";
+export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes";
 export type CodingHarnessSlot = CodingHarnessKind | null;
 export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
 export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban" | "browser";
@@ -148,6 +148,7 @@ export interface CodingHarnessSlotSettings {
 	effort: ThinkingLevel;
 	tools: string[];
 	specialties?: string[];
+	executionProfile?: "native" | "full-access";
 }
 
 export interface CodingHarnessSetup {

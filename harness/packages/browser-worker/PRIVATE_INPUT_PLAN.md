@@ -34,6 +34,21 @@ not remove data already sent to a model.
 7. Log privacy transitions and acknowledgement, never input content. Treat browser
    or broker failure as locked, not as permission to resume.
 
+## Credential vault rollout (not implemented)
+
+1. Linux: integrate Secret Service (`secret-tool` using stdin or a reviewed
+   native API); never pass secrets through process arguments, localStorage,
+   model requests or JSONL. Other operating systems need their own keychains.
+2. Use a dedicated UI to collect email/login data. Store opaque vault references
+   only in typed settings. Payment/card values are excluded until separately
+   reviewed storage, deletion and retrieval behavior exists.
+3. An enforcing CDP broker must block worker screenshot/DOM observation before
+   human input or vault retrieval. An OS keyring alone does not hide visible
+   field values from the model while browser-use remains attached.
+4. Clean-page verification and fresh-agent context are required on Continue;
+   never silently unlock after a timeout. Test secret markers in every model
+   request (including image input), debug file and audit event.
+
 ## Tests required before shipping a privacy claim
 
 - Fixtures: login, signup, payment, OTP, CAPTCHA, confirmation and validation errors.
