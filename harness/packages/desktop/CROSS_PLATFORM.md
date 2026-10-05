@@ -103,7 +103,7 @@ with a path from the build machine. Child tools receive bundled Node on PATH.
 Automated local checks from `harness`:
 
 ```sh
-node --test packages/desktop/scripts/desktop-platform.test.mjs
+node --test packages/desktop/scripts/desktop-platform.test.mjs scripts/native-tar.test.mjs
 cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib
 npm run check
 ```

@@ -4,6 +4,7 @@ import { chmod, cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/prom
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nativeTar } from "../../../scripts/native-tar.mjs";
 import { assertDesktopDevPortFree, desktopPlatform, NODE_VERSION, npmInvocation, run, runNpm } from "./desktop-platform.mjs";
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +67,7 @@ async function packageNode() {
 	}
 	const extracted = join(cache, target.name);
 	await mkdir(extracted, { recursive: true });
-	run("tar", ["-xf", archive, "-C", cache, target.member, `${target.name}/LICENSE`], desktop);
+	run(nativeTar(), ["-xf", archive, "-C", cache, target.member, `${target.name}/LICENSE`], desktop);
 	await mkdir(join(assets, "runtime"), { recursive: true });
 	await cp(join(cache, target.member), join(assets, "runtime", target.node));
 	await cp(join(extracted, "LICENSE"), join(assets, "runtime/LICENSE"));

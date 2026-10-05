@@ -67,6 +67,7 @@
 
 ### Fixed
 
+- Fixed Windows model-data/Node extraction selecting Git Bash GNU tar by using the system BSD tar executable for native drive paths and ZIP archives.
 - Fixed fresh desktop/Docker builds failing when live catalogs omit expected providers by restoring a checksummed public model-data baseline; live catalog refresh remains an explicit operation.
 - Fixed desktop release startup depending on the build-machine checkout and system Node; added a shared platform packaging hook with bundled verified Node/backend dependencies, portable Windows/macOS launchers, and native desktop build/startup CI.
 - Fixed concurrent Kanban runs interfering with each other's source evidence by reserving overlapping canonical folders per backend, allowing shared read-only work, draining reservations on Stop/session changes, and letting independent scheduled folders progress past blocked cards.

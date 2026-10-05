@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nativeTar } from "./native-tar.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ai = join(root, "packages/ai");
@@ -12,7 +13,7 @@ const archive = join(snapshot, "baseline.tar.gz");
 const digest = join(snapshot, "baseline.sha256");
 const check = () => spawnSync(process.execPath, [join(ai, "scripts/check-model-data.ts")], { cwd: root, stdio: "inherit" }).status === 0;
 const tar = (args) => {
-	const result = spawnSync("tar", args, { cwd: root, stdio: "inherit" });
+	const result = spawnSync(nativeTar(), args, { cwd: root, stdio: "inherit" });
 	if (result.error) throw result.error;
 	if (result.status !== 0) throw new Error("Model-data snapshot archive operation failed.");
 };
