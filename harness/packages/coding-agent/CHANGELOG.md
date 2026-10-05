@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a backend-owned workflow draft registry, graph catalog of existing agents/cards/attempts, reference/port/DAG validation, revision-safe persistence and a desktop SVG graph editor/inspector without agent dispatch.
 - Added a single-owner headless Klerm HTTP/SSE server with browser controls, periodic native harness discovery, persistent request audit/deduplication, and Docker Compose deployment files.
 - Added a native Hermes ACP adapter with session reuse/load, attributed tool events, bounded cancellation, a persisted Full access profile, and explicit rejection of unsupported read-only Plan execution.
 - Added Agent Client Protocol (ACP) harness discovery: coding harnesses are scanned Zed-style by launching their known ACP adapter commands (`claude-code-acp`, `codex-acp`, `opencode-acp`, `cline-acp`), completing the JSON-RPC `initialize` handshake over stdio, and reporting the agent's identity, version, and capabilities, with the legacy version probe as fallback.

@@ -42,6 +42,15 @@ import type { PersonalBot, PersonalBotRegistry } from "../../klerm/personal-bots
 import type { KlermProfile, KlermProfileState } from "../../klerm/profiles.ts";
 import type { KlermProject, ProjectSessionExtract } from "../../klerm/projects.ts";
 import type { KlermRoutingState, KlermWorkerLane } from "../../klerm/router/types.ts";
+import type { WorkflowSummary } from "../../klerm/workflow-store.ts";
+import type {
+	GraphCatalogPage,
+	GraphCatalogQuery,
+	GraphSourceDetails,
+	GraphSourceRef,
+	WorkflowDefinition,
+	WorkflowValidation,
+} from "../../klerm/workflows.ts";
 
 export const KLERM_DESKTOP_RPC_PROTOCOL_VERSION = 1;
 
@@ -268,6 +277,13 @@ export type RpcCommand =
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "get_projects" }
 	| { id?: string; type: "get_kanban_registry" }
+	| { id?: string; type: "list_workflows" }
+	| { id?: string; type: "get_workflow"; workflowId: string }
+	| { id?: string; type: "save_workflow"; workflow: WorkflowDefinition; expectedRevision: number }
+	| { id?: string; type: "delete_workflow"; workflowId: string; expectedRevision: number }
+	| { id?: string; type: "validate_workflow"; workflow: WorkflowDefinition }
+	| { id?: string; type: "get_graph_catalog"; query?: GraphCatalogQuery }
+	| { id?: string; type: "get_graph_source_details"; sourceRef: GraphSourceRef }
 	| { id?: string; type: "set_kanban_registry"; registry: RpcKanbanRegistry }
 	| { id?: string; type: "delete_kanban_board"; boardId: string }
 	| { id?: string; type: "run_kanban_task"; boardId: string; taskId: string }
@@ -515,6 +531,23 @@ export type RpcResponse =
 			data: { sessions: RpcDesktopSessionInfo[] };
 	  }
 	| { id?: string; type: "response"; command: "get_projects"; success: true; data: RpcProjects }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_workflows" | "delete_workflow";
+			success: true;
+			data: { workspaceRoot: string; workflows: WorkflowSummary[]; executionSupported: false };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_workflow" | "save_workflow";
+			success: true;
+			data: WorkflowDefinition;
+	  }
+	| { id?: string; type: "response"; command: "validate_workflow"; success: true; data: WorkflowValidation }
+	| { id?: string; type: "response"; command: "get_graph_catalog"; success: true; data: GraphCatalogPage }
+	| { id?: string; type: "response"; command: "get_graph_source_details"; success: true; data: GraphSourceDetails }
 	| {
 			id?: string;
 			type: "response";

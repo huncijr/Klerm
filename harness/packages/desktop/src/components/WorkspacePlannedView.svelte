@@ -36,6 +36,8 @@
 		onrun,
 		onstop,
 		ondelete,
+		focusBoardId,
+		focusTaskId,
 	}: {
 		registry: KanbanRegistry;
 		workspaceRoot: string;
@@ -47,6 +49,8 @@
 		onrun: (boardId: string, taskId: string) => Promise<void>;
 		onstop: (boardId: string, taskId: string) => Promise<void>;
 		ondelete: (boardId: string) => Promise<void>;
+		focusBoardId?: string;
+		focusTaskId?: string;
 	} = $props();
 
 	const columns: Array<{ id: KanbanTaskStatus; label: string; accent: string }> = [
@@ -61,6 +65,7 @@
 	const kindOptions: KanbanTaskKind[] = ["auto", "build", "fix", "review", "research", "maintenance"];
 
 	let selectedBoardId = $state("");
+	let appliedGraphFocus = "";
 	let selectedTaskId = $state("");
 	let boardName = $state("");
 	let draftPrompt = $state("");
@@ -132,6 +137,14 @@
 	});
 	$effect(() => {
 		if (board && selectedBoardId !== board.id) selectedBoardId = board.id;
+	});
+	$effect(() => {
+		const key = JSON.stringify([focusBoardId, focusTaskId]);
+		if (key !== appliedGraphFocus && focusBoardId && registry.boards.some((item) => item.id === focusBoardId)) {
+			appliedGraphFocus = key;
+			selectedBoardId = focusBoardId;
+			if (focusTaskId) selectedTaskId = focusTaskId;
+		}
 	});
 	$effect(() => {
 		selectedBoardId;

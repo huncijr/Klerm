@@ -19,6 +19,7 @@
 		{ id: "agents-routing", label: "Agents & Routing", detail: "Shared prompt and agent workspace", icon: Network },
 		{ id: "personal-bots", label: "Personal Bots", detail: "Personalities and private chats", icon: Bot },
 		{ id: "kanban", label: "Kanban", detail: "Assigned and scheduled tasks", icon: Boxes },
+		{ id: "graph", label: "Workflows / Graph", detail: "Connect existing agents, cards and history", icon: Network },
 		{ id: "browser", label: "Browser Agent", detail: "Visible Chromium workspace", icon: MonitorUp },
 	];
 

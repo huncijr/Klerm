@@ -49,6 +49,7 @@ npm-debug.log*
 /PLAN.md
 /APP_PLAN.md
 /SERVER_PLAN.md
+/GRAPH_PLAN.md
 
 # Self-hosted deployment: machine-specific state, credentials, and backups
 /deploy/docker/.env

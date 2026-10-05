@@ -93,6 +93,7 @@ import {
 	type RunnableCodingHarnessAgent,
 } from "../../klerm/coding-harness-setup.ts";
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
+import { type GraphCatalogContext, graphCatalog, graphSourceDetails, graphSources } from "../../klerm/graph-catalog.ts";
 import type { KanbanRegistry, KanbanTask } from "../../klerm/kanban.ts";
 import {
 	assessKanbanEvidence,
@@ -158,6 +159,8 @@ import {
 	isVerificationToolCall,
 	isWorkspaceMutationToolCall,
 } from "../../klerm/tool-policy.ts";
+import { WorkflowRevisionError, WorkflowStore } from "../../klerm/workflow-store.ts";
+import { graphSourceKey, parseGraphSource, parseWorkflow, validateWorkflow } from "../../klerm/workflows.ts";
 import {
 	captureKlermWorkspaceSnapshot,
 	changedKlermWorkspacePaths,
@@ -279,6 +282,13 @@ const DESKTOP_COMMANDS = [
 	"list_sessions",
 	"get_projects",
 	"get_kanban_registry",
+	"list_workflows",
+	"get_workflow",
+	"save_workflow",
+	"delete_workflow",
+	"validate_workflow",
+	"get_graph_catalog",
+	"get_graph_source_details",
 	"set_kanban_registry",
 	"delete_kanban_board",
 	"run_kanban_task",
@@ -3638,6 +3648,64 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				const registry = session.settingsManager.getProjectRegistry();
 				await session.settingsManager.flush();
 				return success(id, "get_projects", getProjectsPayload(registry));
+			}
+
+			case "list_workflows":
+			case "get_workflow":
+			case "save_workflow":
+			case "delete_workflow":
+			case "validate_workflow":
+			case "get_graph_catalog":
+			case "get_graph_source_details": {
+				const store = new WorkflowStore(session.sessionManager.getCwd());
+				const context = async (): Promise<GraphCatalogContext> => ({
+					bots: session.settingsManager.getPersonalBots().bots,
+					kanban: session.settingsManager.getKanbanRegistry(),
+					harnesses: await getCodingHarnessSetup(),
+					agentDir: personalBotStorageDir,
+					conversations: personalBotConversations,
+				});
+				try {
+					switch (command.type) {
+						case "list_workflows":
+							return success(id, command.type, await store.list());
+						case "get_workflow":
+							return success(id, command.type, await store.get(command.workflowId));
+						case "save_workflow":
+							return success(id, command.type, await store.save(command.workflow, command.expectedRevision));
+						case "delete_workflow":
+							await store.delete(command.workflowId, command.expectedRevision);
+							return success(id, command.type, await store.list());
+						case "get_graph_catalog":
+							return success(id, command.type, await graphCatalog(await context(), command.query));
+						case "get_graph_source_details":
+							return success(
+								id,
+								command.type,
+								await graphSourceDetails(await context(), parseGraphSource(command.sourceRef)),
+							);
+						case "validate_workflow": {
+							const workflow = parseWorkflow(command.workflow);
+							const sources = await graphSources(
+								await context(),
+								workflow.nodes.flatMap((node) => (node.sourceRef ? [node.sourceRef] : [])),
+							);
+							return success(
+								id,
+								command.type,
+								validateWorkflow(workflow, (ref) => sources.get(graphSourceKey(ref))),
+							);
+						}
+					}
+					throw new Error("Unknown graph metadata operation.");
+				} catch (graphError) {
+					return error(
+						id,
+						command.type,
+						graphError instanceof Error ? graphError.message : String(graphError),
+						graphError instanceof WorkflowRevisionError ? "WORKFLOW_REVISION_CONFLICT" : "GRAPH_INVALID_REQUEST",
+					);
+				}
 			}
 
 			case "get_kanban_registry": {

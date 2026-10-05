@@ -106,6 +106,8 @@
 	import Topbar from "./components/Topbar.svelte";
 	import WorkspacePanel from "./components/WorkspacePanel.svelte";
 	import WorkspacePlannedView from "./components/WorkspacePlannedView.svelte";
+	import GraphWorkspace from "./components/GraphWorkspace.svelte";
+	import type { GraphSourceRef } from "../../coding-agent/src/klerm/workflows.ts";
 
 	const bridge = new RpcBridge();
 
@@ -134,6 +136,21 @@
 	let projects = $state<DesktopProject[]>([]);
 	let kanbanRegistry = $state<KanbanRegistry>({ version: 1, boards: [] });
 	let kanbanActivity = $state<KanbanActivityEvent[]>([]);
+	let graphSourceRevision = $state(0);
+	let graphKanbanFocus = $state<{ boardId: string; taskId?: string }>();
+	async function openGraphSource(ref: GraphSourceRef): Promise<void> {
+		if (ref.kind === "personal-agent" || ref.kind === "personal-conversation") {
+			personalBotsFocus = ref.botId;
+			workspaceView = "personal-bots";
+			if (ref.botId) await loadPersonalBotConversation(ref.botId);
+		} else if (ref.kind === "harness-agent") {
+			workspaceView = undefined; settingsOpen = true;
+		} else {
+			await refreshKanban();
+			graphKanbanFocus = { boardId: ref.boardId!, taskId: ref.taskId };
+			workspaceView = "kanban";
+		}
+	}
 	let browserAvailability = $state<BrowserAvailability | undefined>(undefined);
 	let browserRun = $state<BrowserRunState | undefined>(undefined);
 	let browserSessions = $state<Array<{ id: string; name: string }>>([]);
@@ -1480,6 +1497,7 @@
 	function handleRpcEvent(event: JsonObject): void {
 		switch (event.type) {
 			case "personal_bot_conversation_changed": {
+				graphSourceRevision += 1;
 				const conversation = event.conversation as PersonalBotConversation | undefined;
 				if (conversation && typeof conversation.botId === "string") {
 					const botName = personalBots.bots.find((bot) => bot.id === conversation.botId)?.name ?? "Personal Bot";
@@ -1499,6 +1517,7 @@
 			case "personal_bot_tool":
 				return;
 			case "kanban_event": {
+				graphSourceRevision += 1;
 				if (
 					typeof event.boardId === "string" &&
 					typeof event.taskId === "string" &&
@@ -1520,6 +1539,7 @@
 				return;
 			}
 			case "kanban_registry_changed": {
+				graphSourceRevision += 1;
 				const registry = event.registry as KanbanRegistry | undefined;
 				if (registry && Array.isArray(registry.boards)) kanbanRegistry = registry;
 				return;
@@ -3345,8 +3365,15 @@
 			}}
 				onabort={abortPersonalBot}
 			/>
+		{:else if workspaceView === "graph"}
+			{#key workspace?.projectRoot ?? sessionCwd}
+			<GraphWorkspace workspaceRoot={workspace?.projectRoot ?? sessionCwd} sourceRevision={graphSourceRevision}
+				request={(type, fields) => bridge.send(type, fields)} onclose={() => (workspaceView = undefined)} onopensource={(ref) => void openGraphSource(ref)} />
+			{/key}
 		{:else if workspaceView === "kanban"}
 			<WorkspacePlannedView
+				focusBoardId={graphKanbanFocus?.boardId}
+				focusTaskId={graphKanbanFocus?.taskId}
 				personalAgents={personalBots.bots}
 				registry={kanbanRegistry}
 				workspaceRoot={workspace?.projectRoot ?? sessionCwd}
