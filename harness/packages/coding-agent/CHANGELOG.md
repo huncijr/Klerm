@@ -46,6 +46,7 @@
 
 ### Changed
 
+- Redesigned the desktop around shared semantic light/dark palettes, readable system typography, direct workspace navigation and restrained surfaces; removed whole-app light-mode inversion and made MCP/diff/graph colors theme-aware.
 - Added a Linux in-app CEF Browser Task surface with native input forwarding and loopback CDP attachment to the same page; explicit YouTube-open requests navigate before model execution, and ordered browser activity appears beside the task conversation. Desktop/model smoke and CEF release packaging remain pending.
 - Changed Browser Task to accept an optional start URL and reuse one browser per Klerm conversation session across follow-up questions; worker failure resets the next run to a blank profile, and human takeover/Continue use explicit audited control events.
 - Changed desktop Memory settings to make the shared team prompt the only Klerm-owned harness memory and show the exact active shared prompt sent to external agents; Personal Bots remain standalone chats.

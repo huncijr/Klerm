@@ -2,23 +2,23 @@ export const MCP_COLORS = ["base", "green", "blue", "amber", "red", "purple", "t
 export type McpColor = (typeof MCP_COLORS)[number];
 
 export const MCP_COLOR_CSS: Record<McpColor, string> = {
-	base: "#98a2a9",
-	green: "#7dce8a",
-	blue: "#8fb7e8",
-	amber: "#d6b16e",
-	red: "#f09b93",
-	purple: "#c4a4e8",
-	teal: "#7ec8c0",
+	base: "var(--color-muted)",
+	green: "var(--color-success)",
+	blue: "var(--color-info)",
+	amber: "var(--color-warning)",
+	red: "var(--color-danger)",
+	purple: "var(--color-purple)",
+	teal: "var(--color-teal)",
 };
 
 export const MCP_COLOR_BG_CSS: Record<McpColor, string> = {
-	base: "rgba(152, 162, 169, .14)",
-	green: "rgba(125, 206, 138, .14)",
-	blue: "rgba(143, 183, 232, .14)",
-	amber: "rgba(214, 177, 110, .14)",
-	red: "rgba(240, 155, 147, .14)",
-	purple: "rgba(196, 164, 232, .14)",
-	teal: "rgba(126, 200, 192, .14)",
+	base: "var(--color-raised)",
+	green: "var(--color-success-soft)",
+	blue: "var(--color-info-soft)",
+	amber: "var(--color-warning-soft)",
+	red: "var(--color-danger-soft)",
+	purple: "var(--color-purple-soft)",
+	teal: "var(--color-teal-soft)",
 };
 
 export function isMcpColor(value: string | undefined): value is McpColor {

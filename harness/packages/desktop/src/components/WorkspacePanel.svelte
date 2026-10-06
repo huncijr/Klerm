@@ -106,10 +106,10 @@
 	});
 
 	function statusBadgeClass(status: WorkspaceFileStatus["status"]): string {
-		if (status === "added" || status === "untracked") return "text-[#81c995]";
-		if (status === "deleted") return "text-[#f09b93]";
-		if (status === "renamed") return "text-[#8fb7e8]";
-		return "text-[#9aa3aa]";
+		if (status === "added" || status === "untracked") return "text-success";
+		if (status === "deleted") return "text-danger";
+		if (status === "renamed") return "text-info";
+		return "text-muted";
 	}
 
 	interface ProjectFileNode {
@@ -154,10 +154,10 @@
 	}
 
 	function actorClass(file: WorkspaceFileStatus): string {
-		if (file.attribution.source === "local") return "border-[rgba(100,169,119,.35)] bg-[rgba(38,77,48,.22)] text-[#8bc89b]";
-		if (file.attribution.source === "frontier") return "border-[rgba(87,132,194,.38)] bg-[rgba(34,58,90,.24)] text-[#91b6e5]";
-		if (file.attribution.source === "manual") return "border-[rgba(214,166,63,.35)] bg-[rgba(76,58,24,.22)] text-[#d6b16e]";
-		return "border-[#303941] bg-[#13191e] text-[#717d85]";
+		if (file.attribution.source === "local") return "border-success bg-raised text-success";
+		if (file.attribution.source === "frontier") return "border-info bg-info-soft text-info";
+		if (file.attribution.source === "manual") return "border-warning bg-danger-soft text-warning";
+		return "border-line bg-panel text-muted";
 	}
 
 	function stageLabel(file: WorkspaceFileStatus): string {
@@ -166,10 +166,10 @@
 	}
 
 	function diffLineClass(line: string): string {
-		if (line.startsWith("+") && !line.startsWith("+++")) return "bg-[rgba(30,83,46,.28)] text-[#9bd6aa]";
-		if (line.startsWith("-") && !line.startsWith("---")) return "bg-[rgba(93,31,31,.3)] text-[#f0aaa3]";
-		if (line.startsWith("@@")) return "bg-[rgba(47,67,92,.25)] text-[#91b4df]";
-		return "text-[#7f8991]";
+		if (line.startsWith("+") && !line.startsWith("+++")) return "bg-success-soft text-success";
+		if (line.startsWith("-") && !line.startsWith("---")) return "bg-danger-soft text-danger";
+		if (line.startsWith("@@")) return "bg-info-soft text-info";
+		return "text-muted";
 	}
 
 	function showListTab(next: "changes" | "files" | "web"): void {
@@ -222,55 +222,55 @@
 	}
 </script>
 
-<aside bind:this={panelEl} class="flex h-full min-h-0 min-w-0 flex-col border-l border-[#33414c] bg-[#10171d] shadow-[-16px_0_45px_rgba(0,0,0,.2)] narrow-900:fixed narrow-900:inset-y-0 narrow-900:right-0 narrow-900:z-[18] narrow-900:w-[min(460px,92vw)] narrow-900:shadow-[-24px_0_70px_rgba(0,0,0,.55)]">
-	<header class="flex h-[58px] shrink-0 items-center gap-2 border-b border-[#34424d] bg-[linear-gradient(110deg,rgba(38,70,96,.42),rgba(18,26,32,.96))] px-3">
-		<FileCode2 size={15} class="text-[#8fc4ed]" />
+<aside bind:this={panelEl} class="flex h-full min-h-0 min-w-0 flex-col border-l border-line bg-panel shadow-sm narrow-900:fixed narrow-900:inset-y-0 narrow-900:right-0 narrow-900:z-[18] narrow-900:w-[min(460px,92vw)] narrow-900:shadow-sm">
+	<header class="flex h-[58px] shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
+		<FileCode2 size={15} class="text-info" />
 		<div class="min-w-0 flex-1">
-			<strong class="block text-[11px] text-[#d6dde1]">File changes</strong>
-			<small class="block truncate font-mono text-[8px] text-[#59656d]" title={workspace?.projectRoot}>{workspace?.isGit ? `${workspace.files.length} changed / Git` : "No Git repository"}</small>
+			<strong class="block text-[13px] text-ink">File changes</strong>
+			<small class="block truncate font-sans text-[11px] text-dim" title={workspace?.projectRoot}>{workspace?.isGit ? `${workspace.files.length} changed / Git` : "No Git repository"}</small>
 		</div>
 		<div bind:this={editorRoot} class="relative">
-			<button type="button" disabled={!workspace?.trusted} aria-expanded={editorMenuOpen} class="flex h-8 items-center gap-1.5 rounded-md border border-[#2c353c] bg-[#10161b] px-2 text-[9px] text-[#b6c0c6] hover:border-[#4a565f] disabled:cursor-not-allowed disabled:opacity-45" onclick={() => (editorMenuOpen = !editorMenuOpen)}><ExternalLink size={11} /> Open <ChevronDown size={10} /></button>
+			<button type="button" disabled={!workspace?.trusted} aria-expanded={editorMenuOpen} class="flex h-8 items-center gap-1.5 rounded-md border border-line bg-panel px-2 text-[12px] text-ink hover:border-line disabled:cursor-not-allowed disabled:opacity-45" onclick={() => (editorMenuOpen = !editorMenuOpen)}><ExternalLink size={11} /> Open <ChevronDown size={10} /></button>
 			{#if editorMenuOpen}
-				<div class="absolute top-[36px] right-0 z-30 w-[150px] rounded-md border border-[#303941] bg-[#0b0f13] p-1 shadow-[0_14px_36px_rgba(0,0,0,.55)]">
+				<div class="absolute top-[36px] right-0 z-30 w-[150px] rounded-md border border-line bg-bg p-1 shadow-sm">
 					{#each editors as editor (editor.id)}
-						<button type="button" disabled={!editor.available} class="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-[9px] text-[#c8d0d4] hover:bg-[#171d22] disabled:cursor-not-allowed disabled:text-[#4e5961]" onclick={() => { editorMenuOpen = false; onopeneditor(editor.id); }}><Code2 size={11} /> {editor.label}<span class="ml-auto font-mono text-[7px]">{editor.available ? "" : "missing"}</span></button>
+						<button type="button" disabled={!editor.available} class="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-[12px] text-ink hover:bg-raised disabled:cursor-not-allowed disabled:text-dim" onclick={() => { editorMenuOpen = false; onopeneditor(editor.id); }}><Code2 size={11} /> {editor.label}<span class="ml-auto font-sans text-[11px]">{editor.available ? "" : "missing"}</span></button>
 					{/each}
 				</div>
 			{/if}
 		</div>
-		<button type="button" aria-label="Refresh file changes" class="grid h-8 w-8 place-items-center rounded text-[#6f7b83] hover:bg-[#171d22] hover:text-[#d7dee2]" onclick={onrefresh}><RefreshCw size={13} /></button>
-		<button type="button" aria-label="Close file panel" class="grid h-8 w-8 place-items-center rounded text-[#6f7b83] hover:bg-[#171d22] hover:text-[#d7dee2]" onclick={onclose}><X size={14} /></button>
+		<button type="button" aria-label="Refresh file changes" class="grid h-8 w-8 place-items-center rounded text-muted hover:bg-raised hover:text-ink" onclick={onrefresh}><RefreshCw size={13} /></button>
+		<button type="button" aria-label="Close file panel" class="grid h-8 w-8 place-items-center rounded text-muted hover:bg-raised hover:text-ink" onclick={onclose}><X size={14} /></button>
 	</header>
 
-	<div class="flex shrink-0 items-center justify-end gap-1 bg-[#131c23] px-2 pt-2">
+	<div class="flex shrink-0 items-center justify-end gap-1 bg-raised px-2 pt-2">
 		<button
 			type="button"
-			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "changes" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
+			class={`flex h-6 items-center gap-1 rounded px-2 text-[11px] ${listTab === "changes" ? "border border-info bg-info-soft text-info" : "border border-transparent text-muted hover:text-ink"}`}
 			onclick={() => showListTab("changes")}
 		>Changes</button>
-		<button type="button" class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "web" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`} onclick={() => showListTab("web")}>External browser</button>
+		<button type="button" class={`flex h-6 items-center gap-1 rounded px-2 text-[11px] ${listTab === "web" ? "border border-info bg-info-soft text-info" : "border border-transparent text-muted hover:text-ink"}`} onclick={() => showListTab("web")}>External browser</button>
 		<button
 			type="button"
-			class={`flex h-6 items-center gap-1 rounded px-2 text-[8px] ${listTab === "files" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "border border-transparent text-[#788994] hover:text-[#cbd3d7]"}`}
+			class={`flex h-6 items-center gap-1 rounded px-2 text-[11px] ${listTab === "files" ? "border border-info bg-info-soft text-info" : "border border-transparent text-muted hover:text-ink"}`}
 			onclick={() => showListTab("files")}
 		><FolderTree size={10} /> View project files</button>
 	</div>
 	{#if listTab !== "web"}
-	<div class="shrink-0 overflow-y-auto bg-[#131c23] p-2" style={`height: ${listHeight}px;`}>
+	<div class="shrink-0 overflow-y-auto bg-raised p-2" style={`height: ${listHeight}px;`}>
 		{#if listTab === "files"}
 			{#if projectFilesLoading}
-				<p class="px-2 py-3 text-[10px] text-[#68747c]">Loading project files...</p>
+				<p class="px-2 py-3 text-[12px] text-muted">Loading project files...</p>
 			{:else if !projectFiles || projectFiles.length === 0}
-				<p class="px-2 py-3 text-[10px] text-[#68747c]">No files found in the project root.</p>
+				<p class="px-2 py-3 text-[12px] text-muted">No files found in the project root.</p>
 			{:else}
 				{#snippet fileNode(node: ProjectFileNode, depth: number)}
 					{#if node.isFile}
-						<button type="button" class={`flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left ${selectedPath === node.path ? "bg-[#151b20]" : "hover:bg-[#11171c]"}`} style={`padding-left: ${8 + depth * 14}px;`} onclick={() => onselect(node.path)}>
-							<span class="min-w-0 flex-1 truncate font-mono text-[9px] text-[#bdc6cb]" title={node.path}>{node.name}</span>
+						<button type="button" class={`flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left ${selectedPath === node.path ? "bg-panel" : "hover:bg-panel"}`} style={`padding-left: ${8 + depth * 14}px;`} onclick={() => onselect(node.path)}>
+							<span class="min-w-0 flex-1 truncate font-sans text-[12px] text-ink" title={node.path}>{node.name}</span>
 						</button>
 					{:else}
-						<button type="button" class="flex w-full min-w-0 items-center gap-1 rounded py-1 pr-2 text-left font-mono text-[9px] text-[#8fa3b0] hover:bg-[#11171c]" style={`padding-left: ${8 + depth * 14}px;`} onclick={() => toggleTreeFolder(node.path)}>
+						<button type="button" class="flex w-full min-w-0 items-center gap-1 rounded py-1 pr-2 text-left font-sans text-[12px] text-muted hover:bg-panel" style={`padding-left: ${8 + depth * 14}px;`} onclick={() => toggleTreeFolder(node.path)}>
 							<ChevronDown size={10} class={`shrink-0 transition-transform ${collapsedPaths.includes(node.path) ? "-rotate-90" : ""}`} />
 							<span class="min-w-0 truncate">{node.name}/</span>
 						</button>
@@ -282,36 +282,36 @@
 					{/if}
 				{/snippet}
 				{#if projectFilesTruncated}
-					<p class="px-2 pb-1 text-[8px] text-[#d6a63f]">List truncated — showing the first {projectFiles.length} files.</p>
+					<p class="px-2 pb-1 text-[11px] text-warning">List truncated — showing the first {projectFiles.length} files.</p>
 				{/if}
 				{#each projectFileTree as node (node.path)}
 					{@render fileNode(node, 0)}
 				{/each}
 			{/if}
 		{:else if !workspace?.isGit}
-			<div class="px-2 py-3 text-[10px]/[1.5] text-[#68747c]">
+			<div class="px-2 py-3 text-[12px]/[1.5] text-muted">
 				<p class="m-0">The selected root is not inside a Git repository. Klerm tool changes still appear in the activity feed.</p>
 				{#if workspace?.gitInitializationRecommendation}
-					<p class="mt-2 mb-0 rounded border border-[rgba(214,166,63,.28)] bg-[rgba(76,58,24,.2)] px-2 py-1.5 text-[#d8bd77]">{workspace.gitInitializationRecommendation}</p>
+					<p class="mt-2 mb-0 rounded border border-warning bg-danger-soft px-2 py-1.5 text-warning">{workspace.gitInitializationRecommendation}</p>
 				{/if}
 				<div class="mt-3 flex flex-wrap gap-2">
-					<button type="button" disabled={gitBusy || !workspace?.trusted} class="flex items-center gap-1.5 rounded border border-[rgba(91,145,210,.42)] bg-[rgba(35,77,119,.3)] px-2 py-1.5 font-mono text-[8px] text-[#bad8f2] hover:bg-[rgba(44,91,137,.45)] disabled:opacity-45" onclick={oninitializegit}><GitBranch size={11} /> Initialize Git</button>
+					<button type="button" disabled={gitBusy || !workspace?.trusted} class="flex items-center gap-1.5 rounded border border-info bg-info-soft px-2 py-1.5 font-sans text-[11px] text-info hover:bg-info-soft disabled:opacity-45" onclick={oninitializegit}><GitBranch size={11} /> Initialize Git</button>
 					{#if github?.available && !github.authenticated}
-						<button type="button" disabled={gitBusy} class="flex items-center gap-1.5 rounded border border-[#35404a] bg-[#10171d] px-2 py-1.5 font-mono text-[8px] text-[#bdc7ce] hover:bg-[#1b252c] disabled:opacity-45" onclick={onlogingithub}><GitBranch size={11} /> Connect GitHub</button>
+						<button type="button" disabled={gitBusy} class="flex items-center gap-1.5 rounded border border-line bg-panel px-2 py-1.5 font-sans text-[11px] text-ink hover:bg-raised disabled:opacity-45" onclick={onlogingithub}><GitBranch size={11} /> Connect GitHub</button>
 					{:else if github?.authenticated}
-						<span class="flex items-center gap-1.5 px-2 py-1.5 font-mono text-[8px] text-[#8ecaa0]"><GitBranch size={11} /> GitHub connected</span>
+						<span class="flex items-center gap-1.5 px-2 py-1.5 font-sans text-[11px] text-success"><GitBranch size={11} /> GitHub connected</span>
 					{/if}
 				</div>
 			</div>
 		{:else if workspace.files.length === 0}
-			<p class="px-2 py-3 text-[10px] text-[#68747c]">Working tree clean.</p>
+			<p class="px-2 py-3 text-[12px] text-muted">Working tree clean.</p>
 		{:else}
 			{#each workspace.files as file (file.path)}
-				<button type="button" class={`mb-1 flex w-full min-w-0 items-center gap-2 rounded-md border px-2 py-2 text-left ${selectedPath === file.path ? "border-[#46525b] bg-[#151b20]" : "border-transparent hover:bg-[#11171c]"}`} onclick={() => onselect(file.path)}>
-					<span class={`w-4 shrink-0 text-center font-mono text-[9px] font-bold ${statusBadgeClass(file.status)}`}>{file.status === "untracked" ? "?" : file.status[0]?.toUpperCase()}</span>
+				<button type="button" class={`mb-1 flex w-full min-w-0 items-center gap-2 rounded-md border px-2 py-2 text-left ${selectedPath === file.path ? "border-line bg-panel" : "border-transparent hover:bg-panel"}`} onclick={() => onselect(file.path)}>
+					<span class={`w-4 shrink-0 text-center font-sans text-[12px] font-bold ${statusBadgeClass(file.status)}`}>{file.status === "untracked" ? "?" : file.status[0]?.toUpperCase()}</span>
 					<span class="min-w-0 flex-1">
-						<strong class="block truncate font-mono text-[9px] font-medium text-[#bdc6cb]" title={file.path}>{file.path}</strong>
-						<small class="mt-1 flex min-w-0 items-center gap-1 font-mono text-[7px]"><span class={`max-w-full truncate rounded border px-1 py-0.5 ${actorClass(file)}`} title={actorLabel(file)}>{actorLabel(file)}</span><span class="shrink-0 text-[#7b878f]">{stageLabel(file)}</span></small>
+						<strong class="block truncate font-sans text-[12px] font-medium text-ink" title={file.path}>{file.path}</strong>
+						<small class="mt-1 flex min-w-0 items-center gap-1 font-sans text-[11px]"><span class={`max-w-full truncate rounded border px-1 py-0.5 ${actorClass(file)}`} title={actorLabel(file)}>{actorLabel(file)}</span><span class="shrink-0 text-muted">{stageLabel(file)}</span></small>
 					</span>
 				</button>
 			{/each}
@@ -320,10 +320,10 @@
 	<button
 		type="button"
 		aria-label="Resize file list"
-		class="flex h-2 shrink-0 cursor-row-resize items-center justify-center border-0 bg-[#131c23] hover:bg-[#1b252c]"
+		class="flex h-2 shrink-0 cursor-row-resize items-center justify-center border-0 bg-raised hover:bg-raised"
 		onpointerdown={startListResize}
 	>
-		<span class="block h-0.5 w-8 rounded-full bg-[#4a5861]"></span>
+		<span class="block h-0.5 w-8 rounded-full bg-raised"></span>
 	</button>
 	{/if}
 
@@ -331,55 +331,55 @@
 		{#if webUrl && webSessionId}
 			{#key webSessionId}<WebActivityView sessionId={webSessionId} url={webUrl} sources={webSources} openRequest={webOpenRequest} onclose={() => (listTab = "changes")} />{/key}
 		{:else}
-			<div class="grid min-h-0 flex-1 place-items-center px-6 text-center text-[10px] text-[#81949b]">No web fetch has run yet. The latest AI web-tool page will appear here.</div>
+			<div class="grid min-h-0 flex-1 place-items-center px-6 text-center text-[12px] text-muted">No web fetch has run yet. The latest AI web-tool page will appear here.</div>
 		{/if}
 	{:else}
-	<div class="flex min-h-0 flex-1 flex-col bg-[#0e151b]">
+	<div class="flex min-h-0 flex-1 flex-col bg-panel">
 		{#if selectedPath}
 			<div class="flex h-10 shrink-0 items-center border-b border-line-soft px-2">
 				<button
 					type="button"
-					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] ${tab === "diff" ? "border border-[rgba(79,140,202,.35)] bg-[rgba(44,91,137,.28)] text-[#aed0ef]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
+					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[12px] ${tab === "diff" ? "border border-info bg-info-soft text-info" : "text-muted hover:text-ink"}`}
 					onclick={() => (tab = "diff")}
 				><Braces size={11} /> Diff</button>
 						<button
 							type="button"
 							disabled={content === undefined || !workspace?.trusted}
-					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[9px] disabled:cursor-not-allowed disabled:opacity-35 ${tab === "edit" ? "border border-[rgba(65,159,96,.35)] bg-[rgba(34,101,55,.28)] text-[#a8d9b5]" : "text-[#788994] hover:text-[#cbd3d7]"}`}
+					class={`flex h-8 items-center gap-1.5 rounded px-2 text-[12px] disabled:cursor-not-allowed disabled:opacity-35 ${tab === "edit" ? "border border-success bg-success-soft text-success" : "text-muted hover:text-ink"}`}
 					onclick={() => (tab = "edit")}
 				><FileCode2 size={11} /> Edit</button>
-				<span class="ml-2 min-w-0 flex-1 truncate font-mono text-[8px] text-[#77838b]" title={selectedPath}
+				<span class="ml-2 min-w-0 flex-1 truncate font-sans text-[11px] text-muted" title={selectedPath}
 					>{selectedPath}</span
 				>
 				{#if tab === "edit"}
 					<button
 						type="button"
 						disabled={saving || editContent === originalContent}
-						class="mr-1 flex h-7 items-center gap-1 rounded px-2 text-[8px] text-[#89959c] hover:bg-[#1a252d] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+						class="mr-1 flex h-7 items-center gap-1 rounded px-2 text-[11px] text-muted hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-35"
 						onclick={discardDraft}
 					><RotateCcw size={10} /> Discard</button>
 					<button
 						type="button"
 						disabled={saving || editContent === originalContent}
-						class="flex h-7 items-center gap-1 rounded border border-[#5fae74] bg-[#2f7d48] px-2 text-[8px] font-semibold text-white hover:bg-[#3d9158] disabled:cursor-not-allowed disabled:border-[#2d3a32] disabled:bg-[#202b24] disabled:text-[#596b60]"
+						class="flex h-7 items-center gap-1 rounded border border-success bg-success-soft px-2 text-[11px] font-semibold text-ink hover:bg-success-soft disabled:cursor-not-allowed disabled:border-line disabled:bg-raised disabled:text-dim"
 						onclick={() => void save()}
 					><Save size={10} /> Save</button>
 				{/if}
 			</div>
 			{#if loading}
-				<div class="grid flex-1 place-items-center font-mono text-[9px] text-[#65717a]">Loading file...</div>
+				<div class="grid flex-1 place-items-center font-sans text-[12px] text-muted">Loading file...</div>
 			{:else if tab === "edit" && content !== undefined}
 				<textarea
 					bind:value={editContent}
 					aria-label={`Edit ${selectedPath}`}
-					class="min-h-0 flex-1 resize-none border-0 bg-[#101a20] p-4 font-mono text-[11px]/[1.6] text-[#d2dce1] outline-none [tab-size:2] [scrollbar-width:thin] focus:bg-[#132028]"
+					class="min-h-0 flex-1 resize-none border-0 bg-panel p-4 font-sans text-[13px]/[1.6] text-ink outline-none [tab-size:2] [scrollbar-width:thin] focus:bg-raised"
 					oninput={updateDraft}
 				></textarea>
 			{:else}
-				<pre class="m-0 min-h-0 flex-1 overflow-auto bg-[#101820] py-2 font-mono text-[9px]/[1.55] whitespace-pre [scrollbar-width:thin]">{#each (diff || "No textual diff available.").split("\n") as line}<span class={`block min-w-fit px-3 ${diffLineClass(line)}`}>{line || " "}</span>{/each}</pre>
+				<pre class="m-0 min-h-0 flex-1 overflow-auto bg-panel py-2 font-mono text-[12px]/[1.55] whitespace-pre [scrollbar-width:thin]">{#each (diff || "No textual diff available.").split("\n") as line}<span class={`block min-w-fit px-3 ${diffLineClass(line)}`}>{line || " "}</span>{/each}</pre>
 			{/if}
 		{:else}
-			<div class="grid flex-1 place-items-center px-8 text-center"><div><FileCode2 size={24} class="mx-auto mb-3 text-[#38434b]" /><p class="text-[10px]/[1.55] text-[#68747c]">Select a changed file to inspect its diff or edit the current text.</p></div></div>
+			<div class="grid flex-1 place-items-center px-8 text-center"><div><FileCode2 size={24} class="mx-auto mb-3 text-dim" /><p class="text-[12px]/[1.55] text-muted">Select a changed file to inspect its diff or edit the current text.</p></div></div>
 		{/if}
 	</div>
 	{/if}

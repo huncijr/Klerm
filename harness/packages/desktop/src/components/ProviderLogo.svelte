@@ -14,12 +14,12 @@
 		aria-hidden={decorative}
 		width={size}
 		height={size}
-		class="shrink-0 rounded-lg object-contain"
+		class={`shrink-0 rounded-md object-contain ${id === "openai" || id === "openai-codex" ? "bg-logo-plate p-1" : ""}`}
 		onerror={() => (failed = true)}
 	/>
 {:else}
 	<span
-		class="grid shrink-0 place-items-center rounded-lg bg-[#141a1f] font-mono text-[#d7e7ff]"
+		class="grid shrink-0 place-items-center rounded-lg bg-panel font-sans text-ink"
 		style={`width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px`}
 		aria-label={decorative ? undefined : label}
 		aria-hidden={decorative}

@@ -3,16 +3,20 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<meta name="theme-color" content="#080b0f" />
+		<meta name="theme-color" content="#191918" />
 		<link rel="icon" href="/K_Klerm_no_background.png" />
 		<title>Klerm</title>
 		<style>
-			html,
-			body {
-				margin: 0;
-				background: #030506;
-			}
+			html { background: #191918; color-scheme: dark; }
+			html[data-theme="light"] { background: #f7f6f2; color-scheme: light; }
+			body { margin: 0; }
 		</style>
+		<script>
+			try {
+				const preference = localStorage.getItem("klerm-appearance");
+				document.documentElement.dataset.theme = preference === "light" || (preference === "system" && !matchMedia("(prefers-color-scheme: dark)").matches) ? "light" : "dark";
+			} catch { /* The app can still start when storage is unavailable. */ }
+		</script>
 		<script type="module" src="/src/main.ts"></script>
 	</head>
 	<body>

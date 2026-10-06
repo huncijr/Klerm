@@ -7,7 +7,7 @@ import {
 } from "../../../coding-agent/src/klerm/workflows.ts";
 
 export const GRAPH_NODE_WIDTH = 220;
-export const GRAPH_NODE_HEIGHT = 132;
+export const GRAPH_NODE_HEIGHT = 156;
 export function blankWorkflow(root: string, id: string): WorkflowDefinition {
 	return {
 		version: 1,
@@ -95,8 +95,8 @@ export function graphDropPosition(
 	};
 }
 export function graphNodeColor(kind: WorkflowNodeKind): string {
-	if (kind === "personal-agent" || kind === "harness-agent") return "#70b5f0";
-	if (kind === "history") return "#b999f1";
-	if (kind === "kanban-card" || kind === "board") return "#e3b76b";
-	return "#b9e67f";
+	if (kind === "personal-agent" || kind === "harness-agent") return "var(--color-info)";
+	if (kind === "history") return "var(--color-purple)";
+	if (kind === "kanban-card" || kind === "board") return "var(--color-warning)";
+	return "var(--color-accent)";
 }

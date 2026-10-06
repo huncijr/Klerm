@@ -3,7 +3,7 @@ import { EMPTY_HEADLINES, EMPTY_SUBTITLE, pickHeadline } from "../../desktop/src
 
 describe("empty state copy", () => {
 	it("has a fixed subtitle and a headline pool", () => {
-		expect(EMPTY_SUBTITLE).toContain("More agents, one mission.");
+		expect(EMPTY_SUBTITLE).toContain("Describe a task");
 		expect(EMPTY_HEADLINES.length).toBeGreaterThan(1);
 	});
 

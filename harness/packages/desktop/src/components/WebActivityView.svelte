@@ -73,25 +73,25 @@
 	}
 </script>
 
-<section aria-label="External browser" class="flex min-h-0 flex-1 flex-col border-t border-[#34424d] bg-[#0b1116]">
-	<header class="flex h-9 shrink-0 items-center gap-2 border-b border-[#27343b] px-3">
-		<Globe2 size={13} class="text-[#8fc4ed]" />
-		<span class="text-[10px] font-semibold text-[#cbd9dd]">External browser</span>
-		<a href={url} target="_blank" rel="noopener noreferrer" class="ml-auto truncate font-mono text-[8px] text-[#8fc4ed]" title={url}><ExternalLink size={11} /></a>
-		<button type="button" aria-label="Close web activity" class="text-[#84939a] hover:text-white" onclick={onclose}><X size={13} /></button>
+<section aria-label="External browser" class="flex min-h-0 flex-1 flex-col border-t border-line bg-bg">
+	<header class="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3">
+		<Globe2 size={13} class="text-info" />
+		<span class="text-[12px] font-semibold text-ink">External browser</span>
+		<a href={url} target="_blank" rel="noopener noreferrer" class="ml-auto truncate font-sans text-[11px] text-info" title={url}><ExternalLink size={11} /></a>
+		<button type="button" aria-label="Close web activity" class="text-muted hover:text-ink" onclick={onclose}><X size={13} /></button>
 	</header>
-	<div class="min-w-0 truncate border-b border-[#27343b] px-3 py-1 font-mono text-[8px] text-[#81949b]" title={pageUrl || url}>{pageUrl || url}</div>
-	<button type="button" aria-label="Interactive external browser page" bind:this={surface} class="relative block min-h-0 w-full flex-1 bg-white p-0 text-left" onpointermove={(event) => pointer(event, "move")} onpointerdown={(event) => pointer(event, "down")} onpointerup={(event) => pointer(event, "up")} onwheel={wheel}>
-		{#if frame}<img src={frame} alt="Page opened by agent web tool" draggable="false" class="h-full w-full select-none" />{:else}<p class="p-3 text-[10px] text-[#68818a]">{error || "Opening page…"}</p>{/if}
+	<div class="min-w-0 truncate border-b border-line px-3 py-1 font-sans text-[11px] text-muted" title={pageUrl || url}>{pageUrl || url}</div>
+	<button type="button" aria-label="Interactive external browser page" bind:this={surface} class="relative block min-h-0 w-full flex-1 bg-primary p-0 text-left" onpointermove={(event) => pointer(event, "move")} onpointerdown={(event) => pointer(event, "down")} onpointerup={(event) => pointer(event, "up")} onwheel={wheel}>
+		{#if frame}<img src={frame} alt="Page opened by agent web tool" draggable="false" class="h-full w-full select-none" />{:else}<p class="p-3 text-[12px] text-muted">{error || "Opening page…"}</p>{/if}
 	</button>
-	<div class="group relative shrink-0 border-t border-[#27343b] px-3 py-2">
-		<button type="button" class="flex items-center gap-1.5 text-[9px] text-[#8fc4ed]" aria-label="Show website sources"><Globe2 size={11} /> Source <span class="text-[#81949b]">{sources.length}</span></button>
-		<div class="absolute right-2 bottom-full left-2 z-40 hidden max-h-64 flex-wrap gap-1 overflow-y-auto rounded-lg border border-[#34424d] bg-[#10171d] p-2 shadow-xl group-hover:flex group-focus-within:flex" aria-label="Website sources">
+	<div class="group relative shrink-0 border-t border-line px-3 py-2">
+		<button type="button" class="flex items-center gap-1.5 text-[12px] text-info" aria-label="Show website sources"><Globe2 size={11} /> Source <span class="text-muted">{sources.length}</span></button>
+		<div class="absolute right-2 bottom-full left-2 z-40 hidden max-h-64 flex-wrap gap-1 overflow-y-auto rounded-lg border border-line bg-panel p-2 shadow-xl group-hover:flex group-focus-within:flex" aria-label="Website sources">
 			{#each [...sources].reverse() as source (source)}
 				{@const identity = webSourceIdentity(source)}
-				<button type="button" onclick={() => void command({ type: "navigate", url: source })} class="flex min-w-0 items-center gap-1.5 rounded-full border border-[#34424d] px-2 py-1.5 hover:bg-[#1c2933] focus-visible:bg-[#1c2933]" title={source}>
-					<span class="relative grid h-5 w-5 shrink-0 place-items-center"><Globe2 size={14} class="text-[#81949b]" /><img src={identity.icon} alt="" referrerpolicy="no-referrer" class="absolute h-4 w-4" onerror={(event) => { if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.style.display = "none"; }} /></span>
-					<span class="max-w-48 truncate font-mono text-[9px] text-[#cbd9dd]">{source.replace(/^https?:\/\//, "").replace(/^www\./, "")}</span>
+				<button type="button" onclick={() => void command({ type: "navigate", url: source })} class="flex min-w-0 items-center gap-1.5 rounded-full border border-line px-2 py-1.5 hover:bg-raised focus-visible:bg-raised" title={source}>
+					<span class="relative grid h-5 w-5 shrink-0 place-items-center"><Globe2 size={14} class="text-muted" /><img src={identity.icon} alt="" referrerpolicy="no-referrer" class="absolute h-4 w-4" onerror={(event) => { if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.style.display = "none"; }} /></span>
+					<span class="max-w-48 truncate font-sans text-[12px] text-ink">{source.replace(/^https?:\/\//, "").replace(/^www\./, "")}</span>
 				</button>
 			{/each}
 		</div>

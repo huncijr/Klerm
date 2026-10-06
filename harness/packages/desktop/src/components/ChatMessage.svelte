@@ -66,15 +66,15 @@
 	class={`mb-[30px] narrow-520:mb-6 ${message.role === "user" ? "flex flex-col items-end" : ""}`}
 >
 	<div
-		class={`mb-2 flex items-center gap-2 font-mono text-[9px] tracking-[.06em] text-[#657079] ${message.role === "user" ? "pr-1" : ""}`}
+		class={`mb-2 flex items-center gap-2 font-sans text-[12px] tracking-[.06em] text-muted ${message.role === "user" ? "pr-1" : ""}`}
 	>
 		<span>{messageLabel}</span>
-		{#if message.kind === "handoff"}<span class="rounded border border-[#68582f] bg-[#2a2414] px-1.5 py-0.5 text-[7px] text-[#d5b96f] uppercase">Handoff</span>{/if}
-		{#if message.kind !== "handoff" && message.sender && message.model}<span class="text-[#4e5960]">{message.model}</span>{/if}
+		{#if message.kind === "handoff"}<span class="rounded border border-warning bg-raised px-1.5 py-0.5 text-[11px] text-warning uppercase">Handoff</span>{/if}
+		{#if message.kind !== "handoff" && message.sender && message.model}<span class="text-dim">{message.model}</span>{/if}
 		{#if message.role === "user" && message.kind !== "handoff" && !editing}
 			<button
 				type="button"
-				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[8px] text-[#657079] hover:text-[#cbd2d7]"
+				class="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-sans text-[11px] text-muted hover:text-ink"
 				onclick={startEdit}
 			>
 				<PencilLine size={10} stroke-width={1.7} />
@@ -83,29 +83,29 @@
 		{/if}
 	</div>
 	{#if editing}
-		<div class="w-full max-w-[78%] rounded-[10px] border border-[#3b464e] bg-[#11171c] p-2.5 narrow-520:max-w-[92%]">
+		<div class="w-full max-w-[78%] rounded-[10px] border border-line bg-panel p-2.5 narrow-520:max-w-[92%]">
 			<textarea
 				bind:this={editEl}
 				bind:value={editValue}
 				rows="4"
 				aria-label="Edit sent prompt"
-				class="block max-h-[220px] min-h-[86px] w-full resize-y rounded-md border border-[#2d373e] bg-[#0a0f13] px-3 py-2 text-[12px]/[1.6] text-[#edf1f3] outline-none focus:border-[#66747d]"
+				class="block max-h-[220px] min-h-[86px] w-full resize-y rounded-md border border-line bg-bg px-3 py-2 text-[13px]/[1.6] text-ink outline-none focus:border-line"
 				onkeydown={handleEditKeydown}
 			></textarea>
 			<div class="mt-2 flex items-center justify-end gap-2">
-				<span class="mr-auto font-mono text-[8px] text-[#626e76]">Ctrl/Cmd+Enter to {taskActive ? "move to composer" : "rerun"}</span>
-				<button type="button" class="flex items-center gap-1 rounded px-2 py-1.5 text-[9px] text-[#7f8a91] hover:bg-[#1a2025] hover:text-[#d5dce0]" onclick={() => (editing = false)}><X size={11} /> Cancel</button>
-				<button type="button" class="flex items-center gap-1 rounded bg-[#dce3e6] px-2.5 py-1.5 text-[9px] font-semibold text-[#0a0d0f] hover:bg-white" onclick={saveEdit}><Check size={11} /> {taskActive ? "Use after stop" : "Save & rerun"}</button>
+				<span class="mr-auto font-sans text-[11px] text-dim">Ctrl/Cmd+Enter to {taskActive ? "move to composer" : "rerun"}</span>
+				<button type="button" class="flex items-center gap-1 rounded px-2 py-1.5 text-[12px] text-muted hover:bg-raised hover:text-ink" onclick={() => (editing = false)}><X size={11} /> Cancel</button>
+				<button type="button" class="flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-on-primary hover:bg-primary" onclick={saveEdit}><Check size={11} /> {taskActive ? "Use after stop" : "Save & rerun"}</button>
 			</div>
 		</div>
 	{:else}
 	<div
-		class={`whitespace-pre-wrap break-words text-[13px] leading-[1.75] narrow-900:text-[12px] ${
+		class={`whitespace-pre-wrap break-words text-[14px] leading-[1.75] narrow-900:text-[13px] ${
 			message.role === "user"
-				? "w-fit max-w-[78%] rounded-[10px] border border-[#293139] bg-[#151a1f] px-[15px] py-3 text-[#edf1f3] narrow-520:max-w-[88%] narrow-520:px-3 narrow-520:py-2.5 narrow-520:text-[12px] narrow-520:leading-[1.65]"
+				? "w-fit max-w-[78%] rounded-[10px] border border-line bg-panel px-[15px] py-3 text-ink narrow-520:max-w-[88%] narrow-520:px-3 narrow-520:py-2.5 narrow-520:text-[13px] narrow-520:leading-[1.65]"
 				: message.kind === "handoff"
-					? "rounded-[10px] border border-[#4d4328] bg-[#17150e] px-[15px] py-3 text-[#d8d0b8] narrow-520:text-[12px] narrow-520:leading-[1.65]"
-					: "px-[2px] text-[#cbd2d7] narrow-520:text-[12px] narrow-520:leading-[1.65]"
+					? "rounded-[10px] border border-line bg-panel px-[15px] py-3 text-ink narrow-520:text-[13px] narrow-520:leading-[1.65]"
+					: "px-[2px] text-ink narrow-520:text-[13px] narrow-520:leading-[1.65]"
 		}`}
 	>
 		{#if message.role === "assistant" || message.kind === "handoff"}
@@ -115,18 +115,18 @@
 				{#if segment.mention}
 					<span
 						class="rounded px-0.5 font-semibold"
-						style={`color: ${MCP_COLOR_CSS[segment.mention.color ?? "base"]}; background: ${MCP_COLOR_BG_CSS[segment.mention.color ?? "base"]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[segment.mention.color ?? "base"]}55;`}
+						style={`color: ${MCP_COLOR_CSS[segment.mention.color ?? "base"]}; background: ${MCP_COLOR_BG_CSS[segment.mention.color ?? "base"]}; box-shadow: 0 0 0 1px color-mix(in srgb, ${MCP_COLOR_CSS[segment.mention.color ?? "base"]} 35%, transparent);`}
 					>{segment.text}</span>
 				{:else}{segment.text}{/if}
 			{/each}
 		{/if}
-		{#if message.streaming}<span class="ml-[3px] inline-block h-[13px] w-[5px] animate-pulse bg-[#8b969e] align-[-2px]"></span>{/if}
+		{#if message.streaming}<span class="ml-[3px] inline-block h-[13px] w-[5px] animate-pulse bg-raised align-[-2px]"></span>{/if}
 		{#if message.images?.length}
 			<div class={`mt-3 grid gap-2 ${message.images.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
 				{#each message.images as image, index (`${index}-${image.mimeType}-${image.data.length}`)}
 					{@const src = imageDataUrl(image)}
 					{#if src}
-						<a href={src} download={image.name ?? `klerm-image-${index + 1}`} class="block overflow-hidden rounded-lg border border-[#303940] bg-[#080b0e]" aria-label={`Open ${image.name ?? `image ${index + 1}`}`}>
+						<a href={src} download={image.name ?? `klerm-image-${index + 1}`} class="block overflow-hidden rounded-lg border border-line bg-bg" aria-label={`Open ${image.name ?? `image ${index + 1}`}`}>
 							<img src={src} alt={image.name ?? `Attached image ${index + 1}`} class="block max-h-[420px] w-full object-contain" />
 						</a>
 					{/if}

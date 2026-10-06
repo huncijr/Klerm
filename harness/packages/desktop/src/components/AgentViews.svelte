@@ -154,51 +154,51 @@
 			{@const draft = draftFor(agent.id)}
 			{@const attachable = canAttach(agent)}
 			{@const unavailable = adapterUnavailable(agent)}
-			<article class="flex min-h-[280px] min-w-0 flex-col overflow-hidden rounded-xl border border-[#303a42] bg-[#090e12] shadow-[0_14px_36px_rgba(0,0,0,.22)] min-[760px]:min-h-0">
-				<header class="flex items-start gap-3 border-b border-[#273139] bg-[#0d1419] px-3 py-2.5">
+			<article class="flex min-h-[280px] min-w-0 flex-col overflow-hidden rounded-xl border border-line bg-bg shadow-sm min-[760px]:min-h-0">
+				<header class="flex items-start gap-3 border-b border-line bg-panel px-3 py-2.5">
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center gap-2">
-							<span class={`h-1.5 w-1.5 rounded-full ${taskActive && activeAgentId === agent.id ? "animate-pulse bg-[#a9ca55]" : "bg-[#58656d]"}`}></span>
-							<strong class="font-mono text-[10px] text-[#e7ecef]">Agent {agent.id.slice(5)}</strong>
-							<span class="font-mono text-[8px] text-[#75828a]">{status(agent, scopedItems)}</span>
+							<span class={`h-1.5 w-1.5 rounded-full ${taskActive && activeAgentId === agent.id ? "animate-pulse bg-warning-soft" : "bg-raised"}`}></span>
+							<strong class="font-sans text-[12px] text-ink">Agent {agent.id.slice(5)}</strong>
+							<span class="font-sans text-[11px] text-muted">{status(agent, scopedItems)}</span>
 						</div>
-						<p class="mt-1 truncate font-mono text-[8px] text-[#8e9aa2]" title={agent.model ?? "Default model"}>{agent.model ?? "Default model"}</p>
+						<p class="mt-1 truncate font-sans text-[11px] text-muted" title={agent.model ?? "Default model"}>{agent.model ?? "Default model"}</p>
 					</div>
-					<label class="font-mono text-[7px] tracking-[.08em] text-[#69767e] uppercase">
+					<label class="font-sans text-[11px] tracking-[.08em] text-muted uppercase">
 						Role{taskActive ? " · next task" : ""}
-						<select value={agent.role} class="mt-1 block h-7 rounded border border-[#303a42] bg-[#070b0e] px-2 font-mono text-[8px] text-[#dbe1e4] [color-scheme:dark]" onchange={(event) => onrolechange(agent.id, event.currentTarget.value as "planner" | "builder")}>
+						<select value={agent.role} class="mt-1 block h-7 rounded border border-line bg-bg px-2 font-sans text-[11px] text-ink " onchange={(event) => onrolechange(agent.id, event.currentTarget.value as "planner" | "builder")}>
 							<option value="planner">Plan</option><option value="builder">Build</option>
 						</select>
 					</label>
-					<label class="font-mono text-[7px] tracking-[.08em] text-[#69767e] uppercase">
+					<label class="font-sans text-[11px] tracking-[.08em] text-muted uppercase">
 						Thinking
 						<select
 							value={agent.effort}
-							class="mt-1 block h-7 rounded border border-[#303a42] bg-[#070b0e] px-2 font-mono text-[8px] text-[#dbe1e4] [color-scheme:dark]"
+							class="mt-1 block h-7 rounded border border-line bg-bg px-2 font-sans text-[11px] text-ink "
 							onchange={(event) => oneffortchange(agent.id, event.currentTarget.value as ThinkingLevel)}
 						>
 							{#each efforts as effort}<option value={effort}>{effort}</option>{/each}
 						</select>
 					</label>
-					<button type="button" aria-label={`Clear Agent ${agent.id.slice(5)} terminal`} title="Clear terminal" class="flex h-7 items-center gap-1 rounded px-1.5 font-mono text-[7px] text-[#77838b] hover:bg-[#202930] hover:text-white" onclick={() => onclear(agent.id)}><Eraser size={11} /> Clear</button>
-					<button type="button" aria-label={`Close Agent ${agent.id.slice(5)} view`} class="grid h-7 w-7 place-items-center rounded text-[#77838b] hover:bg-[#202930] hover:text-white" onclick={() => onclose(agent.id)}><X size={13} /></button>
+					<button type="button" aria-label={`Clear Agent ${agent.id.slice(5)} terminal`} title="Clear terminal" class="flex h-7 items-center gap-1 rounded px-1.5 font-mono text-[11px] text-muted hover:bg-raised hover:text-ink" onclick={() => onclear(agent.id)}><Eraser size={11} /> Clear</button>
+					<button type="button" aria-label={`Close Agent ${agent.id.slice(5)} view`} class="grid h-7 w-7 place-items-center rounded text-muted hover:bg-raised hover:text-ink" onclick={() => onclose(agent.id)}><X size={13} /></button>
 				</header>
 				<div class="min-h-0 flex-1 overflow-y-auto p-3">
 					{#if scopedItems.length > 0}
 						<Feed items={scopedItems} {taskActive} {mcpServers} {onrerun} {ontoggle} />
 					{:else}
-						<p class="m-0 font-mono text-[9px]/[1.6] text-[#69757d]">This agent has not produced activity in the current session.</p>
+						<p class="m-0 font-sans text-[12px]/[1.6] text-muted">This agent has not produced activity in the current session.</p>
 					{/if}
 				</div>
-				<div class="border-t border-[#273139] bg-[#0b1116] p-2">
+				<div class="border-t border-line bg-bg p-2">
 					{#if draft.images.length > 0}
 						<div class="mb-1.5 flex gap-1.5 overflow-x-auto">
 							{#each draft.images as image, index (`${image.name ?? index}-${image.data.length}`)}
 								{@const src = imageDataUrl(image)}
 								{#if src}
-									<div class="group relative h-10 w-10 shrink-0 overflow-hidden rounded border border-[#364149] bg-[#080b0e]">
+									<div class="group relative h-10 w-10 shrink-0 overflow-hidden rounded border border-line bg-bg">
 										<img src={src} alt={image.name ?? `Attachment ${index + 1}`} class="h-full w-full object-cover" />
-										<button type="button" aria-label="Remove attachment" class="absolute top-0 right-0 grid h-4 w-4 place-items-center rounded-bl bg-black/80 text-white opacity-80 hover:opacity-100" onclick={() => (drafts = { ...drafts, [agent.id]: { text: draft.text, images: draft.images.filter((_, candidate) => candidate !== index) } })}><X size={9} /></button>
+										<button type="button" aria-label="Remove attachment" class="absolute top-0 right-0 grid h-4 w-4 place-items-center rounded-bl bg-primary text-on-primary opacity-80 hover:opacity-100" onclick={() => (drafts = { ...drafts, [agent.id]: { text: draft.text, images: draft.images.filter((_, candidate) => candidate !== index) } })}><X size={9} /></button>
 									</div>
 								{/if}
 							{/each}
@@ -219,7 +219,7 @@
 								aria-label="Attach images"
 								title="Attach images (this Klerm agent only)"
 								disabled={sendDisabled || taskActive || unavailable || draft.images.length >= 8}
-								class="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-[#293239] bg-[#11171c] text-[#9ba5ac] hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+								class="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line bg-panel text-muted hover:border-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
 								onclick={() => fileInputs[agent.id]?.click()}
 							>
 								<ImagePlus size={14} stroke-width={1.7} />
@@ -231,7 +231,7 @@
 							placeholder={unavailable ? "Adapter unavailable" : `Message Agent ${agent.id.slice(5)}...`}
 							aria-label={`Message Agent ${agent.id.slice(5)}`}
 							disabled={sendDisabled || taskActive || unavailable}
-							class="max-h-24 min-h-8 flex-1 resize-none rounded-md border border-[#293239] bg-[#0d1316] px-2 py-1.5 text-[11px] text-white outline-none placeholder:text-[#4f5a60] focus:border-[#46515a] disabled:opacity-40"
+							class="max-h-24 min-h-8 flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1.5 text-[13px] text-ink outline-none placeholder:text-dim focus:border-line disabled:opacity-40"
 							value={draft.text}
 							oninput={(event) => (drafts = { ...drafts, [agent.id]: { text: event.currentTarget.value, images: draft.images } })}
 							onkeydown={(event) => {
@@ -245,14 +245,14 @@
 							type="button"
 							aria-label={`Send to Agent ${agent.id.slice(5)}`}
 							disabled={sendDisabled || taskActive || unavailable || (!draft.text.trim() && draft.images.length === 0)}
-							class="grid h-8 w-8 shrink-0 place-items-center rounded-md border-0 bg-[#e1e6e9] text-[#0b0e10] enabled:hover:bg-white disabled:cursor-not-allowed disabled:bg-[#20272c] disabled:text-[#51585d]"
+							class="grid h-8 w-8 shrink-0 place-items-center rounded-md border-0 bg-primary text-on-primary enabled:hover:bg-primary disabled:cursor-not-allowed disabled:bg-raised disabled:text-dim"
 							onclick={() => submit(agent)}
 						>
 							<Send size={14} stroke-width={1.7} />
 						</button>
 					</div>
 					{#if !attachable && !unavailable}
-						<p class="m-0 mt-1 font-mono text-[7px] text-[#59656d]">Text only — image forwarding is not available for external harnesses yet.</p>
+						<p class="m-0 mt-1 font-sans text-[11px] text-dim">Text only — image forwarding is not available for external harnesses yet.</p>
 					{/if}
 				</div>
 			</article>

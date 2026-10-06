@@ -345,46 +345,46 @@
 
 </script>
 
-<div class="relative grid min-h-0 flex-1 grid-cols-[210px_minmax(0,1fr)_220px] overflow-hidden bg-[#0b0e10] narrow-900:grid-cols-[180px_minmax(0,1fr)]">
-	<aside class="flex min-h-0 flex-col border-r border-[#20262a] bg-[#0d1114]">
-		<div class="flex items-start border-b border-[#20262a] px-4 py-4">
-			<div class="min-w-0 flex-1"><p class="m-0 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#69747b]">Personal Bots</p><p class="mt-1 text-[10px] text-[#485158]">Continuous discussions</p></div>
-			<button type="button" class="border-0 bg-transparent text-[14px] text-[#59646a] hover:text-white" title="Back to Agents & Routing" onclick={onclose}>x</button>
+<div class="relative grid min-h-0 flex-1 grid-cols-[210px_minmax(0,1fr)_220px] overflow-hidden bg-bg narrow-900:grid-cols-[180px_minmax(0,1fr)]">
+	<aside class="flex min-h-0 flex-col border-r border-line bg-bg">
+		<div class="flex items-start border-b border-line px-4 py-4">
+			<div class="min-w-0 flex-1"><p class="m-0 text-[12px] font-semibold uppercase tracking-[0.18em] text-muted">Personal Bots</p><p class="mt-1 text-[12px] text-dim">Continuous discussions</p></div>
+			<button type="button" class="border-0 bg-transparent text-[14px] text-dim hover:text-ink" title="Back to Agents & Routing" onclick={onclose}>x</button>
 		</div>
 		<div class="min-h-0 flex-1 overflow-y-auto p-2">
 			{#each bots as bot (bot.id)}
 				<button
 					type="button"
-					class={`mb-1 flex w-full items-center gap-2.5 rounded-lg border-0 px-2.5 py-2.5 text-left transition-colors ${selected?.id === bot.id && !creating ? "bg-[#1a2227] text-[#f0f4f5]" : "bg-transparent text-[#879198] hover:bg-[#13191d]"}`}
+					class={`mb-1 flex w-full items-center gap-2.5 rounded-lg border-0 px-2.5 py-2.5 text-left transition-colors ${selected?.id === bot.id && !creating ? "bg-raised text-ink" : "bg-transparent text-muted hover:bg-panel"}`}
 					onclick={() => selectBot(bot.id)}
 				>
-					<span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#252f35] text-[14px] text-[#d6e0e4]">{profileIcon(bot.face)}</span>
+					<span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-raised text-[14px] text-ink">{profileIcon(bot.face)}</span>
 					<span class="min-w-0 flex-1">
-						<span class="block truncate text-[12px] font-semibold">{bot.name}</span>
-						{#if latestReplyPreview(bot)}<span class="block truncate text-[9px] text-[#5f6a70]">{latestReplyPreview(bot)}</span>{/if}
+						<span class="block truncate text-[13px] font-semibold">{bot.name}</span>
+						{#if latestReplyPreview(bot)}<span class="block truncate text-[12px] text-dim">{latestReplyPreview(bot)}</span>{/if}
 					</span>
-					<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunnable(bot) ? "bg-[#5cc08a]" : "bg-[#4a5257]"}`}></span>
+					<span class={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunnable(bot) ? "bg-success" : "bg-dim"}`}></span>
 				</button>
 			{/each}
 		</div>
 		<button
 			type="button"
-			class={`m-2 rounded-lg border border-dashed px-3 py-2.5 text-left text-[11px] font-semibold ${creating ? "border-[#65d7ba] bg-[#10201c] text-[#8aead1]" : "border-[#303a40] bg-transparent text-[#89949a] hover:border-[#536168] hover:text-white"}`}
+			class={`m-2 rounded-lg border border-dashed px-3 py-2.5 text-left text-[13px] font-semibold ${creating ? "border-success bg-panel text-success" : "border-line bg-transparent text-muted hover:border-line hover:text-ink"}`}
 			onclick={beginCreate}
 		>
 			+ New bot
 		</button>
 	</aside>
 
-	<main class="flex min-h-0 min-w-0 flex-col bg-[#0b0e10]">
+	<main class="flex min-h-0 min-w-0 flex-col bg-bg">
 		{#if selected && !creating}
-			<header class="flex items-center gap-3 border-b border-[#20262a] px-5 py-3">
-				<span class="grid h-9 w-9 place-items-center rounded-xl bg-[#1b252a] text-[15px] text-[#d9e3e6]">{profileIcon(selected.face)}</span>
+			<header class="flex items-center gap-3 border-b border-line px-5 py-3">
+				<span class="grid h-9 w-9 place-items-center rounded-xl bg-raised text-[15px] text-ink">{profileIcon(selected.face)}</span>
 				<div class="min-w-0">
-					<h2 class="m-0 truncate text-[13px] font-semibold text-[#eef2f3]">{selected.name}</h2>
-					<p class="m-0 truncate text-[10px] text-[#68747a]">{selected.model || "No model selected"}</p>
+					<h2 class="m-0 truncate text-[14px] font-semibold text-ink">{selected.name}</h2>
+					<p class="m-0 truncate text-[12px] text-muted">{selected.model || "No model selected"}</p>
 				</div>
-				{#if conversationBusy}<span class="ml-auto rounded-full bg-[#382f18] px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#e1c66b]">Thinking</span>{/if}
+				{#if conversationBusy}<span class="ml-auto rounded-full bg-raised px-2 py-1 text-[12px] font-semibold uppercase tracking-[0.08em] text-warning">Thinking</span>{/if}
 			</header>
 
 			<div bind:this={chatScroll} class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -393,38 +393,38 @@
 						{#each conversation.messages as message (message.id)}
 							<div class={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
 								{#if message.role === "user"}
-									<div class="max-w-[82%] whitespace-pre-wrap rounded-xl bg-[#24473e] px-3.5 py-2.5 text-[12px] leading-5 text-[#effaf6]">{message.text}</div>
+									<div class="max-w-[82%] whitespace-pre-wrap rounded-xl bg-raised px-3.5 py-2.5 text-[13px] leading-5 text-ink">{message.text}</div>
 								{:else}
-									<div class="max-w-[82%] rounded-xl border border-[#242c31] bg-[#11171a] px-3.5 py-2.5 text-[12px] leading-5 text-[#cbd3d6]"><MarkdownLite text={message.text} /></div>
+									<div class="max-w-[82%] rounded-xl border border-line bg-panel px-3.5 py-2.5 text-[13px] leading-5 text-ink"><MarkdownLite text={message.text} /></div>
 								{/if}
 							</div>
 						{/each}
 						{#if conversationBusy}
-							<div class="text-[11px] text-[#7e8a90]">{selected.name} is thinking...</div>
+							<div class="text-[13px] text-muted">{selected.name} is thinking...</div>
 						{/if}
 					</div>
 				{:else}
 					<div class="grid h-full place-items-center">
 						<div class="max-w-xs text-center">
-							<div class="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-[#151d21] text-[18px] text-[#bdc8cc]">{profileIcon(selected.face)}</div>
-							<p class="m-0 text-[13px] font-semibold text-[#c9d1d4]">Start a private chat with {selected.name}</p>
-							<p class="mt-1 text-[10px] leading-4 text-[#5f6b71]">One continuous conversation for discussing and analyzing previous coding sessions.</p>
+							<div class="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-raised text-[18px] text-ink">{profileIcon(selected.face)}</div>
+							<p class="m-0 text-[14px] font-semibold text-ink">Start a private chat with {selected.name}</p>
+							<p class="mt-1 text-[12px] leading-4 text-dim">One continuous conversation for discussing and analyzing previous coding sessions.</p>
 						</div>
 					</div>
 				{/if}
 				{#if selected.browserEnabled && (browserOpen[selected.id] || browserRuns[selected.id]?.status === "running" || browserRuns[selected.id]?.status === "waiting-approval")}
-					<div class="mt-3"><button type="button" class="mb-1 text-[9px] text-[#8fc4ed]" onclick={() => onclosebrowser(selected.id)}>Hide browser</button>{#key selected.id}<PersonalBrowserPanel botId={selected.id} run={browserRuns[selected.id]} onattach={onbrowserattach} oncommand={onbrowsercommand} />{/key}</div>
-				{:else if selected.browserEnabled}<button type="button" class="mt-3 rounded-md border border-[#34424d] px-2 py-1 text-[9px] text-[#8fc4ed]" onclick={() => void onopenbrowser(selected.id)}>Open browser</button>{/if}
+					<div class="mt-3"><button type="button" class="mb-1 text-[12px] text-info" onclick={() => onclosebrowser(selected.id)}>Hide browser</button>{#key selected.id}<PersonalBrowserPanel botId={selected.id} run={browserRuns[selected.id]} onattach={onbrowserattach} oncommand={onbrowsercommand} />{/key}</div>
+				{:else if selected.browserEnabled}<button type="button" class="mt-3 rounded-md border border-line px-2 py-1 text-[12px] text-info" onclick={() => void onopenbrowser(selected.id)}>Open browser</button>{/if}
 			</div>
 
-			<div class="border-t border-[#20262a] px-5 py-4">
+			<div class="border-t border-line px-5 py-4">
 				{#if !isRunnable(selected)}
-					<p class="mx-auto mb-2 max-w-3xl text-[10px] text-[#7e8a90]">Choose a model beside Send to start chatting.</p>
+					<p class="mx-auto mb-2 max-w-3xl text-[12px] text-muted">Choose a model beside Send to start chatting.</p>
 				{/if}
-				<div class="mx-auto flex max-w-3xl flex-col gap-1.5 rounded-xl border border-[#2a3439] bg-[#11171a] p-2 focus-within:border-[#4e6964]">
+				<div class="mx-auto flex max-w-3xl flex-col gap-1.5 rounded-xl border border-line bg-panel p-2 focus-within:border-line">
 					<textarea
 						data-personal-composer="true"
-						class="max-h-32 min-h-10 w-full resize-none border-0 bg-transparent px-2 py-2 text-[12px] text-[#e5e9ea] outline-none placeholder:text-[#4f5a60]"
+						class="max-h-32 min-h-10 w-full resize-none border-0 bg-transparent px-2 py-2 text-[13px] text-ink outline-none placeholder:text-dim"
 						placeholder={`Message ${selected.name}`}
 						bind:value={chatDraft}
 						disabled={!isRunnable(selected) || conversationBusy}
@@ -432,94 +432,94 @@
 					></textarea>
 					<div class="flex min-w-0 items-center justify-end gap-1.5">
 						<div class="w-[min(210px,50%)] min-w-0" title="Model"><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={busy || klermHarness?.available !== true || conversationBusy} placeholder="Model" onchange={(value: string) => { model = value; void save(); }} /></div>
-						<label class="w-[74px] shrink-0"><span class="sr-only">Thinking</span><select aria-label="Thinking" class="h-8 w-full rounded-md border border-[#293238] bg-[#080d10] px-1 text-[9px] text-white" value={effort} disabled={busy || conversationBusy} onchange={(event) => { effort = event.currentTarget.value as PersonalBot["effort"]; void save(); }}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
+						<label class="w-[74px] shrink-0"><span class="sr-only">Thinking</span><select aria-label="Thinking" class="h-8 w-full rounded-md border border-line bg-bg px-1 text-[12px] text-ink" value={effort} disabled={busy || conversationBusy} onchange={(event) => { effort = event.currentTarget.value as PersonalBot["effort"]; void save(); }}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
 					{#if conversationBusy}
-						<button type="button" class="h-8 rounded-lg bg-[#4d2929] px-3 text-[10px] font-semibold text-[#f1b4b4]" onclick={() => onabort(selected.id)}>Stop</button>
+						<button type="button" class="h-8 rounded-lg bg-raised px-3 text-[12px] font-semibold text-danger" onclick={() => onabort(selected.id)}>Stop</button>
 					{:else}
-						<button type="button" class="h-8 rounded-lg bg-[#dce8e4] px-3 text-[10px] font-semibold text-[#13201c] disabled:opacity-30" disabled={!chatDraft.trim() || !isRunnable(selected)} onclick={send}>Send</button>
+						<button type="button" class="h-8 rounded-lg bg-primary px-3 text-[12px] font-semibold text-on-primary disabled:opacity-30" disabled={!chatDraft.trim() || !isRunnable(selected)} onclick={send}>Send</button>
 					{/if}
 					</div>
 				</div>
 			</div>
 		{:else if creating}
 			<div class="grid flex-1 place-items-center text-center">
-				<div><p class="m-0 text-sm font-semibold text-[#d7dfe1]">Configure your new bot</p><p class="mt-1 text-[10px] text-[#667178]">Its private chat will appear here after saving.</p></div>
+				<div><p class="m-0 text-sm font-semibold text-ink">Configure your new bot</p><p class="mt-1 text-[12px] text-muted">Its private chat will appear here after saving.</p></div>
 			</div>
 		{:else}
-			<div class="grid flex-1 place-items-center text-[11px] text-[#667178]">Create a bot to begin.</div>
+			<div class="grid flex-1 place-items-center text-[13px] text-muted">Create a bot to begin.</div>
 		{/if}
 	</main>
 
-	<aside class="min-h-0 overflow-y-auto border-l border-[#20262a] bg-[#0d1114] p-4 narrow-900:col-span-2 narrow-900:border-l-0 narrow-900:border-t">
+	<aside class="min-h-0 overflow-y-auto border-l border-line bg-bg p-4 narrow-900:col-span-2 narrow-900:border-l-0 narrow-900:border-t">
 		{#if selected && !creating}
-			<p class="m-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-[#677279]">Conversation</p>
+			<p class="m-0 text-[12px] font-semibold uppercase tracking-[0.16em] text-muted">Conversation</p>
 			<div class="mt-4 flex items-center gap-2.5">
-				<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#1b252a] text-[15px]">{profileIcon(selected.face)}</span>
-				<div class="min-w-0"><p class="m-0 truncate text-[12px] font-semibold text-[#dce3e5]">{selected.name}</p><p class="mt-0.5 truncate text-[9px] text-[#647077]">{selectedProfile?.name ?? "Missing profile"}</p></div>
+				<span class="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-raised text-[15px]">{profileIcon(selected.face)}</span>
+				<div class="min-w-0"><p class="m-0 truncate text-[13px] font-semibold text-ink">{selected.name}</p><p class="mt-0.5 truncate text-[12px] text-dim">{selectedProfile?.name ?? "Missing profile"}</p></div>
 			</div>
-			<div class="mt-5 space-y-3 text-[10px]">
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Model</span><span class="mt-1 block break-words text-[#9ba6ab]">{selected.model || "Not selected"}</span></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Reasoning</span><span class="mt-1 block capitalize text-[#9ba6ab]">{selected.effort}</span></div>
-				<div class="grid grid-cols-2 gap-2"><div><span class="block uppercase tracking-wider text-[#4f5a60]">Messages</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.messages.length ?? 0}</span></div><div><span class="block uppercase tracking-wider text-[#4f5a60]">Status</span><span class="mt-1 block capitalize text-[#9ba6ab]">{conversation?.status ?? "loading"}</span></div></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Session</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.nativeSessionId ? "Persistent" : "Not started"}</span></div>
-				<div><span class="block uppercase tracking-wider text-[#4f5a60]">Previous sessions</span><span class="mt-1 block text-[#9ba6ab]">{conversation?.sessionContextDigest ? "Context synchronized" : "Added on first discussion"}</span></div>
-				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-[#4f5a60]">Last reply</span><span class="mt-1 block text-[#c9827b]">The last bot response failed.</span></div>{/if}
+			<div class="mt-5 space-y-3 text-[12px]">
+				<div><span class="block uppercase tracking-wider text-dim">Model</span><span class="mt-1 block break-words text-muted">{selected.model || "Not selected"}</span></div>
+				<div><span class="block uppercase tracking-wider text-dim">Reasoning</span><span class="mt-1 block capitalize text-muted">{selected.effort}</span></div>
+				<div class="grid grid-cols-2 gap-2"><div><span class="block uppercase tracking-wider text-dim">Messages</span><span class="mt-1 block text-muted">{conversation?.messages.length ?? 0}</span></div><div><span class="block uppercase tracking-wider text-dim">Status</span><span class="mt-1 block capitalize text-muted">{conversation?.status ?? "loading"}</span></div></div>
+				<div><span class="block uppercase tracking-wider text-dim">Session</span><span class="mt-1 block text-muted">{conversation?.nativeSessionId ? "Persistent" : "Not started"}</span></div>
+				<div><span class="block uppercase tracking-wider text-dim">Previous sessions</span><span class="mt-1 block text-muted">{conversation?.sessionContextDigest ? "Context synchronized" : "Added on first discussion"}</span></div>
+				{#if conversation?.status === "failed"}<div><span class="block uppercase tracking-wider text-dim">Last reply</span><span class="mt-1 block text-danger">The last bot response failed.</span></div>{/if}
 			</div>
 			<div class="mt-5 grid gap-2">
-				<button type="button" class="rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-left text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[8px] font-normal text-[#5f6a70]">Name, icon and personality</span></button>
+				<button type="button" class="rounded-md border border-line bg-panel px-3 py-2 text-left text-[12px] font-semibold text-ink hover:border-line hover:text-ink disabled:cursor-wait disabled:opacity-40" disabled={!conversation} onclick={() => openConfiguration("ai")}><span class="block">AI settings</span><span class="mt-0.5 block text-[11px] font-normal text-dim">Name, icon and personality</span></button>
 			</div>
-			{#if notice}<p class="mt-3 text-[10px] text-[#72cda8]">{notice}</p>{/if}
+			{#if notice}<p class="mt-3 text-[12px] text-success">{notice}</p>{/if}
 		{/if}
 	</aside>
 
 	{#if configuring}
 		<div class="absolute inset-0 z-30 grid place-items-center bg-black/65 p-4 backdrop-blur-[2px]" role="presentation" onclick={(event) => { if (event.currentTarget === event.target) closeConfiguration(); }}>
-			<section class="max-h-[90%] w-full max-w-[440px] overflow-y-auto rounded-xl border border-[#303a40] bg-[#0d1317] p-5 shadow-2xl">
+			<section class="max-h-[90%] w-full max-w-[440px] overflow-y-auto rounded-xl border border-line bg-panel p-5 shadow-2xl">
 				{#if profileEditing}
-					<header class="mb-5 flex items-start justify-between gap-3"><div><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-[#68747a]">Personality profile</p><h2 class="mt-1 mb-0 text-[14px] text-[#e5eaed]">{profileCreating ? "New profile" : profileName}</h2></div><button type="button" class="border-0 bg-transparent text-[10px] text-[#829097] hover:text-white" onclick={() => profileEditing = false}>Back</button></header>
+					<header class="mb-5 flex items-start justify-between gap-3"><div><p class="m-0 text-[12px] font-semibold uppercase tracking-[0.16em] text-muted">Personality profile</p><h2 class="mt-1 mb-0 text-[14px] text-ink">{profileCreating ? "New profile" : profileName}</h2></div><button type="button" class="border-0 bg-transparent text-[12px] text-muted hover:text-ink" onclick={() => profileEditing = false}>Back</button></header>
 					<div class="space-y-3">
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile name</span><input class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white outline-none focus:border-[#537269]" maxlength="40" bind:value={profileName} /></label>
-						<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[13px] ${profileFace === option ? "border-[#69cdb4] bg-[#163029] text-[#9ce5d2]" : "border-[#293238] bg-[#080d10] text-[#748087]"}`} onclick={() => profileFace = option}>{profileIcon(option)}</button>{/each}</div></div>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Profile level</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileLevel}>{#each [1, 2, 3, 4, 5] as value}<option value={value}>{value} / 5</option>{/each}</select><span class="mt-1 block text-[9px] text-[#68747a]">Profile hint in the AI instructions; it does not change model capability or reasoning.</span></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Behaviour</span><textarea class="min-h-24 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileBehaviour}></textarea></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Discussion workflow</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileWorkPlan}></textarea></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="2000" bind:value={profileMemory}></textarea></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Read-only guidance</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profilePlanMode}></textarea></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Reusable build guidance</span><textarea class="min-h-16 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="8000" bind:value={profileBuildMode}></textarea></label>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Memory format</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white" bind:value={profileMemoryFormat}><option value="md">Markdown</option><option value="html">HTML</option></select></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Profile name</span><input class="w-full rounded-md border border-line bg-bg px-2.5 py-2 text-[13px] text-ink outline-none focus:border-line" maxlength="40" bind:value={profileName} /></label>
+						<div><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Profile icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[14px] ${profileFace === option ? "border-success bg-raised text-success" : "border-line bg-bg text-muted"}`} onclick={() => profileFace = option}>{profileIcon(option)}</button>{/each}</div></div>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Profile level</span><select class="w-full rounded-md border border-line bg-bg px-2.5 py-2 text-[13px] text-ink" bind:value={profileLevel}>{#each [1, 2, 3, 4, 5] as value}<option value={value}>{value} / 5</option>{/each}</select><span class="mt-1 block text-[12px] text-muted">Profile hint in the AI instructions; it does not change model capability or reasoning.</span></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Behaviour</span><textarea class="min-h-24 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="8000" bind:value={profileBehaviour}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Discussion workflow</span><textarea class="min-h-20 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="8000" bind:value={profileWorkPlan}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="2000" bind:value={profileMemory}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Read-only guidance</span><textarea class="min-h-20 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="8000" bind:value={profilePlanMode}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Reusable build guidance</span><textarea class="min-h-16 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="8000" bind:value={profileBuildMode}></textarea></label>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Memory format</span><select class="w-full rounded-md border border-line bg-bg px-2.5 py-2 text-[13px] text-ink" bind:value={profileMemoryFormat}><option value="md">Markdown</option><option value="html">HTML</option></select></label>
 					</div>
-					<div class="mt-5 flex gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={!profileName.trim() || busy} onclick={saveProfile}>{profileCreating ? "Create profile" : "Save profile"}</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={() => profileEditing = false}>Cancel</button></div>
+					<div class="mt-5 flex gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-primary px-3 py-2 text-[12px] font-semibold text-on-primary disabled:opacity-40" disabled={!profileName.trim() || busy} onclick={saveProfile}>{profileCreating ? "Create profile" : "Save profile"}</button><button type="button" class="rounded-md border border-line bg-transparent px-3 py-2 text-[12px] text-muted" onclick={() => profileEditing = false}>Cancel</button></div>
 				{:else}
-					<header class="mb-5 flex items-start justify-between gap-3"><div><p class="m-0 text-[9px] font-semibold uppercase tracking-[0.16em] text-[#68747a]">{settingsSection === "ai" ? "AI settings" : settingsSection === "model" ? "Model settings" : "Reasoning settings"}</p><h2 class="mt-1 mb-0 text-[14px] text-[#e5eaed]">{creating ? "New Personal Bot" : selected?.name}</h2></div><button type="button" class="border-0 bg-transparent text-[13px] text-[#68747a] hover:text-white" onclick={closeConfiguration}>x</button></header>
+					<header class="mb-5 flex items-start justify-between gap-3"><div><p class="m-0 text-[12px] font-semibold uppercase tracking-[0.16em] text-muted">{settingsSection === "ai" ? "AI settings" : settingsSection === "model" ? "Model settings" : "Reasoning settings"}</p><h2 class="mt-1 mb-0 text-[14px] text-ink">{creating ? "New Personal Bot" : selected?.name}</h2></div><button type="button" class="border-0 bg-transparent text-[14px] text-muted hover:text-ink" onclick={closeConfiguration}>x</button></header>
 					{#if settingsSection === "ai"}
 						<div class="space-y-3">
-							<label class="flex items-center gap-2 text-[10px] text-[#b8c1c5]"><input type="checkbox" bind:checked={browserEnabled} /> Browser access</label>
-							<label class="flex items-center gap-2 text-[10px] text-[#b8c1c5]"><input type="checkbox" bind:checked={kanbanEnabled} /> Kanban access</label>
-							<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Name</span><input class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-white outline-none focus:border-[#537269]" bind:value={name} /></label>
-							<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[13px] ${face === option ? "border-[#69cdb4] bg-[#163029] text-[#9ce5d2]" : "border-[#293238] bg-[#080d10] text-[#748087]"}`} onclick={() => face = option}>{profileIcon(option)}</button>{/each}</div></div>
+							<label class="flex items-center gap-2 text-[12px] text-ink"><input type="checkbox" bind:checked={browserEnabled} /> Browser access</label>
+							<label class="flex items-center gap-2 text-[12px] text-ink"><input type="checkbox" bind:checked={kanbanEnabled} /> Kanban access</label>
+							<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Name</span><input class="w-full rounded-md border border-line bg-bg px-2.5 py-2 text-[13px] text-ink outline-none focus:border-line" bind:value={name} /></label>
+							<div><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Icon</span><div class="grid grid-cols-6 gap-1">{#each KLERM_PROFILE_FACES as option}<button type="button" title={option} class={`rounded-md border py-2 text-[14px] ${face === option ? "border-success bg-raised text-success" : "border-line bg-bg text-muted"}`} onclick={() => face = option}>{profileIcon(option)}</button>{/each}</div></div>
 							{#if creating}
-								<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">What should this AI help with?</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="4000" bind:value={botBrief}></textarea></label>
+								<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">What should this AI help with?</span><textarea class="min-h-20 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="4000" bind:value={botBrief}></textarea></label>
 								<div>
-									<span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory generator</span>
-									<button type="button" class="w-full rounded-md border border-[#303a40] bg-[#13191d] px-3 py-2 text-[10px] font-semibold text-[#b8c1c5] hover:border-[#526168] hover:text-white disabled:cursor-wait disabled:opacity-40" disabled={!botBrief.trim() || !generationModel || generatingMemory || busy} onclick={generateMemory}>{generatingMemory ? "Generating..." : "Generate personal memory"}</button>
-									<p class="mt-1 text-[8px] leading-3 text-[#5f6a70]">{generationModel ? `Runs on ${generationModel}. Describe what you want above, then generate.` : "No configured Klerm model available for generation yet."}</p>
-									{#if memoryError}<p class="mt-1 text-[8px] text-[#c9827b]">{memoryError}</p>{/if}
+									<span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Personal memory generator</span>
+									<button type="button" class="w-full rounded-md border border-line bg-panel px-3 py-2 text-[12px] font-semibold text-ink hover:border-line hover:text-ink disabled:cursor-wait disabled:opacity-40" disabled={!botBrief.trim() || !generationModel || generatingMemory || busy} onclick={generateMemory}>{generatingMemory ? "Generating..." : "Generate personal memory"}</button>
+									<p class="mt-1 text-[11px] leading-3 text-dim">{generationModel ? `Runs on ${generationModel}. Describe what you want above, then generate.` : "No configured Klerm model available for generation yet."}</p>
+									{#if memoryError}<p class="mt-1 text-[11px] text-danger">{memoryError}</p>{/if}
 								</div>
-								<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[10px] leading-4 text-white outline-none focus:border-[#537269]" maxlength="2000" bind:value={personalMemory}></textarea></label>
+								<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Personal memory</span><textarea class="min-h-20 w-full resize-y rounded-md border border-line bg-bg px-2.5 py-2 text-[12px] leading-4 text-ink outline-none focus:border-line" maxlength="2000" bind:value={personalMemory}></textarea></label>
 							{:else}
-								<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Personality</span><div class="flex gap-1.5"><span class="min-w-0 flex-1 rounded-md border border-[#293238] bg-[#080d10] px-2.5 py-2 text-[11px] text-[#9ba6ab]">{configuredProfile?.name ?? "Missing profile"}</span><button type="button" class="rounded-md border border-[#303a40] px-2 text-[9px] text-[#9ba6ab] disabled:opacity-40" disabled={!configuredProfile} onclick={() => configuredProfile && openProfileEditor(configuredProfile)}>Edit</button></div></div>
+								<div><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Personality</span><div class="flex gap-1.5"><span class="min-w-0 flex-1 rounded-md border border-line bg-bg px-2.5 py-2 text-[13px] text-muted">{configuredProfile?.name ?? "Missing profile"}</span><button type="button" class="rounded-md border border-line px-2 text-[12px] text-muted disabled:opacity-40" disabled={!configuredProfile} onclick={() => configuredProfile && openProfileEditor(configuredProfile)}>Edit</button></div></div>
 							{/if}
 						</div>
-						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={!name.trim() || busy} onclick={save}>{creating ? "Create personal AI" : "Save AI"}</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={closeConfiguration}>Cancel</button></div>
-						{#if !creating && selected}<button type="button" class="mt-3 border-0 bg-transparent p-0 text-[9px] text-[#875d5d] hover:text-[#d58d8d]" onclick={remove}>Delete bot</button>{/if}
+						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-primary px-3 py-2 text-[12px] font-semibold text-on-primary disabled:opacity-40" disabled={!name.trim() || busy} onclick={save}>{creating ? "Create personal AI" : "Save AI"}</button><button type="button" class="rounded-md border border-line bg-transparent px-3 py-2 text-[12px] text-muted" onclick={closeConfiguration}>Cancel</button></div>
+						{#if !creating && selected}<button type="button" class="mt-3 border-0 bg-transparent p-0 text-[12px] text-danger hover:text-danger" onclick={remove}>Delete bot</button>{/if}
 					{:else if settingsSection === "model"}
-						<p class="mb-4 text-[10px] leading-4 text-[#748087]">Personal Bots always run inside Klerm. Choose which configured Klerm model powers this AI.</p>
-						<div><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Klerm model</span><div class="rounded-md border border-[#293238] bg-[#080d10] px-2 py-1.5"><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={klermHarness?.available !== true} placeholder="Select model" onchange={(value: string) => model = value} /></div></div>
-						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={!model || busy} onclick={save}>Save model</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={closeConfiguration}>Cancel</button></div>
+						<p class="mb-4 text-[12px] leading-4 text-muted">Personal Bots always run inside Klerm. Choose which configured Klerm model powers this AI.</p>
+						<div><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Klerm model</span><div class="rounded-md border border-line bg-bg px-2 py-1.5"><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={klermHarness?.available !== true} placeholder="Select model" onchange={(value: string) => model = value} /></div></div>
+						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-primary px-3 py-2 text-[12px] font-semibold text-on-primary disabled:opacity-40" disabled={!model || busy} onclick={save}>Save model</button><button type="button" class="rounded-md border border-line bg-transparent px-3 py-2 text-[12px] text-muted" onclick={closeConfiguration}>Cancel</button></div>
 					{:else}
-						<p class="mb-4 text-[10px] leading-4 text-[#748087]">Reasoning is independent from the selected model and AI personality. Change it without starting a new conversation.</p>
-						<label class="block"><span class="mb-1 block text-[9px] font-semibold uppercase tracking-wider text-[#68747a]">Reasoning effort</span><select class="w-full rounded-md border border-[#293238] bg-[#080d10] px-2 py-2 text-[10px] text-white" bind:value={effort}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
-						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-[#dce8e4] px-3 py-2 text-[10px] font-semibold text-[#15211e] disabled:opacity-40" disabled={busy} onclick={save}>Save reasoning</button><button type="button" class="rounded-md border border-[#303a40] bg-transparent px-3 py-2 text-[10px] text-[#909a9f]" onclick={closeConfiguration}>Cancel</button></div>
+						<p class="mb-4 text-[12px] leading-4 text-muted">Reasoning is independent from the selected model and AI personality. Change it without starting a new conversation.</p>
+						<label class="block"><span class="mb-1 block text-[12px] font-semibold uppercase tracking-wider text-muted">Reasoning effort</span><select class="w-full rounded-md border border-line bg-bg px-2 py-2 text-[12px] text-ink" bind:value={effort}>{#each efforts as value}<option value={value}>{value}</option>{/each}</select></label>
+						<div class="mt-5 flex items-center gap-2"><button type="button" class="flex-1 rounded-md border-0 bg-primary px-3 py-2 text-[12px] font-semibold text-on-primary disabled:opacity-40" disabled={busy} onclick={save}>Save reasoning</button><button type="button" class="rounded-md border border-line bg-transparent px-3 py-2 text-[12px] text-muted" onclick={closeConfiguration}>Cancel</button></div>
 					{/if}
 				{/if}
 			</section>

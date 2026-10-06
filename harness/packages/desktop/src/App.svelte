@@ -93,6 +93,7 @@
 	import { RpcBridge, toError } from "./lib/rpc.ts";
 	import { recordWebSource, webToolUrl } from "./lib/web-activity.ts";
 	import Composer from "./components/Composer.svelte";
+	import { resolveAppearance } from "./lib/appearance.ts";
 	import AgentViews from "./components/AgentViews.svelte";
 	import BottomPanel from "./components/BottomPanel.svelte";
 	import ConfirmDialog from "./components/ConfirmDialog.svelte";
@@ -385,8 +386,9 @@
 		// correct from the first paint, before the backend handshake arrives.
 		const effective =
 			appearance ?? ((localStorage.getItem("klerm-appearance") as DesktopAppearance | null) ?? "dark");
-		document.documentElement.dataset.theme =
-			effective === "system" ? (systemPrefersDark ? "dark" : "light") : effective;
+		const theme = resolveAppearance(effective, systemPrefersDark);
+		document.documentElement.dataset.theme = theme;
+		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#191918" : "#f7f6f2");
 	});
 
 	function loadStoredProjects(): Array<{ id: string; name: string }> {
@@ -3237,9 +3239,9 @@
 {#if notification}
 	{#if notificationTarget}
 		{@const target = notificationTarget}
-		<button type="button" aria-live="polite" class="fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-left text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)] hover:border-[#5a7a68]" aria-label={notification} onclick={() => openPersonalBot(target.botId)}>{notification}</button>
+		<button type="button" aria-live="polite" class="fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-line bg-panel px-3 py-2.5 text-left text-[13px] text-ink shadow-sm hover:border-line" aria-label={notification} onclick={() => openPersonalBot(target.botId)}>{notification}</button>
 	{:else}
-		<div class="pointer-events-none fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-[#3a4a43] bg-[#101915] px-3 py-2.5 text-[11px] text-[#dce8e3] shadow-[0_16px_44px_rgba(0,0,0,.45)]" role="status" aria-live="polite">{notification}</div>
+		<div class="pointer-events-none fixed top-4 right-4 z-[90] max-w-[min(360px,calc(100vw-32px))] rounded-lg border border-line bg-panel px-3 py-2.5 text-[13px] text-ink shadow-sm" role="status" aria-live="polite">{notification}</div>
 	{/if}
 {/if}
 
@@ -3268,6 +3270,7 @@
 		ondelete={(session) => (pendingDelete = session)}
 		oncreateproject={(name) => void createProject(name)}
 		onopenproject={(project) => {
+			if (!shortcutNavigationAllowed()) return;
 			selectedProjectId = project.id;
 			workspaceView = undefined;
 			settingsOpen = false;
@@ -3284,6 +3287,7 @@
 		settingsOpen={settingsOpen}
 		workspaceView={activeWorkspaceView}
 		onworkspaceview={(view) => {
+			if (!shortcutNavigationAllowed()) return;
 			workspaceView = view === "agents-routing" ? undefined : view;
 			if (view === "kanban") void refreshKanban();
 			selectedProjectId = undefined;
@@ -3292,6 +3296,7 @@
 			sidebarOpen = false;
 		}}
 		ontogglesettings={() => {
+			if (!shortcutNavigationAllowed()) return;
 			buildModeOffer = undefined;
 			workspaceView = undefined;
 			selectedProjectId = undefined;
@@ -3304,7 +3309,7 @@
 	<button
 		type="button"
 		aria-label="Resize sessions"
-		class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-[rgba(143,163,176,.18)] min-[721px]:block"
+		class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-raised min-[721px]:block"
 		style={`left: calc(${sessionColPx}px - 3px);`}
 		onpointerdown={startSessionResize}
 	></button>
@@ -3313,7 +3318,7 @@
 		<button
 			type="button"
 			aria-label="Resize file changes"
-			class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-[rgba(143,163,176,.18)] min-[901px]:block"
+			class="absolute top-0 bottom-0 z-[16] hidden w-1.5 cursor-col-resize border-0 bg-transparent hover:bg-raised min-[901px]:block"
 			style={`right: calc(${filesColPx}px - 3px);`}
 			onpointerdown={startFilesResize}
 		></button>
@@ -3322,7 +3327,7 @@
 		<button
 			type="button"
 			aria-label="Close navigation"
-			class="fixed inset-0 z-[19] hidden border-0 bg-black/60 backdrop-blur-[2px] narrow-720:block"
+			class="fixed inset-0 z-[19] hidden border-0 bg-bg/80 backdrop-blur-[2px] narrow-720:block"
 			onclick={() => (sidebarOpen = false)}
 		></button>
 	{/if}
@@ -3335,7 +3340,7 @@
 		></button>
 	{/if}
 
-	<main class={`grid min-h-0 min-w-0 overflow-hidden bg-[radial-gradient(circle_at_50%_30%,rgba(44,57,63,.12),transparent_34%),var(--color-bg)] ${workspaceRows}`}>
+	<main class={`grid min-h-0 min-w-0 overflow-hidden bg-panel ${workspaceRows}`}>
 		{#if settingsOpen}
 			{#if desktopSettings}
 			<SettingsView
@@ -3382,7 +3387,7 @@
 				onaddmcpserver={addMcpServer}
 			/>
 			{:else}
-				<p class="px-7 py-6 font-mono text-[11px] text-[#8b969e]">Loading settings...</p>
+				<p class="px-7 py-6 font-sans text-[13px] text-muted">Loading settings...</p>
 			{/if}
 		{:else if workspaceView === "personal-bots"}
 			<PersonalBotsView
@@ -3435,13 +3440,13 @@
 			/>
 		{:else if workspaceView === "browser"}
 			<div class="flex min-h-0 flex-1 overflow-hidden">
-				<aside class="flex w-44 shrink-0 flex-col border-r border-[#27353c] bg-[#0a1014] p-2">
-					<strong class="px-2 py-3 text-[10px] text-[#cbd9dd]">Browser sessions</strong>
+				<aside class="flex w-44 shrink-0 flex-col border-r border-line bg-bg p-2">
+					<strong class="px-2 py-3 text-[12px] text-ink">Browser sessions</strong>
 					<div class="min-h-0 flex-1 overflow-y-auto">{#each browserSessions as entry (entry.id)}
-						<div class="mb-2 rounded-lg border border-[#27353c] p-1"><button type="button" class={`w-full truncate rounded px-2 py-2 text-left text-[10px] ${selectedBrowserSessionId === entry.id ? "bg-[#26391c] text-[#daf5b8]" : "text-[#81949b]"}`} onclick={() => void selectBrowserSession(entry.id)}>{entry.name}</button>
+						<div class="mb-2 rounded-lg border border-line p-1"><button type="button" class={`w-full truncate rounded px-2 py-2 text-left text-[12px] ${selectedBrowserSessionId === entry.id ? "bg-raised text-success" : "text-muted"}`} onclick={() => void selectBrowserSession(entry.id)}>{entry.name}</button>
 						</div>
 					{/each}</div>
-					<button type="button" class="rounded-lg border border-[#34424d] px-2 py-2 text-[10px] text-[#cbd9dd]" onclick={() => void changeBrowserSession("create_browser_session")}>+ New browser session</button>
+					<button type="button" class="rounded-lg border border-line px-2 py-2 text-[12px] text-ink" onclick={() => void changeBrowserSession("create_browser_session")}>+ New browser session</button>
 				</aside>
 				{#if selectedBrowserSessionId}{#key selectedBrowserSessionId}
 			<BrowserWorkspace
@@ -3463,7 +3468,7 @@
 				onresume={resumeBrowserRun}
 				onclose={closeBrowserWorkspace}
 			/>
-				{/key}{:else}<p class="p-6 text-[10px] text-[#81949b]">Loading browser sessions…</p>{/if}
+				{/key}{:else}<p class="p-6 text-[12px] text-muted">Loading browser sessions…</p>{/if}
 			</div>
 		{:else if selectedProject}
 			<ProjectWorkspace
@@ -3501,6 +3506,7 @@
 			{workspaceView}
 			showWorkspaceMenu={!sessionsExpanded}
 			onworkspaceview={(view) => {
+				if (!shortcutNavigationAllowed()) return;
 				workspaceView = view;
 				sidebarOpen = false;
 			}}
@@ -3543,12 +3549,12 @@
 							applyAgentViewsHeight(agentViewsHeight + (event.key === "ArrowDown" ? 24 : -24));
 						}}
 					>
-						<span class="absolute top-1/2 right-3 left-3 h-px -translate-y-1/2 bg-[#273139] transition-colors group-hover:bg-[#65747d] group-focus-visible:bg-[#8d9aa2]"></span>
-						<span class="absolute top-1/2 left-1/2 h-1.5 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#3b474f] bg-[#11181d] transition-colors group-hover:border-[#65747d]"></span>
+						<span class="absolute top-1/2 right-3 left-3 h-px -translate-y-1/2 bg-raised transition-colors group-hover:bg-raised group-focus-visible:bg-raised"></span>
+						<span class="absolute top-1/2 left-1/2 h-1.5 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full border border-line bg-panel transition-colors group-hover:border-line"></span>
 					</button>
-					<div class="min-h-0 overflow-y-auto border-t border-[#273139] bg-[rgba(5,9,12,.38)]">
-						<div class="sticky top-0 z-[1] border-b border-[#222b32] bg-[#090e12]/95 px-4 py-1.5 backdrop-blur">
-							<span class="font-mono text-[8px] tracking-[.1em] text-[#75828a] uppercase">Shared conversation</span>
+					<div class="min-h-0 overflow-y-auto border-t border-line bg-bg">
+						<div class="sticky top-0 z-[1] border-b border-line bg-bg/95 px-4 py-1.5 backdrop-blur">
+							<span class="font-sans text-[11px] tracking-[.1em] text-muted uppercase">Shared conversation</span>
 						</div>
 						<div class="mx-auto flex w-[min(820px,calc(100%-48px))] min-w-0 flex-col py-4 narrow-720:w-[calc(100%-30px)] narrow-720:py-3">
 							<Feed items={feed} {taskActive} {mcpServers} onrerun={rerunPrompt} ontoggle={toggleTimeline} />

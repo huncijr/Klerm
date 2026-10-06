@@ -78,14 +78,14 @@
 
 	const dotClass = $derived(
 		model.statusClass === "online"
-			? "bg-accent shadow-[0_0_8px_rgba(214,255,63,.5)]"
+			? "bg-success"
 			: model.statusClass === "starting"
-				? "bg-[#d6a63f]"
+				? "bg-warning"
 				: "bg-danger",
 	);
 </script>
 
-<div class="relative z-20 bg-[rgba(8,11,15,.82)] backdrop-blur-[18px]">
+<div class="relative z-20 bg-bg backdrop-blur-[18px]">
 <header
 	class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-line px-7 py-2.5 narrow-900:gap-2 narrow-900:px-[18px] narrow-520:gap-2 narrow-520:px-3"
 >
@@ -95,7 +95,7 @@
 			aria-controls="sidebar"
 			aria-expanded={sidebarOpen}
 			aria-label="Toggle navigation"
-			class="hidden h-[34px] w-[34px] shrink-0 cursor-pointer place-items-center rounded-md border border-line bg-[#0e1317] narrow-720:grid"
+			class="hidden h-[34px] w-[34px] shrink-0 cursor-pointer place-items-center rounded-md border border-line bg-panel narrow-720:grid"
 			onclick={ontogglesidebar}
 		>
 			<Menu size={14} stroke-width={1.7} />
@@ -110,18 +110,18 @@
 						bind:this={renameInput}
 						bind:value={renameValue}
 						aria-label="Session name"
-						class="min-w-0 flex-1 rounded border border-[#3a454d] bg-[#0c1115] px-2 py-1 text-[12px] text-[#e5eaed] outline-none focus:border-[#68757e]"
+						class="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-[13px] text-ink outline-none focus:border-line"
 						onkeydown={handleRenameKeydown}
 					/>
-					<button type="button" aria-label="Save session name" class="grid h-6 w-6 place-items-center rounded text-[#a9c94d] hover:bg-[#1a211b]" onclick={() => void commitRename()}><Check size={13} /></button>
-					<button type="button" aria-label="Cancel rename" class="grid h-6 w-6 place-items-center rounded text-[#737e85] hover:bg-[#171d22]" onclick={() => (editing = false)}><X size={13} /></button>
+					<button type="button" aria-label="Save session name" class="grid h-6 w-6 place-items-center rounded text-warning hover:bg-raised" onclick={() => void commitRename()}><Check size={13} /></button>
+					<button type="button" aria-label="Cancel rename" class="grid h-6 w-6 place-items-center rounded text-muted hover:bg-raised" onclick={() => (editing = false)}><X size={13} /></button>
 				</div>
 			{:else}
 				<button type="button" class="group/title mt-0.5 flex max-w-[340px] items-center text-left" onclick={startRename}>
-					<strong class="min-w-0 truncate text-[13px] narrow-720:max-w-[180px] narrow-720:text-[11px]">{title}</strong>
+					<strong class="min-w-0 truncate text-[14px] narrow-720:max-w-[180px] narrow-720:text-[13px]">{title}</strong>
 				</button>
 			{/if}
-			<small class="mt-0.5 block max-w-[420px] truncate font-mono text-[8px]/[1.3] text-muted narrow-720:max-w-[180px]">{cwd}</small>
+			<small class="mt-0.5 block max-w-[420px] truncate font-sans text-[11px]/[1.3] text-muted narrow-720:max-w-[180px]">{cwd}</small>
 		</div>
 	</div>
 
@@ -132,23 +132,23 @@
 		class="flex min-w-0 max-w-[320px] cursor-pointer items-center gap-2 justify-self-center border-0 bg-transparent px-1 py-1 text-center narrow-720:hidden"
 		onclick={onchangeroot}
 	>
-		<FolderGit2 size={14} stroke-width={1.6} class="shrink-0 text-[#8a969e]" />
+		<FolderGit2 size={14} stroke-width={1.6} class="shrink-0 text-muted" />
 		<span class="min-w-0">
-			<span class="block font-mono text-[7px] tracking-[.12em] text-[#536069] uppercase">{isGit ? "Git root" : "Project root"}</span>
-			<strong class="mt-0.5 block truncate text-[11px] font-medium text-[#bec7cc]">{projectRoot || "Choose project"}</strong>
+			<span class="block font-sans text-[11px] tracking-[.12em] text-dim uppercase">{isGit ? "Git root" : "Project root"}</span>
+			<strong class="mt-0.5 block truncate text-[13px] font-medium text-ink">{projectRoot || "Choose project"}</strong>
 		</span>
 	</button>
 
 	<div class="flex min-w-0 items-center justify-end gap-2 text-right">
 		<i class={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}></i>
 		<span class="min-w-0">
-			<span class="block truncate text-[11px] text-[#d7dfe2] narrow-520:text-[9px]" title={model.reference}>{model.reference}</span>
-			<span class="mt-0.5 block font-mono text-[7px] tracking-[.1em] text-[#536069] uppercase">{model.badge}</span>
+			<span class="block truncate text-[13px] text-ink narrow-520:text-[12px]" title={model.reference}>{model.reference}</span>
+			<span class="mt-0.5 block font-sans text-[11px] tracking-[.1em] text-dim uppercase">{model.badge}</span>
 		</span>
 	</div>
 </header>
 	<div class="flex flex-col items-end px-7 py-1 narrow-900:px-[18px] narrow-520:px-3">
-		<button type="button" aria-pressed={workspacePanelOpen} class={`flex h-6 items-center gap-1 rounded px-2 font-mono text-[7px] uppercase ${workspacePanelOpen ? "bg-[#1a2228] text-[#c5ced3]" : "text-[#65717a] hover:bg-[#171d22] hover:text-[#c5ced3]"}`} onclick={ontogglefiles}><Files size={10} /> Files</button>
+		<button type="button" aria-pressed={workspacePanelOpen} class={`flex h-6 items-center gap-1 rounded px-2 font-sans text-[11px] uppercase ${workspacePanelOpen ? "bg-raised text-ink" : "text-muted hover:bg-raised hover:text-ink"}`} onclick={ontogglefiles}><Files size={10} /> Files</button>
 		<WebsiteSources sources={webSources} onselect={onwebsource} />
 	</div>
 </div>

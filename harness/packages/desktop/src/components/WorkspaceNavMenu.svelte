@@ -9,10 +9,12 @@
 	let {
 		activeView,
 		compact = false,
+		embedded = false,
 		onselect,
 	}: {
 		activeView?: WorkspaceView;
 		compact?: boolean;
+		embedded?: boolean;
 		onselect: (view: WorkspaceView) => void;
 	} = $props();
 
@@ -41,28 +43,39 @@
 </script>
 
 <div bind:this={root} class="relative">
+	{#if embedded}
+		<nav aria-label="Workspace views" class="space-y-1">
+			{#each items as item (item.id)}
+				{@const Icon = item.icon}
+				<button type="button" aria-current={activeView === item.id ? "page" : undefined} class={`flex min-h-9 w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[13px] ${activeView === item.id ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`} onclick={() => select(item.id)} title={`${item.detail} · ${shortcuts?.label(viewAction[item.id])}`}>
+					<Icon size={16} stroke-width={1.7} class={activeView === item.id ? "text-accent" : ""} />{item.label}
+				</button>
+			{/each}
+		</nav>
+	{:else}
 	<button
 		type="button"
 		aria-label="Open workspace menu"
 		aria-expanded={open}
 		aria-pressed={activeView !== undefined}
-		class={`grid place-items-center rounded-lg border ${compact ? "h-9 w-9" : "h-8 w-8"} ${activeView ? "border-[#7a8a94] bg-[#1b252b] text-white" : "border-[#313a41] bg-[#12171c] text-[#849199] hover:border-[#58636b] hover:text-white"}`}
+		class={`grid place-items-center rounded-lg border ${compact ? "h-9 w-9" : "h-8 w-8"} ${activeView ? "border-line bg-raised text-ink" : "border-line bg-panel text-muted hover:border-line hover:text-ink"}`}
 		onclick={() => (open = !open)}
 	>
 		<PanelsTopLeft size={15} stroke-width={1.7} />
 	</button>
 	{#if open}
-		<div class={`absolute z-30 w-[250px] rounded-xl border border-[#303b43] bg-[#0b1014] p-2 shadow-[0_20px_55px_rgba(0,0,0,.58)] ${compact ? "top-0 left-[46px]" : "top-[38px] left-0"}`}>
-			<p class="m-0 px-2 pt-1 pb-2 font-mono text-[8px] tracking-[.14em] text-[#64717a] uppercase">Open view</p>
+		<div class={`absolute z-30 w-[min(420px,calc(100vw-64px))] rounded-lg border border-line bg-panel p-2 shadow-popover ${compact ? "top-0 left-[46px]" : "top-[38px] left-0"}`}>
+			<p class="m-0 px-2 pt-1 pb-2 font-sans text-[11px] tracking-[.14em] text-muted uppercase">Open view</p>
 			{#each items as item (item.id)}
 				{@const Icon = item.icon}
-				<button type="button" class={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left ${activeView === item.id ? "bg-[#1a242a]" : "hover:bg-[#141c21]"}`} onclick={() => select(item.id)}>
-					<span class={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${activeView === item.id ? "border-[rgba(214,255,63,.26)] bg-[rgba(214,255,63,.07)] text-accent" : "border-[#303b43] bg-[#10161b] text-[#9aa6ad]"}`}><Icon size={14} /></span>
-					<span class="min-w-0 flex-1"><strong class="block text-[10px] text-[#dce3e6]">{item.label}</strong><small class="mt-0.5 block truncate text-[8px] text-[#64717a]">{item.detail}</small></span>
-					<kbd class="text-[7px] text-[#688290]">{shortcuts?.label(viewAction[item.id])}</kbd>
-					<ChevronRight size={12} class="text-[#56626a]" />
+				<button type="button" class={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left ${activeView === item.id ? "bg-raised" : "hover:bg-panel"}`} onclick={() => select(item.id)}>
+					<span class={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${activeView === item.id ? "border-warning bg-warning-soft text-accent" : "border-line bg-panel text-muted"}`}><Icon size={14} /></span>
+					<span class="min-w-0 flex-1"><strong class="block text-[12px] text-ink">{item.label}</strong><small class="mt-0.5 block truncate text-[11px] text-muted">{item.detail}</small></span>
+					<kbd class="text-[11px] text-muted">{shortcuts?.label(viewAction[item.id])}</kbd>
+					<ChevronRight size={12} class="text-dim" />
 				</button>
 			{/each}
 		</div>
+	{/if}
 	{/if}
 </div>

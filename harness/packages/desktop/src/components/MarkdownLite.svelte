@@ -131,59 +131,59 @@
 	{#each blocks as block, blockIndex (`${blockIndex}-${block.type}`)}
 		{#if block.type === "heading"}
 			{#if block.level === 1}
-				<h1 class="pt-1 text-[19px] font-bold leading-[1.3] text-[#f0f3f4] narrow-520:text-[17px]">
-					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#1a2127] px-1 py-0.5 font-mono text-[.88em] text-[#d8e0e4]">{token.text}</code>{:else}{token.text}{/if}{/each}
+				<h1 class="pt-1 text-[19px] font-bold leading-[1.3] text-ink narrow-520:text-[17px]">
+					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-raised px-1 py-0.5 font-mono text-[.88em] text-ink">{token.text}</code>{:else}{token.text}{/if}{/each}
 				</h1>
 			{:else if block.level === 2}
-				<h2 class="pt-1 text-[16px] font-bold leading-[1.35] text-[#edf1f3] narrow-520:text-[15px]">
-					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#1a2127] px-1 py-0.5 font-mono text-[.88em] text-[#d8e0e4]">{token.text}</code>{:else}{token.text}{/if}{/each}
+				<h2 class="pt-1 text-[16px] font-bold leading-[1.35] text-ink narrow-520:text-[15px]">
+					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-raised px-1 py-0.5 font-mono text-[.88em] text-ink">{token.text}</code>{:else}{token.text}{/if}{/each}
 				</h2>
 			{:else}
-				<h3 class="pt-1 text-[14px] font-bold leading-[1.4] text-[#e5eaed]">
-					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#1a2127] px-1 py-0.5 font-mono text-[.88em] text-[#d8e0e4]">{token.text}</code>{:else}{token.text}{/if}{/each}
+				<h3 class="pt-1 text-[14px] font-bold leading-[1.4] text-ink">
+					{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong>{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-raised px-1 py-0.5 font-mono text-[.88em] text-ink">{token.text}</code>{:else}{token.text}{/if}{/each}
 				</h3>
 			{/if}
 		{:else if block.type === "paragraph"}
 			<p>
-				{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded border border-[#2a333a] bg-[#151b20] px-1.5 py-0.5 font-mono text-[.88em] text-[#d9e1e4]">{token.text}</code>{:else}{token.text}{/if}{/each}
+				{#each inlineTokens(block.text) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-ink">{token.text}</strong>{:else if token.type === "code"}<code class="rounded border border-line bg-panel px-1.5 py-0.5 font-mono text-[.88em] text-ink">{token.text}</code>{:else}{token.text}{/if}{/each}
 			</p>
 		{:else if block.type === "list"}
 			{#if block.ordered}
-				<ol class="list-decimal space-y-1 pl-5 marker:text-[#77838b]">
-					{#each block.items as item, itemIndex (itemIndex)}<li>{#each inlineTokens(item) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</li>{/each}
+				<ol class="list-decimal space-y-1 pl-5 marker:text-muted">
+					{#each block.items as item, itemIndex (itemIndex)}<li>{#each inlineTokens(item) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-ink">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-panel px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</li>{/each}
 				</ol>
 			{:else}
-				<ul class="list-disc space-y-1 pl-5 marker:text-[#77838b]">
-					{#each block.items as item, itemIndex (itemIndex)}<li>{#each inlineTokens(item) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</li>{/each}
+				<ul class="list-disc space-y-1 pl-5 marker:text-muted">
+					{#each block.items as item, itemIndex (itemIndex)}<li>{#each inlineTokens(item) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-ink">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-panel px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</li>{/each}
 				</ul>
 			{/if}
 		{:else if block.type === "table"}
 			{#if block.fileSummary}
 				<div class="grid gap-2">
 					{#each block.rows as row, rowIndex (rowIndex)}
-						<div class="rounded-lg border border-[#25313a] bg-[#0d1318] p-3 shadow-[0_8px_24px_rgba(0,0,0,.16)]">
+						<div class="rounded-lg border border-line bg-panel p-3 shadow-sm">
 							<div class="mb-2 flex flex-wrap items-center gap-2">
-								<code class="rounded-md border border-[rgba(88,132,196,.38)] bg-[rgba(18,30,48,.5)] px-2 py-1 font-mono text-[10px] text-[#bcd6ff]">{cellAt(row, 0).replaceAll("`", "")}</code>
-								{#if block.headers[1]}<span class="font-mono text-[8px] tracking-[.12em] text-[#65717a] uppercase">{block.headers[1]}</span>{/if}
+								<code class="rounded-md border border-info bg-raised px-2 py-1 font-mono text-[12px] text-info">{cellAt(row, 0).replaceAll("`", "")}</code>
+								{#if block.headers[1]}<span class="font-sans text-[11px] tracking-[.12em] text-muted uppercase">{block.headers[1]}</span>{/if}
 							</div>
 							{#if row.length > 1}
-								<p class="m-0 text-[12px]/[1.55] text-[#aeb8be]">
-									{#each inlineTokens(row.slice(1).join(" / ")) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}
+								<p class="m-0 text-[13px]/[1.55] text-ink">
+									{#each inlineTokens(row.slice(1).join(" / ")) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-ink">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-panel px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}
 								</p>
 							{/if}
 						</div>
 					{/each}
 				</div>
 			{:else}
-				<div class="overflow-x-auto rounded-lg border border-[#29323a] bg-[#0b1015]">
-					<table class="w-full border-collapse text-left text-[11px]/[1.45]">
-						<thead class="bg-[#121920] font-mono text-[8px] tracking-[.1em] text-[#78858e] uppercase">
-							<tr>{#each block.headers as header, headerIndex (headerIndex)}<th class="border-b border-[#273039] px-3 py-2 font-medium">{header}</th>{/each}</tr>
+				<div class="overflow-x-auto rounded-lg border border-line bg-bg">
+					<table class="w-full border-collapse text-left text-[13px]/[1.45]">
+						<thead class="bg-panel font-sans text-[11px] tracking-[.1em] text-muted uppercase">
+							<tr>{#each block.headers as header, headerIndex (headerIndex)}<th class="border-b border-line px-3 py-2 font-medium">{header}</th>{/each}</tr>
 						</thead>
 						<tbody>
 							{#each block.rows as row, rowIndex (rowIndex)}
-								<tr class="border-b border-[#1d252c] last:border-b-0">
-									{#each block.headers as _header, cellIndex (cellIndex)}<td class="px-3 py-2 text-[#b4bec4]">{#each inlineTokens(cellAt(row, cellIndex)) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-[#eef2f3]">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-[#151b20] px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</td>{/each}
+								<tr class="border-b border-line-soft last:border-b-0">
+									{#each block.headers as _header, cellIndex (cellIndex)}<td class="px-3 py-2 text-ink">{#each inlineTokens(cellAt(row, cellIndex)) as token, tokenIndex (tokenIndex)}{#if token.type === "bold"}<strong class="font-semibold text-ink">{token.text}</strong>{:else if token.type === "code"}<code class="rounded bg-panel px-1 py-0.5 font-mono text-[.88em]">{token.text}</code>{:else}{token.text}{/if}{/each}</td>{/each}
 								</tr>
 							{/each}
 						</tbody>
@@ -191,9 +191,9 @@
 				</div>
 			{/if}
 		{:else}
-			<div class="overflow-hidden rounded-lg border border-[#29323a] bg-[#090d11]">
-				{#if block.language}<div class="border-b border-[#222a31] px-3 py-1.5 font-mono text-[8px] tracking-[.08em] text-[#71808a] uppercase">{block.language}</div>{/if}
-				<pre class="m-0 overflow-x-auto p-3 font-mono text-[11px]/[1.6] whitespace-pre text-[#d2dade]"><code>{block.text}</code></pre>
+			<div class="overflow-hidden rounded-lg border border-line bg-bg">
+				{#if block.language}<div class="border-b border-line px-3 py-1.5 font-sans text-[11px] tracking-[.08em] text-muted uppercase">{block.language}</div>{/if}
+				<pre class="m-0 overflow-x-auto p-3 font-mono text-[13px]/[1.6] whitespace-pre text-ink"><code>{block.text}</code></pre>
 			</div>
 		{/if}
 	{/each}

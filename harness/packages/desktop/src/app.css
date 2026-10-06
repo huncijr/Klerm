@@ -1,18 +1,40 @@
 @import "tailwindcss";
 
+/* Klerm — quiet, functional desktop surfaces. Every UI color is semantic. */
 @theme {
-	--color-bg: #080b0f;
-	--color-panel: #0d1216;
-	--color-raised: #11171d;
-	--color-line: #202830;
-	--color-line-soft: #171e25;
-	--color-muted: #77838d;
-	--color-dim: #4e5962;
-	--color-accent: #d6ff3f;
-	--color-danger: #ff6f61;
-	--color-hero: #f0a044;
-	--font-sans: "Segoe UI Variable", "Segoe UI", Ubuntu, sans-serif;
-	--font-mono: "Cascadia Mono", "Liberation Mono", monospace;
+	--color-bg: #191918;
+	--color-panel: #20201e;
+	--color-raised: #292927;
+	--color-input: #191918;
+	--color-line: #41413c;
+	--color-line-soft: #33332f;
+	--color-ink: #eeede8;
+	--color-muted: #b7b5ac;
+	--color-dim: #a29f95;
+	--color-primary: #ece9e1;
+	--color-on-primary: #232320;
+	--color-accent: #e2a580;
+	--color-accent-soft: #342820;
+	--color-danger: #f2aaa3;
+	--color-danger-soft: #342321;
+	--color-success: #a4d0b5;
+	--color-success-soft: #213128;
+	--color-warning: #e8be83;
+	--color-warning-soft: #342c21;
+	--color-info: #aac8ed;
+	--color-info-soft: #232e3b;
+	--color-purple: #cbb7e8;
+	--color-purple-soft: #302739;
+	--color-teal: #9fceca;
+	--color-teal-soft: #213331;
+	--color-logo-plate: #f7f6f2;
+	--color-hero: var(--color-accent);
+	--font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Ubuntu, sans-serif;
+	--font-mono: "SFMono-Regular", Consolas, "Cascadia Mono", "Liberation Mono", monospace;
+	--font-display: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	--shadow-sm: 0 1px 3px rgb(0 0 0 / 0.08);
+	--shadow-md: 0 4px 16px rgb(0 0 0 / 0.12);
+	--shadow-popover: 0 12px 40px rgb(0 0 0 / 0.24);
 }
 
 @custom-variant narrow-900 (@media (max-width: 900px));
@@ -23,68 +45,92 @@
 @custom-variant short-500 (@media (max-height: 500px));
 
 @layer base {
-	html,
-	body,
-	#app {
-		height: 100%;
+	html, body, #app { height: 100%; }
+	html { color-scheme: dark; }
+	html[data-theme="light"] {
+		color-scheme: light;
+		--color-bg: #f7f6f2;
+		--color-panel: #fefdfb;
+		--color-raised: #efede7;
+		--color-input: #fefdfb;
+		--color-line: #d0cec6;
+		--color-line-soft: #e3e0d9;
+		--color-ink: #262622;
+		--color-muted: #5c5b54;
+		--color-dim: #6b685f;
+		--color-primary: #2d2c28;
+		--color-on-primary: #fefdfb;
+		--color-accent: #985132;
+		--color-accent-soft: #f4e9e0;
+		--color-danger: #a5362d;
+		--color-danger-soft: #f9eae6;
+		--color-success: #286147;
+		--color-success-soft: #eaf2ec;
+		--color-warning: #81531c;
+		--color-warning-soft: #f6eddc;
+		--color-info: #315f96;
+		--color-info-soft: #eaf0f8;
+		--color-purple: #704893;
+		--color-purple-soft: #f0eaf5;
+		--color-teal: #286968;
+		--color-teal-soft: #e8f1ef;
+		--color-logo-plate: #f7f6f2;
+		--shadow-popover: 0 12px 40px rgb(45 44 40 / 0.14);
 	}
 	body {
 		margin: 0;
 		overflow: hidden;
 		background: var(--color-bg);
-		color: #e8edf1;
+		color: var(--color-ink);
 		font-family: var(--font-sans);
+		font-size: 14px;
+		line-height: 1.5;
 		font-synthesis: none;
 		text-rendering: optimizeLegibility;
+		-webkit-font-smoothing: antialiased;
 	}
-	button {
-		color: inherit;
-	}
-	* {
-		/* Scrollbars are fully hidden; scrolling still works with the wheel,
-		   drag, and keyboard. */
-		scrollbar-width: none;
-	}
-	*::-webkit-scrollbar {
-		width: 0;
-		height: 0;
-		display: none;
-	}
-	html[data-theme="light"] {
-		color-scheme: light;
-	}
-	html[data-theme="dark"] {
-		color-scheme: dark;
-	}
-	html[data-theme="light"] body {
-		background: #fbfbfa;
-	}
-	/* Light mode derives from the dark theme by inverting the rendered UI and
-	   rotating hues back, so neutral grays become light and every accent keeps
-	   its hue. Images are inverted a second time to keep brand colors intact. */
-	html[data-theme="light"] #app {
-		filter: invert(1) hue-rotate(180deg);
-	}
-	html[data-theme="light"] #app img {
-		filter: invert(1) hue-rotate(180deg);
-	}
+	button { color: inherit; touch-action: manipulation; }
+	button:not(:disabled), summary, select { cursor: pointer; }
+	button:disabled { cursor: not-allowed; }
+	button, input, textarea, select { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; }
+	:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+	input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 1px; }
+	::selection { background: var(--color-accent-soft); color: var(--color-ink); }
+	* { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
+	*::-webkit-scrollbar { width: 6px; height: 6px; }
+	*::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 8px; }
+	*::-webkit-scrollbar-track { background: transparent; }
+	select, option { color: var(--color-ink); background-color: var(--color-input); }
+}
+
+@layer components {
+	.surface { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 8px; }
+	.control { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--color-line); border-radius: 6px; padding: 6px 12px; background: var(--color-panel); color: var(--color-ink); font-size: 13px; font-weight: 500; }
+	.control:hover:not(:disabled) { background: var(--color-raised); }
+	.control-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: transparent; }
+	.control-primary:hover:not(:disabled) { background: var(--color-primary); opacity: 0.9; }
+	.section-label { font-size: 12px; font-weight: 600; color: var(--color-muted); letter-spacing: 0.02em; }
+	.screen-title { font-size: 22px; line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; color: var(--color-ink); }
 }
 
 @keyframes reveal {
-	from {
-		opacity: 0;
-		transform: scale(0.96) translateY(8px);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-	}
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: none; }
+}
+
+/* Keep keyboard focus visible even on controls with Tailwind outline resets. */
+:where(button, input, textarea, select, a, [tabindex]):focus-visible {
+	outline: 2px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+@layer components {
+	[role="switch"][aria-checked="true"] > span:last-child { background: var(--color-accent); }
+	[role="switch"][aria-checked="true"] > span:last-child > span { background: var(--color-bg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-	*,
-	*::before,
-	*::after {
+	*, *::before, *::after {
 		scroll-behavior: auto !important;
 		animation-duration: 0.01ms !important;
 		animation-iteration-count: 1 !important;

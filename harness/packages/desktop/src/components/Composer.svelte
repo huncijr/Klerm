@@ -229,7 +229,7 @@
 	}
 
 	function mentionStyle(color: McpColor = "base"): string {
-		return `color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}; box-shadow: 0 0 0 1px ${MCP_COLOR_CSS[color]}55; border-radius: 4px;`;
+		return `color: ${MCP_COLOR_CSS[color]}; background: ${MCP_COLOR_BG_CSS[color]}; box-shadow: 0 0 0 1px color-mix(in srgb, ${MCP_COLOR_CSS[color]} 35%, transparent); border-radius: 4px;`;
 	}
 
 	function resizePrompt(): void {
@@ -519,33 +519,33 @@
 
 <footer
 	class={`relative z-[3] min-h-0 px-7 pt-3 pb-[17px] narrow-720:px-[15px] narrow-520:px-2.5 narrow-520:pt-2 narrow-520:pb-2.5 ${
-		emptyLayout ? "w-full self-center pt-0" : "bg-[linear-gradient(transparent,var(--color-bg)_18%)]"
+		emptyLayout ? "w-full self-center pt-0" : "bg-panel"
 	}`}
 >
 	{#if errorBanner}
 		<div
 			role="alert"
-			class="mx-auto mb-[7px] w-[min(820px,100%)] rounded-md border border-[rgba(255,111,97,.25)] bg-[rgba(255,111,97,.07)] px-3 py-2 text-[10px] text-[#e69a93]"
+			class="mx-auto mb-[7px] w-[min(820px,100%)] rounded-md border border-danger bg-danger-soft px-3 py-2 text-[12px] text-danger"
 		>
 			{errorBanner}
 		</div>
 	{/if}
 	{#if buildModeOffer && !externalMode}
 		{#key buildModeOffer.id}
-			<div class="mx-auto mb-2 flex w-[min(820px,100%)] flex-wrap items-center gap-3 rounded-lg border border-[rgba(255,82,82,.5)] bg-[linear-gradient(90deg,rgba(105,25,25,.45),rgba(50,16,20,.72))] px-3 py-2 shadow-[0_10px_30px_rgba(75,0,0,.2)]" role="status" aria-live="polite">
+			<div class="mx-auto mb-2 flex w-[min(820px,100%)] flex-wrap items-center gap-3 rounded-lg border border-danger bg-panel px-3 py-2 shadow-sm" role="status" aria-live="polite">
 				<div class="relative grid h-8 w-8 shrink-0 place-items-center" aria-label="This suggestion expires in 10 seconds">
 					<svg viewBox="0 0 36 36" class="h-8 w-8 -rotate-90" aria-hidden="true">
-						<circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,120,120,.2)" stroke-width="3"></circle>
-						<circle cx="18" cy="18" r="15" pathLength="100" fill="none" stroke="#ff6f61" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" class="build-offer-countdown"></circle>
+						<circle cx="18" cy="18" r="15" fill="none" stroke="var(--color-warning-soft)" stroke-width="3"></circle>
+						<circle cx="18" cy="18" r="15" pathLength="100" fill="none" stroke="var(--color-warning)" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" class="build-offer-countdown"></circle>
 					</svg>
-					<Hammer size={12} class="absolute text-[#ff9b91]" />
+					<Hammer size={12} class="absolute text-danger" />
 				</div>
 				<div class="min-w-[160px] flex-1">
-					<strong class="block text-[11px] text-[#ffd0cb]">Plan ready</strong>
-					<span class="mt-0.5 block font-mono text-[8px] text-[#b98d89]">Switch {buildModeOffer.agent === "agent1" ? "Agent 1" : "Agent 2"} to Build mode?</span>
+					<strong class="block text-[13px] text-accent">Plan ready</strong>
+					<span class="mt-0.5 block font-sans text-[11px] text-danger">Switch {buildModeOffer.agent === "agent1" ? "Agent 1" : "Agent 2"} to Build mode?</span>
 				</div>
-				<button type="button" class="rounded px-2.5 py-1.5 font-mono text-[8px] text-[#bc8e8a] hover:bg-[rgba(255,255,255,.06)] hover:text-white" onclick={() => onbuildofferdismiss(buildModeOffer!.id)}>Cancel</button>
-				<button type="button" disabled={roleDisabled} class="rounded border border-[rgba(255,111,97,.55)] bg-[rgba(255,82,82,.15)] px-3 py-1.5 font-mono text-[8px] font-semibold text-[#ff9b91] hover:bg-[rgba(255,82,82,.25)] disabled:cursor-not-allowed disabled:opacity-45" onclick={() => onbuildofferswitch(buildModeOffer!.id)}>Switch to Build mode</button>
+				<button type="button" class="rounded px-2.5 py-1.5 font-sans text-[11px] text-danger hover:bg-raised hover:text-ink" onclick={() => onbuildofferdismiss(buildModeOffer!.id)}>Cancel</button>
+				<button type="button" disabled={roleDisabled} class="rounded border border-danger bg-danger-soft px-3 py-1.5 font-sans text-[11px] font-semibold text-danger hover:bg-danger-soft disabled:cursor-not-allowed disabled:opacity-45" onclick={() => onbuildofferswitch(buildModeOffer!.id)}>Switch to Build mode</button>
 			</div>
 		{/key}
 	{/if}
@@ -554,7 +554,7 @@
 		<button
 			type="button"
 			disabled={roleDisabled}
-			class="border-0 bg-transparent p-0 font-mono text-[8px] uppercase tracking-[.1em] text-[#737f87] cursor-pointer hover:text-[#cbd2d6] disabled:cursor-not-allowed disabled:opacity-45"
+			class="border-0 bg-transparent p-0 font-sans text-[11px] uppercase tracking-[.1em] text-muted cursor-pointer hover:text-ink disabled:cursor-not-allowed disabled:opacity-45"
 			onclick={() => (roleMenuOpen = !roleMenuOpen)}
 		>
 			{activeAgentLabel} Mode: {activeRole === "planner" ? "Plan" : "Build"}
@@ -563,32 +563,32 @@
 	{/if}
 
 	<form
-		class="mx-auto w-[min(820px,100%)] overflow-visible rounded-xl border border-[#2a3239] bg-[#0d1116] shadow-[0_14px_40px_rgba(0,0,0,.24)] focus-within:border-[#46515a]"
+		class="mx-auto w-[min(820px,100%)] overflow-visible rounded-xl border border-line bg-panel shadow-sm focus-within:border-line"
 		onsubmit={(event) => {
 			event.preventDefault();
 			submit();
 		}}
 	>
 		{#if externalAgentSlots.length > 0}
-			<div bind:this={agentStripRoot} class="flex min-h-9 flex-wrap items-center gap-1.5 border-b border-[#232c34] px-2.5 py-1.5">
+			<div bind:this={agentStripRoot} class="flex min-h-9 flex-wrap items-center gap-1.5 border-b border-line px-2.5 py-1.5">
 				{#if externalAgentsCollapsed}
-					<span class="mr-auto font-mono text-[8px] tracking-[.08em] text-[#78858d] uppercase">External Agents · {externalAgentSlots.length}</span>
+					<span class="mr-auto font-sans text-[11px] tracking-[.08em] text-muted uppercase">External Agents · {externalAgentSlots.length}</span>
 					{#if allExternalAgentsDisabled}
-						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-[#40512e] bg-[#11180c] px-2 py-1 font-mono text-[7px] text-[#c8d6a9] hover:bg-[#18220f] disabled:cursor-wait disabled:opacity-45" onclick={onenableallexternalagents}>Enable all</button>
-						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={onturnoffexternalagents}>Turn off</button>
+						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-line bg-panel px-2 py-1 font-sans text-[11px] text-accent hover:bg-panel disabled:cursor-wait disabled:opacity-45" onclick={onenableallexternalagents}>Enable all</button>
+						<button type="button" disabled={externalHarnessBusy} class="rounded-md border border-line px-2 py-1 font-sans text-[11px] text-danger hover:bg-panel disabled:cursor-wait disabled:opacity-45" onclick={onturnoffexternalagents}>Turn off</button>
 					{/if}
 				{:else}
 				{#each externalAgentSlots as { label, slot }, index (slot.id)}
 					{@const models = harnessModels(slot)}
 					{@const viewVisible = visibleAgentIds.includes(slot.id)}
 					<div class="group relative">
-						<div class={`flex h-11 min-w-[190px] items-center rounded-md border transition-colors ${slot.enabled ? "border-[#40512e] bg-[#11180c] text-[#d5dfbe]" : "border-[#293239] bg-[#090d11] text-[#69757d]"}`}>
+						<div class={`flex h-11 min-w-[190px] items-center rounded-md border transition-colors ${slot.enabled ? "border-line bg-panel text-ink" : "border-line bg-bg text-muted"}`}>
 							<button
 								type="button"
 								aria-label={`${viewVisible ? "Hide" : "Show"} ${label} view`}
 								aria-pressed={viewVisible}
 								title={`${viewVisible ? "Hide" : "Show"} ${label} context`}
-								class={`ml-1 grid h-7 w-7 place-items-center rounded hover:bg-[#222d1a] ${viewVisible ? "text-[#d5dfbe]" : "text-[#68747c]"}`}
+								class={`ml-1 grid h-7 w-7 place-items-center rounded hover:bg-raised ${viewVisible ? "text-ink" : "text-muted"}`}
 								onclick={() => onviewexternalagent(slot.id)}
 							>
 								{#if viewVisible}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
@@ -597,14 +597,14 @@
 								type="button"
 								aria-expanded={pinnedAgentId === slot.id}
 								aria-label={`Configure ${label} ${codingHarnessDisplayName(slot.kind)}`}
-								class="flex h-full min-w-0 flex-1 items-center gap-2 px-1.5 text-left font-mono"
+								class="flex h-full min-w-0 flex-1 items-center gap-2 px-1.5 text-left font-sans"
 								onfocus={() => (pinnedAgentId = slot.id)}
 								onclick={() => (pinnedAgentId = pinnedAgentId === slot.id ? "" : slot.id)}
 							>
 								<ProviderLogo id={slot.kind ?? "klerm"} label={codingHarnessDisplayName(slot.kind)} size={16} decorative />
 								<span class="min-w-0 flex-1">
-									<span class="block text-[8px] text-[#d5dfbe]">{label} · {codingHarnessDisplayName(slot.kind)}</span>
-									<span class="mt-0.5 block max-w-[120px] truncate text-[7px] text-[#77848c]" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · thinking {slot.effort}</span>
+									<span class="block text-[11px] text-ink">{label} · {codingHarnessDisplayName(slot.kind)}</span>
+									<span class="mt-0.5 block max-w-[120px] truncate text-[11px] text-muted" title={slot.model ?? "Default model"}>{slot.model ?? "Default model"} · thinking {slot.effort}</span>
 								</span>
 							</button>
 							<button
@@ -616,14 +616,14 @@
 								class="mr-1 flex h-full items-center pl-1 disabled:cursor-wait disabled:opacity-50"
 								onclick={() => onexternalharnesschange(slot.id, !slot.enabled)}
 							>
-								<span class={`relative h-3.5 w-6 rounded-full transition-colors ${slot.enabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform ${slot.enabled ? "translate-x-2.5" : "translate-x-0"}`}></span></span>
+								<span class={`relative h-3.5 w-6 rounded-full transition-colors ${slot.enabled ? "bg-warning-soft" : "bg-raised"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-2.5 w-2.5 rounded-full bg-primary transition-transform ${slot.enabled ? "translate-x-2.5" : "translate-x-0"}`}></span></span>
 							</button>
 							{#if slot.id !== "agent1" || externalAgentSlots.length >= 3}
 								<button
 									type="button"
 									aria-label={`Remove ${label}`}
 									disabled={externalHarnessBusy}
-									class="mr-1 grid h-4 w-4 place-items-center rounded text-[#8b6b6b] hover:bg-[#241111] hover:text-[#d9928b] disabled:cursor-wait disabled:opacity-40"
+									class="mr-1 grid h-4 w-4 place-items-center rounded text-muted hover:bg-panel hover:text-danger disabled:cursor-wait disabled:opacity-40"
 									onclick={() => {
 										pinnedAgentId = "";
 										onremoveexternalagent(slot.id);
@@ -633,7 +633,7 @@
 								</button>
 							{/if}
 						</div>
-						<div class={`absolute top-full z-40 w-64 rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_16px_38px_rgba(0,0,0,.5)] group-hover:block ${pinnedAgentId === slot.id ? "block" : "hidden"} ${index > 1 ? "right-0" : "left-0"}`}>
+						<div class={`absolute top-full z-40 w-64 rounded-lg border border-line bg-panel p-2 shadow-sm group-hover:block ${pinnedAgentId === slot.id ? "block" : "hidden"} ${index > 1 ? "right-0" : "left-0"}`}>
 							<ModelSelect
 								label="Model"
 								options={models}
@@ -645,45 +645,45 @@
 								emptyLabel="No model"
 								onchange={(value) => onexternalmodelchange(slot.id, value)}
 							/>
-							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-harness-${slot.id}`}>Harness</label>
+							<label class="mt-2 block font-sans text-[11px] tracking-[.12em] text-muted uppercase" for={`composer-harness-${slot.id}`}>Harness</label>
 							<select
 								id={`composer-harness-${slot.id}`}
 								value={slot.kind ?? "klerm"}
 								disabled={externalHarnessBusy}
-								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white [color-scheme:dark] disabled:opacity-45"
+								class="mt-1 h-8 w-full rounded-md border border-line bg-bg px-2 font-sans text-[11px] text-ink  disabled:opacity-45"
 								onchange={(event) => onexternalharnesskindchange(slot.id, event.currentTarget.value as CodingHarnessKind)}
 							>
 								{#each codingHarnessOptions as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
 							</select>
-							<label class="mt-2 block font-mono text-[7px] tracking-[.12em] text-[#66747d] uppercase" for={`composer-effort-${slot.id}`}>Thinking</label>
+							<label class="mt-2 block font-sans text-[11px] tracking-[.12em] text-muted uppercase" for={`composer-effort-${slot.id}`}>Thinking</label>
 							<select
 								id={`composer-effort-${slot.id}`}
 								value={slot.effort}
 								disabled={externalHarnessBusy}
-								class="mt-1 h-8 w-full rounded-md border border-[#303a42] bg-[#05080b] px-2 font-mono text-[8px] text-white capitalize [color-scheme:dark] disabled:opacity-45"
+								class="mt-1 h-8 w-full rounded-md border border-line bg-bg px-2 font-sans text-[11px] text-ink capitalize  disabled:opacity-45"
 								onchange={(event) => onexternaleffortchange(slot.id, event.currentTarget.value as ThinkingLevel)}
 							>
 								{#each ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as effort}<option value={effort}>{effort}</option>{/each}
 							</select>
 							{#if slot.id !== "agent1"}
-								<button type="button" class="mt-2 w-full rounded-md border border-[#4a3030] px-2 py-1.5 font-mono text-[8px] text-[#d9928b] hover:bg-[#241111]" onclick={() => { pinnedAgentId = ""; onremoveexternalagent(slot.id); }}>Remove agent</button>
+								<button type="button" class="mt-2 w-full rounded-md border border-line px-2 py-1.5 font-sans text-[11px] text-danger hover:bg-panel" onclick={() => { pinnedAgentId = ""; onremoveexternalagent(slot.id); }}>Remove agent</button>
 							{/if}
 						</div>
 					</div>
 				{/each}
-				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 4} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-[#3d4a54] bg-[#0a0f13] font-mono text-[13px] text-[#aeb8be] hover:border-[#61707a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
+				<button type="button" aria-label="Add agent" disabled={externalHarnessBusy || externalAgentSlots.length >= 4} class="grid h-7 w-7 place-items-center rounded-md border border-dashed border-line bg-bg font-sans text-[14px] text-ink hover:border-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40" onclick={onaddexternalagent}>+</button>
 				{/if}
 				{#if externalAgentSlots.length >= 3}
 					<div class="ml-auto flex shrink-0 flex-col items-stretch gap-1">
 						{#if !externalAgentsCollapsed}
-							<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="rounded-md border border-[#4a3030] px-1.5 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
+							<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="rounded-md border border-line px-1.5 py-1 font-sans text-[11px] text-danger hover:bg-panel disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
 						{/if}
 						<button
 							type="button"
 							aria-label={externalAgentsCollapsed ? "Expand External Agents" : "Collapse External Agents"}
 							aria-expanded={!externalAgentsCollapsed}
 							title={externalAgentsCollapsed ? "Expand External Agents" : "Collapse External Agents"}
-							class={`grid h-7 w-full shrink-0 place-items-center rounded-md border border-[#303a42] text-[#85929a] transition-colors hover:border-[#53616a] hover:bg-[#151c21] hover:text-white ${externalAgentsCollapsed ? "" : "rotate-180"}`}
+							class={`grid h-7 w-full shrink-0 place-items-center rounded-md border border-line text-muted transition-colors hover:border-line hover:bg-raised hover:text-ink ${externalAgentsCollapsed ? "" : "rotate-180"}`}
 							onclick={() => {
 								externalAgentsCollapsed = !externalAgentsCollapsed;
 								pinnedAgentId = "";
@@ -693,7 +693,7 @@
 						</button>
 					</div>
 				{:else if !externalAgentsCollapsed}
-					<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="ml-auto rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[7px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
+					<button type="button" disabled={externalHarnessBusy || allExternalAgentsDisabled} class="ml-auto rounded-md border border-line px-2 py-1 font-sans text-[11px] text-danger hover:bg-panel disabled:cursor-wait disabled:opacity-45" onclick={ondisableallexternalagents}>Disable all</button>
 				{/if}
 			</div>
 		{/if}
@@ -704,31 +704,31 @@
 					{#each attachments as image, index (`${image.name ?? index}-${image.data.length}`)}
 						{@const src = imageDataUrl(image)}
 						{#if src}
-							<div class="group relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-[#364149] bg-[#080b0e]">
+							<div class="group relative h-14 w-14 shrink-0 overflow-hidden rounded-md border border-line bg-bg">
 								<img src={src} alt={image.name ?? `Attachment ${index + 1}`} class="h-full w-full object-cover" />
-								<button type="button" aria-label={`Remove ${image.name ?? `attachment ${index + 1}`}`} class="absolute top-0.5 right-0.5 grid h-5 w-5 place-items-center rounded bg-black/80 text-white opacity-80 hover:opacity-100" onclick={() => (attachments = attachments.filter((_, candidate) => candidate !== index))}><X size={11} /></button>
+								<button type="button" aria-label={`Remove ${image.name ?? `attachment ${index + 1}`}`} class="absolute top-0.5 right-0.5 grid h-5 w-5 place-items-center rounded bg-primary text-on-primary opacity-80 hover:opacity-100" onclick={() => (attachments = attachments.filter((_, candidate) => candidate !== index))}><X size={11} /></button>
 							</div>
 						{/if}
 					{/each}
 				</div>
 			{/if}
 			{#if mcpPickerOpen}
-				<div class="absolute right-3 bottom-[56px] left-3 z-30 max-h-[220px] overflow-y-auto rounded-lg border border-[rgba(88,132,196,.45)] bg-[#0c131c] p-1.5 shadow-[0_18px_42px_rgba(0,0,0,.5)] narrow-520:bottom-[50px]">
+				<div class="absolute right-3 bottom-[56px] left-3 z-30 max-h-[220px] overflow-y-auto rounded-lg border border-info bg-panel p-1.5 shadow-sm narrow-520:bottom-[50px]">
 					{#if filteredMcpSuggestions.length === 0}
-						<p class="m-0 px-2 py-2 font-mono text-[10px] text-[#71808a]">No MCP match @{mcpQuery}</p>
+						<p class="m-0 px-2 py-2 font-sans text-[12px] text-muted">No MCP match @{mcpQuery}</p>
 					{:else}
 						{#each filteredMcpSuggestions as suggestion, index (`${suggestion.kind}-${suggestion.serverName}-${suggestion.remoteName ?? ""}`)}
 							<button
 								type="button"
-								class={`flex w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-2 text-left ${index === mcpSelectedIndex ? "ring-1 ring-white/70" : "opacity-80 hover:opacity-100"}`}
+								class={`flex w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-2 text-left ${index === mcpSelectedIndex ? "ring-1 ring-accent/70" : "opacity-80 hover:opacity-100"}`}
 								style={mentionStyle(suggestion.color ?? "base")}
 								onmousedown={(event) => event.preventDefault()}
 								onclick={() => insertMcpSuggestion(suggestion)}
 							>
 								<span class="mt-1 h-1.75 w-1.75 shrink-0 rounded-full" style={`background: ${MCP_COLOR_CSS[suggestion.color ?? "base"]}`}></span>
 								<span class="min-w-0 flex-1">
-									<strong class="block truncate font-mono text-[10px] font-semibold">{suggestion.kind === "server" ? suggestion.displayName : `${suggestion.displayName} / ${suggestion.remoteName}`}</strong>
-									<small class="mt-0.5 block truncate font-mono text-[8px] text-[#758ca8]">{suggestion.kind === "server" ? suggestion.serverName : suggestion.toolName}</small>
+									<strong class="block truncate font-sans text-[12px] font-semibold">{suggestion.kind === "server" ? suggestion.displayName : `${suggestion.displayName} / ${suggestion.remoteName}`}</strong>
+									<small class="mt-0.5 block truncate font-sans text-[11px] text-info">{suggestion.kind === "server" ? suggestion.serverName : suggestion.toolName}</small>
 								</span>
 							</button>
 						{/each}
@@ -739,12 +739,12 @@
 				{#if hasMcpMentions}
 					<div
 						aria-hidden="true"
-						class="pointer-events-none absolute inset-0 overflow-hidden pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] whitespace-pre-wrap break-words narrow-520:py-3 narrow-520:text-[12px]"
+						class="pointer-events-none absolute inset-0 overflow-hidden pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[14px] leading-[1.55] whitespace-pre-wrap break-words narrow-520:py-3 narrow-520:text-[13px]"
 					>
 						{#each mentionSegments as segment, index (`${index}-${segment.text}`)}
 							{#if segment.mention}
 								<span class="font-semibold" style={mentionStyle(segment.mention.color ?? "base")}>{segment.text}</span>
-							{:else}<span class="text-white">{segment.text}</span>{/if}
+							{:else}<span class="text-ink">{segment.text}</span>{/if}
 						{/each}
 					</div>
 				{/if}
@@ -754,7 +754,7 @@
 					rows="1"
 					placeholder="Describe a task for Klerm..."
 					aria-label="Task prompt"
-					class={`relative z-[1] block max-h-[min(150px,22dvh)] w-full resize-none border-0 bg-transparent pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[13px] leading-[1.55] outline-0 [scrollbar-width:thin] placeholder:text-[#56616a] narrow-520:max-h-[min(120px,20dvh)] narrow-520:py-3 narrow-520:text-[12px] short-650:max-h-[min(110px,20dvh)] short-500:max-h-[min(82px,18dvh)] ${hasMcpMentions ? "text-transparent caret-white" : "text-white"}`}
+					class={`relative z-[1] block max-h-[min(150px,22dvh)] w-full resize-none border-0 bg-transparent pt-3.5 pr-3 pb-3.5 pl-0 text-left text-[14px] leading-[1.55] outline-0 [scrollbar-width:thin] placeholder:text-dim narrow-520:max-h-[min(120px,20dvh)] narrow-520:py-3 narrow-520:text-[13px] short-650:max-h-[min(110px,20dvh)] short-500:max-h-[min(82px,18dvh)] ${hasMcpMentions ? "text-transparent caret-white" : "text-ink"}`}
 					onkeydown={handleKeydown}
 					oninput={handleInput}
 				></textarea>
@@ -763,7 +763,7 @@
 				type="button"
 				aria-label="Attach images"
 				disabled={sendDisabled || taskActive || attachments.length >= 8}
-				class="absolute bottom-2.5 left-[9px] grid h-[38px] w-[38px] cursor-pointer place-items-center rounded-lg border border-[#293239] bg-[#11171c] text-[#9ba5ac] hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 narrow-520:bottom-[7px] narrow-520:left-[7px] narrow-520:h-9 narrow-520:w-9"
+				class="absolute bottom-2.5 left-[9px] grid h-[38px] w-[38px] cursor-pointer place-items-center rounded-lg border border-line bg-panel text-muted hover:border-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 narrow-520:bottom-[7px] narrow-520:left-[7px] narrow-520:h-9 narrow-520:w-9"
 				onclick={() => fileEl?.click()}
 			>
 				<Plus size={17} stroke-width={1.7} />
@@ -775,23 +775,23 @@
 					aria-label="Configure worker roles"
 					aria-expanded={roleMenuOpen}
 					disabled={roleControlDisabled}
-					class="flex h-[38px] items-center gap-1 rounded-lg border border-[#293239] bg-[#11171c] px-2 font-mono text-[9px] text-[#9ba5ac] cursor-pointer hover:border-[#46515a] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
+					class="flex h-[38px] items-center gap-1 rounded-lg border border-line bg-panel px-2 font-sans text-[12px] text-muted cursor-pointer hover:border-line hover:text-ink disabled:cursor-not-allowed disabled:opacity-45 narrow-520:h-9 narrow-520:px-1.5"
 					onclick={() => (roleMenuOpen = !roleMenuOpen)}
 				>
 					{#if activeRole === "planner"}<ListTodo size={13} />{:else}<Hammer size={13} />{/if}
 					<ChevronDown size={11} />
 				</button>
 				{#if roleMenuOpen}
-					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-[#303a42] bg-[#10161b] p-2 shadow-[0_14px_34px_rgba(0,0,0,.42)]">
+					<div class="absolute right-0 bottom-[44px] z-20 w-[238px] rounded-lg border border-line bg-panel p-2 shadow-sm">
 							{#each (hasSecondKlermModel ? [["agent1", localRole], ["agent2", frontierRole]] : [["agent1", localRole]]) as [agent, role]}
 								<div class="grid grid-cols-[1fr_auto_auto] items-center gap-1 py-1">
-									<span class="px-1 font-mono text-[8px] uppercase tracking-[.12em] text-[#66727b]">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
+									<span class="px-1 font-sans text-[11px] uppercase tracking-[.12em] text-muted">{agent === "agent1" ? "Agent 1" : "Agent 2"}</span>
 									{#each ["planner", "builder"] as option}
-										<button type="button" class={`rounded-md border px-2 py-1.5 font-mono text-[8px] capitalize cursor-pointer ${role === option ? "border-[#58646d] bg-[#252d33] text-white" : "border-transparent text-[#7d8991] hover:bg-[#192127] hover:text-[#cbd2d6]"}`} onclick={() => { if (agent === "agent1") onlocalrolechange(option as WorkerRole); else onfrontierrolechange(option as WorkerRole); }}>{option === "planner" ? "Plan" : "Build"}</button>
+										<button type="button" class={`rounded-md border px-2 py-1.5 font-sans text-[11px] capitalize cursor-pointer ${role === option ? "border-line bg-raised text-ink" : "border-transparent text-muted hover:bg-raised hover:text-ink"}`} onclick={() => { if (agent === "agent1") onlocalrolechange(option as WorkerRole); else onfrontierrolechange(option as WorkerRole); }}>{option === "planner" ? "Plan" : "Build"}</button>
 									{/each}
 								</div>
 							{/each}
-							<p class="m-0 border-t border-[#273038] px-1 pt-2 text-[8px] leading-[1.45] text-[#59656e]">Plan is read-only. Build has full tools and asks before risky actions.</p>
+							<p class="m-0 border-t border-line px-1 pt-2 text-[11px] leading-[1.45] text-dim">Plan is read-only. Build has full tools and asks before risky actions.</p>
 					</div>
 				{/if}
 			</div>
@@ -801,7 +801,7 @@
 					<button
 						type="button"
 						aria-label="Stop task"
-						class="grid h-full w-full cursor-pointer place-items-center rounded-lg border border-[rgba(255,111,97,.35)] bg-[rgba(255,111,97,.08)] text-[#ff968c]"
+						class="grid h-full w-full cursor-pointer place-items-center rounded-lg border border-danger bg-danger-soft text-danger"
 						onclick={onstop}
 					>
 						<Square size={13} fill="currentColor" />
@@ -811,7 +811,7 @@
 						type="submit"
 						aria-label="Send task"
 						disabled={sendDisabled || (!draft.trim() && attachments.length === 0)}
-						class="grid h-full w-full cursor-pointer place-items-center rounded-lg border-0 bg-[#e1e6e9] text-[#0b0e10] enabled:hover:bg-white disabled:cursor-not-allowed disabled:bg-[#20272c] disabled:text-[#51585d]"
+						class="grid h-full w-full cursor-pointer place-items-center rounded-lg border-0 bg-primary text-on-primary enabled:hover:bg-primary disabled:cursor-not-allowed disabled:bg-raised disabled:text-dim"
 					>
 						<Send size={17} stroke-width={1.7} />
 					</button>
@@ -820,12 +820,12 @@
 		</div>
 	</form>
 	{#if externalHarnessSetup?.blockingReason}
-		<p class="mx-auto mt-1.5 w-[min(820px,100%)] px-1 font-mono text-[8px] text-[#d8bd8a]">
+		<p class="mx-auto mt-1.5 w-[min(820px,100%)] px-1 font-sans text-[11px] text-warning">
 			External routing setup: {externalHarnessSetup.blockingReason} Normal Klerm chat remains available.
 		</p>
 	{/if}
 	<div class="mx-auto mt-1.5 flex w-[min(820px,100%)] justify-end px-1">
-		<label class="flex items-center gap-2 font-mono text-[8px] text-[#66727b]">
+		<label class="flex items-center gap-2 font-sans text-[11px] text-muted">
 			<span>{externalMode || hasSecondKlermModel ? "All agents approval" : "Agent 1 approval"}</span>
 			<input
 				type="range"
@@ -835,13 +835,13 @@
 				value={approvalModes.indexOf(approvalMode)}
 				disabled={roleDisabled}
 				aria-label="All agents builder approval mode"
-				class="h-1 w-20 cursor-pointer accent-[#d6ff3f] disabled:cursor-not-allowed disabled:opacity-40"
+				class="h-1 w-20 cursor-pointer accent-warning disabled:cursor-not-allowed disabled:opacity-40"
 				oninput={(event) => {
 					const mode = approvalModes[Number(event.currentTarget.value)] ?? "risky";
 					onapprovalchange(mode);
 				}}
 			/>
-			<strong class="min-w-[66px] text-right font-medium text-[#aab4bb]">{approvalLabel}</strong>
+			<strong class="min-w-[66px] text-right font-medium text-ink">{approvalLabel}</strong>
 		</label>
 	</div>
 
@@ -899,7 +899,7 @@
 				<button
 					type="button"
 					disabled={routingDisabled}
-					class="mt-1 w-full rounded-md border border-[#4a3030] px-2 py-1 font-mono text-[8px] text-[#d9928b] hover:bg-[#241111] disabled:cursor-not-allowed disabled:opacity-40"
+					class="mt-1 w-full rounded-md border border-line px-2 py-1 font-sans text-[11px] text-danger hover:bg-panel disabled:cursor-not-allowed disabled:opacity-40"
 					onclick={() => onfrontierchange("")}
 				>
 					Remove Agent 2
@@ -910,10 +910,10 @@
 			<button
 				type="button"
 				disabled={frontierDisabled}
-				class="flex min-w-0 items-center justify-between rounded-lg border border-dashed border-[#40505a] bg-[#0a0f13] px-3 py-2 text-left text-[#b8c3c9] transition-colors hover:border-[#738895] hover:bg-[#0d1419] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+				class="flex min-w-0 items-center justify-between rounded-lg border border-dashed border-line bg-bg px-3 py-2 text-left text-ink transition-colors hover:border-line hover:bg-panel hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
 				onclick={() => (agent2PickerOpen = true)}
 			>
-				<span><strong class="block font-mono text-[8px] tracking-[.1em] text-[#66747d] uppercase">Agent 2</strong><span class="mt-1 block font-mono text-[10px]">Add model</span></span>
+				<span><strong class="block font-sans text-[11px] tracking-[.1em] text-muted uppercase">Agent 2</strong><span class="mt-1 block font-sans text-[12px]">Add model</span></span>
 				<Plus size={15} stroke-width={1.6} />
 			</button>
 		{/if}
@@ -922,10 +922,10 @@
 				type="button"
 				disabled={sendDisabled || !draft.trim() || attachments.length > 0}
 				title={attachments.length > 0 ? "Prompt Together does not support image attachments yet" : "Run bounded Planner, Builder, and Reviewer iterations"}
-				class="flex min-w-0 items-center justify-between rounded-lg border border-[#4b5b2b] bg-[#151b0f] px-3 py-2 text-left text-[#d6ff3f] hover:border-[#789537] hover:bg-[#1a2310] disabled:cursor-not-allowed disabled:opacity-40"
+				class="flex min-w-0 items-center justify-between rounded-lg border border-warning bg-panel px-3 py-2 text-left text-warning hover:border-warning hover:bg-panel disabled:cursor-not-allowed disabled:opacity-40"
 				onclick={submitTogether}
 			>
-				<span><strong class="block font-mono text-[8px] tracking-[.1em] text-[#7f9251] uppercase">Iterative mode</strong><span class="mt-1 block font-mono text-[10px]">Prompt Together</span></span>
+				<span><strong class="block font-sans text-[11px] tracking-[.1em] text-warning uppercase">Iterative mode</strong><span class="mt-1 block font-sans text-[12px]">Prompt Together</span></span>
 				<Users size={15} stroke-width={1.6} />
 			</button>
 		{:else if externalMode || hasSecondKlermModel}
@@ -950,21 +950,21 @@
 				onclick={() => onworktogetherchange(!workTogetherEnabled)}
 			>
 				<span>
-					<strong class="block font-mono text-[8px] tracking-[.1em] text-[#59636b] uppercase">Harness mode</strong>
-					<span class="mt-1 block font-mono text-[10px] text-[#b7c0c6]">Work together</span>
+					<strong class="block font-sans text-[11px] tracking-[.1em] text-dim uppercase">Harness mode</strong>
+					<span class="mt-1 block font-sans text-[12px] text-ink">Work together</span>
 				</span>
-				<span class={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${workTogetherEnabled ? "bg-[#607f20]" : "bg-[#303840]"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${workTogetherEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
+				<span class={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${workTogetherEnabled ? "bg-warning-soft" : "bg-raised"}`} aria-hidden="true"><span class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-primary transition-transform ${workTogetherEnabled ? "translate-x-3" : "translate-x-0"}`}></span></span>
 			</button>
 		{/if}
 	</div>
 
 	<div
-		class={`mx-auto flex w-[min(820px,100%)] justify-between px-[3px] pt-2 font-mono text-[8px] text-dim ${showMeta ? "" : "invisible"}`}
+		class={`mx-auto flex w-[min(820px,100%)] justify-between px-[3px] pt-2 font-sans text-[11px] text-dim ${showMeta ? "" : "invisible"}`}
 	>
 		<span class="narrow-720:hidden">{shortcuts?.label("compose.send") || "Send shortcut disabled"} to send, {shortcuts?.label("compose.newline") || "New-line shortcut disabled"} for a new line</span>
 		<span aria-live="polite" class="flex items-center gap-1.5">
 			{#if taskActive}
-				<span class="h-2 w-2 animate-spin rounded-full border border-[#4e5962] border-t-[#d7dde1]"></span>
+				<span class="h-2 w-2 animate-spin rounded-full border border-line border-t-line"></span>
 			{/if}
 			{taskStateText}
 		</span>

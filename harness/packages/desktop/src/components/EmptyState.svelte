@@ -20,47 +20,47 @@
 		{ icon: "code", text: "Create a simple website in this folder" },
 		{ icon: "search", text: "Inspect this workspace and summarize folder sizes" },
 		{ icon: "risk", text: "Review this repo and list the riskiest files to change" },
-		{ icon: "terminal", text: "Scaffold a todo CLI with your agent team" },
+		{ icon: "terminal", text: "Create a small command-line tool in this folder" },
 	];
 
 	const dotClass = $derived(
 		runtimeStatus.state === "online"
-			? "bg-accent shadow-[0_0_9px_rgba(214,255,63,.45)]"
+			? "bg-success"
 			: runtimeStatus.state === "starting"
-				? "animate-pulse bg-[#d6a63f]"
+				? "animate-pulse bg-warning"
 				: "bg-danger",
 	);
 </script>
 
 <div
-	class="flex min-h-full w-full flex-col items-center justify-end pt-7 text-center short-500:justify-center short-500:pt-0"
+	class="mx-auto flex min-h-full w-full max-w-[720px] flex-col items-start justify-end px-2 pt-8 pb-2 text-left short-500:justify-center short-500:pt-0"
 >
 	<img
 		src="/K_Klerm_no_background.png"
 		alt="Klerm"
-		class="mb-6 h-[78px] w-[78px] object-contain short-650:mb-3.5 short-650:h-[54px] short-650:w-[54px] short-500:hidden"
+		class="mb-5 h-10 w-10 object-contain short-650:mb-3 short-500:hidden"
 	/>
-	<p class="mb-3.5 font-mono text-[9px] tracking-[.2em] text-accent short-500:mb-[9px] short-500:text-[7px]">
-		MULTI-AGENT CODING ORCHESTRATOR
+	<p class="mb-2 section-label short-500:hidden">
+		Your workspace
 	</p>
 	<h1
-		class="m-0 text-[clamp(32px,4vw,52px)] leading-[1.05] tracking-[-.045em] narrow-900:text-[clamp(30px,5vw,42px)] narrow-520:text-[28px] short-650:text-[clamp(27px,4vw,38px)] short-500:text-[25px]"
+		class="m-0 max-w-[600px] font-display text-[clamp(28px,3vw,38px)] leading-[1.2] tracking-[-.025em] narrow-520:text-[26px] short-500:text-[24px]"
 	>
 		{headline}
 	</h1>
 	<p
-		class="mx-auto mt-[18px] mb-[26px] max-w-[510px] text-[13px] leading-[1.7] text-muted narrow-520:my-3 narrow-520:text-[11px] short-650:mt-2.5 short-650:mb-4 short-650:leading-[1.45] short-500:hidden"
+		class="mt-3 mb-6 max-w-[560px] text-[14px] leading-[1.65] text-muted narrow-520:my-3 short-650:mb-4 short-500:hidden"
 	>
 		{EMPTY_SUBTITLE}
 	</p>
-	<div class="mb-4 grid w-[min(560px,100%)] grid-cols-2 gap-2 text-left narrow-520:grid-cols-1 short-500:hidden">
+	<div class="mb-5 grid w-full grid-cols-2 gap-x-6 gap-y-1 text-left narrow-520:grid-cols-1 short-500:hidden">
 		{#each suggestions as suggestion}
 			<button
 				type="button"
-				class="flex items-start gap-2 rounded-lg border border-line bg-[rgba(14,19,24,.62)] px-3 py-2.5 text-left text-[10px] leading-[1.4] text-[#8c979f] cursor-pointer transition-colors hover:border-[#3b464e] hover:bg-[#11171c] hover:text-[#d7dde1]"
+				class="flex min-h-11 items-center gap-3 rounded-md px-2 py-2 text-left text-[13px] leading-[1.4] text-muted transition-colors hover:bg-raised hover:text-ink"
 				onclick={() => onprompt(suggestion.text)}
 			>
-				<span class="mt-0.5 shrink-0 text-[#78858d]">
+				<span class="mt-0.5 shrink-0 text-muted">
 					{#if suggestion.icon === "code"}
 						<Code2 size={12} />
 					{:else if suggestion.icon === "search"}
@@ -76,16 +76,16 @@
 		{/each}
 	</div>
 	<div
-		class="grid w-[min(470px,100%)] grid-cols-[8px_1fr_auto] items-center gap-3 rounded-lg border border-line bg-[rgba(14,19,24,.8)] px-[15px] py-3 text-left short-650:py-[9px] short-500:mt-3.5"
+		class="grid w-full grid-cols-[8px_1fr_auto] items-center gap-3 border-t border-line-soft pt-4 pb-1 text-left short-500:mt-3"
 	>
 		<span class={`h-[7px] w-[7px] shrink-0 rounded-full ${dotClass}`}></span>
 		<div>
-			<strong class="block text-[10px] text-[#bac3c9]">{runtimeStatus.title}</strong>
-			<small class="mt-[3px] block font-mono text-[8px]/[1.3] text-[#59656e]">{runtimeStatus.detail}</small>
+			<strong class="block text-[12px] text-ink">{runtimeStatus.title}</strong>
+			<small class="mt-[3px] block font-sans text-[11px]/[1.3] text-dim">{runtimeStatus.detail}</small>
 		</div>
 		<button
 			type="button"
-			class="border-0 bg-transparent font-mono text-[9px] uppercase text-[#69757e] cursor-pointer hover:text-accent"
+			class="border-0 bg-transparent font-sans text-[12px] uppercase text-muted cursor-pointer hover:text-accent"
 			onclick={onrefresh}
 		>
 			Refresh
