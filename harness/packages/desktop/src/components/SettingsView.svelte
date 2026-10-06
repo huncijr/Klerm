@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { BookOpen, Check, Eye, Maximize2, Plus, Shrink, Trash2 } from "@lucide/svelte";
 	import { slide } from "svelte/transition";
-	import { untrack } from "svelte";
+	import { untrack, onMount } from "svelte";
+	import type { CliBinding } from "../../../coding-agent/src/klerm/cli-keybinding-store.ts";
 	import { MCP_COLOR_CSS, MCP_COLORS, mcpDisplayName, mcpServerIdFromName } from "../lib/mcp-mentions.ts";
 	import {
 		addCodingHarnessSlot,
@@ -36,7 +37,7 @@
 		shouldReplaceSettingsDrafts,
 		type DesktopSettingsSaveOperation,
 	} from "../lib/helpers.ts";
-	import { normalizeShortcut, shortcutConflicts } from "../lib/shortcuts.ts";
+	import { normalizeShortcut, shortcutConflicts, shortcutsEqual, useDesktopShortcuts } from "../lib/shortcuts.ts";
 
 	type SettingsTab = "general" | "agents" | "models" | "shortcuts" | "mcp" | "memory";
 
@@ -74,6 +75,11 @@
 		onrefreshmcp,
 		onreloadmcp,
 		onaddmcpserver,
+		onshortcuts,
+		onclikeybindings,
+		focusTab,
+		focusTabRequest = 0,
+		ondirty,
 	}: {
 		settings: DesktopSettings;
 		personalAgents: PersonalBot[];
@@ -108,12 +114,26 @@
 		onrefreshmcp: () => void;
 		onreloadmcp: () => void;
 		onaddmcpserver: (server: McpServerUpdate) => Promise<boolean>;
+		onshortcuts: (shortcuts: DesktopShortcut[]) => Promise<boolean>;
+		onclikeybindings: (overrides: Record<string, string[]>) => Promise<boolean>;
+		focusTab?: SettingsTab;
+		focusTabRequest?: number;
+		ondirty?: (dirty: boolean) => void;
 	} = $props();
 
 	let tab = $state<SettingsTab>("general");
 	let draftAppearance = $state<DesktopAppearance>("dark");
 	let draftMaxDelegationCycles = $state(0);
 	let draftShortcuts = $state<DesktopShortcut[]>([]);
+	let draftCliBindings = $state<CliBinding[]>([]);
+	let shortcutSearch = $state("");
+	let bindingTab = $state<"desktop" | "cli">("desktop");
+	const shortcuts = useDesktopShortcuts();
+	$effect(() => { focusTabRequest; if (focusTab) tab = focusTab; });
+	onMount(() => {
+		const remove = [shortcuts?.register("save", saveCurrentSettingsContext, () => !savingChanges && !defaultSharedMemorySaving && capturingIndex === undefined, 100), shortcuts?.register("close", () => { if (capturingIndex !== undefined) capturingIndex = undefined; else if (customOpen) customOpen = false; else if (addingMcp) discardMcp(); else if (dirty) confirmDiscardSettings = true; else onclose(); }, undefined, 100)];
+		return () => { for (const cleanup of remove) cleanup?.(); };
+	});
 	let draftHarnessSlots = $state<CodingHarnessSetup["slots"]>({
 		externalHarnessesEnabled: false,
 		agents: [{ id: "agent1", kind: "klerm", enabled: true, role: "builder", effort: "off", tools: [] }],
@@ -410,6 +430,7 @@
 
 	function captureShortcut(index: number, event: KeyboardEvent): void {
 		event.preventDefault();
+		event.stopImmediatePropagation();
 		const keys = normalizeShortcut(event);
 		if (!keys) return;
 		draftShortcuts = draftShortcuts.map((item, itemIndex) => (itemIndex === index ? { ...item, keys } : item));
@@ -421,8 +442,8 @@
 		const onKey = (event: KeyboardEvent) => {
 			if (capturingIndex !== undefined) captureShortcut(capturingIndex, event);
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
 	});
 
 	$effect(() => {
@@ -455,15 +476,16 @@
 		draftAppearance !== settings.appearance ||
 			draftMaxDelegationCycles !== (klermConfig?.maxDelegationCycles ?? 0) ||
 			harnessDirty ||
-			draftShortcuts !== settings.shortcuts,
+			!shortcutsEqual(draftShortcuts, settings.shortcuts) || JSON.stringify(draftCliBindings) !== JSON.stringify(settings.cliKeybindings),
 	);
+	$effect(() => { ondirty?.(dirty); });
 
 	$effect(() => {
 		const nextAppearance = settings.appearance;
 		const nextCycles = klermConfig?.maxDelegationCycles ?? 0;
 		const nextShortcuts = settings.shortcuts;
 		const nextHarnessSlots = codingHarnessSetup?.slots;
-		const source = `${nextAppearance}\0${nextCycles}\0${nextShortcuts.map((item) => item.keys).join(",")}\0${nextHarnessSlots?.externalHarnessesEnabled ?? false}\0${nextHarnessSlots?.workTogetherEnabled ?? false}\0${nextHarnessSlots?.agents.map((agent) => `${agent.id}:${agent.kind}:${agent.enabled}:${agent.model ?? ""}`).join(",")}`;
+		const source = `${nextAppearance}\0${nextCycles}\0${nextShortcuts.map((item) => item.keys).join(",")}\0${JSON.stringify(settings.cliKeybindings)}\0${nextHarnessSlots?.externalHarnessesEnabled ?? false}\0${nextHarnessSlots?.workTogetherEnabled ?? false}\0${nextHarnessSlots?.agents.map((agent) => `${agent.id}:${agent.kind}:${agent.enabled}:${agent.model ?? ""}`).join(",")}`;
 		const replace = untrack(() =>
 			shouldReplaceSettingsDrafts({
 				appliedSource: appliedSettingsSource,
@@ -479,6 +501,7 @@
 			draftAppearance = nextAppearance;
 			draftMaxDelegationCycles = nextCycles;
 			draftShortcuts = nextShortcuts;
+			draftCliBindings = settings.cliKeybindings;
 			if (nextHarnessSlots) draftHarnessSlots = nextHarnessSlots;
 			draftsInitialized = true;
 		});
@@ -486,11 +509,20 @@
 
 	async function saveChanges(): Promise<void> {
 		if (savingChanges) return;
+		if (conflicts.size) { saveError = "Resolve conflicting desktop shortcuts before saving."; return; }
 		savingChanges = true;
 		saveNotice = "";
 		saveError = "";
 		try {
 			const operations: DesktopSettingsSaveOperation[] = [];
+			if (!shortcutsEqual(draftShortcuts, settings.shortcuts)) {
+				const rows = $state.snapshot(draftShortcuts);
+				operations.push({ error: "Could not save desktop shortcuts.", save: () => onshortcuts(rows) });
+			}
+			if (JSON.stringify(draftCliBindings) !== JSON.stringify(settings.cliKeybindings)) {
+				const overrides = Object.fromEntries(draftCliBindings.map((row) => [row.id, row.keys.map((key) => key.trim()).filter(Boolean)]));
+				operations.push({ error: "Could not save CLI keybindings.", save: () => onclikeybindings(overrides) });
+			}
 			const appearance = draftAppearance;
 			const maxDelegationCycles = draftMaxDelegationCycles;
 			if (harnessDirty) {
@@ -520,11 +552,26 @@
 			draftAppearance = settings.appearance;
 			draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
 			draftShortcuts = settings.shortcuts;
+			draftCliBindings = settings.cliKeybindings;
 			if (codingHarnessSetup) draftHarnessSlots = codingHarnessSetup.slots;
 			saveNotice = "Changes saved";
 		} finally {
 			savingChanges = false;
 		}
+	}
+	async function saveCurrentSettingsContext(): Promise<void> {
+		if (customOpen) { await saveCustomModel(); return; }
+		if (addingMcp) { await saveMcp(); return; }
+		const providerForm = document.activeElement?.closest<HTMLFormElement>("form[data-provider-save]");
+		if (providerForm?.dataset.providerSave) { await saveConnect(providerForm.dataset.providerSave); return; }
+		if (tab === "memory" && addMemoryOpen && sharedMemoryPresetName.trim()) { await onsavesharedmemory(sharedMemoryPresetName, sharedMemoryPresetText); return; }
+		if (tab === "memory" && defaultSharedMemoryDraft !== settings.profiles.defaultSharedMemory) {
+			defaultSharedMemorySaving = true;
+			try { await onsavedefaultsharedmemory(defaultSharedMemoryDraft); }
+			finally { defaultSharedMemorySaving = false; }
+			return;
+		}
+		await saveChanges();
 	}
 
 	async function toggleExternalHarnesses(): Promise<void> {
@@ -583,6 +630,7 @@
 		draftAppearance = settings.appearance;
 		draftMaxDelegationCycles = klermConfig?.maxDelegationCycles ?? 0;
 		draftShortcuts = settings.shortcuts.map((item) => ({ ...item }));
+		draftCliBindings = $state.snapshot(settings.cliKeybindings);
 		if (codingHarnessSetup) draftHarnessSlots = structuredClone(codingHarnessSetup.slots);
 		saveError = "";
 		saveNotice = "";
@@ -891,31 +939,37 @@
 				</div>
 			</div>
 		{:else if tab === "shortcuts"}
-			<div class="mx-auto w-[min(720px,100%)]">
-				<p class="m-0 mb-3 font-mono text-[9px] text-[#66747d]">Click a card to change the chord. Conflicts turn yellow. Bindings are not live yet.</p>
+			<div class="mx-auto w-[min(860px,100%)]" data-shortcut-recorder={capturingIndex !== undefined ? "true" : "false"}>
+				<div class="mb-3 flex flex-wrap gap-2"><button type="button" class="rounded border border-[#34414a] px-3 py-2 text-[10px]" onclick={() => { bindingTab = "desktop"; capturingIndex = undefined; }}>Desktop</button><button type="button" class="rounded border border-[#34414a] px-3 py-2 text-[10px]" onclick={() => { bindingTab = "cli"; capturingIndex = undefined; }}>CLI / TUI harness</button><input class="min-w-0 flex-1 rounded border border-[#34414a] bg-[#0a0f13] px-3 py-2 text-[10px]" aria-label="Search shortcuts" placeholder="Search action, group or keys" bind:value={shortcutSearch} /></div>
+				<p class="m-0 mb-3 font-mono text-[9px] text-[#8497a6]">Desktop: click Record, press a chord, then Save changes. Ctrl/Cmd works on Windows/Linux and macOS. Conflicts are rejected; Clear disables an action. CLI bindings use their own native keybindings.json and apply on CLI restart/reload.</p>
+				{#if bindingTab === "desktop"}
 				<div class="grid grid-cols-2 gap-3">
 					{#each draftShortcuts as shortcut, index}
-						<button
-							type="button"
+						{#if !shortcutSearch || `${shortcut.action} ${shortcut.group} ${shortcut.keys}`.toLowerCase().includes(shortcutSearch.toLowerCase())}
+						<div
 							class={`rounded-xl border p-4 text-left ${
-								conflicts.has(shortcut.keys.trim().toLowerCase())
+								conflicts.has(shortcut.id)
 									? "border-[#d6b16e] bg-[#1a160c]"
 									: capturingIndex === index
 										? "border-[#d7e7ff] bg-[#10161b]"
 										: "border-[#232c34] bg-[#0a0f13]"
 							}`}
-							onkeydown={(event) => {
-								if (capturingIndex === index) captureShortcut(index, event);
-							}}
-							onclick={() => (capturingIndex = index)}
 						>
+							<p class="mb-1 text-[8px] uppercase text-[#657b8c]">{shortcut.group}</p>
 							<strong class="block text-[12px] text-white">{shortcut.action}</strong>
-							<code class={`mt-2 block font-mono text-[10px] ${conflicts.has(shortcut.keys.trim().toLowerCase()) ? "text-[#d6b16e]" : "text-[#9cc0f2]"}`}>
-								{capturingIndex === index ? "Press a shortcut" : shortcut.keys}
+							<code class={`mt-2 block font-mono text-[10px] ${conflicts.has(shortcut.id) ? "text-[#d6b16e]" : "text-[#9cc0f2]"}`}>
+								{capturingIndex === index ? "Press a shortcut" : shortcut.keys || "Disabled"}
 							</code>
-						</button>
+							<p class="my-2 text-[9px] text-[#738b9c]">{shortcut.description}</p>
+							<div class="flex gap-2 text-[9px]"><button type="button" class="rounded border border-[#34414a] px-2 py-1" onclick={() => (capturingIndex = index)}>Record</button><button type="button" class="rounded border border-[#34414a] px-2 py-1" onclick={() => { draftShortcuts = draftShortcuts.map((row, position) => position === index ? { ...row, keys: "" } : row); capturingIndex = undefined; }}>Clear</button><button type="button" class="rounded border border-[#34414a] px-2 py-1" onclick={() => { draftShortcuts = draftShortcuts.map((row, position) => position === index ? { ...row, keys: row.defaultKeys } : row); capturingIndex = undefined; }}>Reset</button>{#if capturingIndex === index}<button type="button" onclick={() => (capturingIndex = undefined)}>Cancel</button>{/if}</div>
+						</div>
+						{/if}
 					{/each}
 				</div>
+				{:else}
+				<p class="mb-3 text-[9px] text-[#8497a6]">Native CLI actions preserve existing editor/navigation semantics. One key chord per line, e.g. ctrl+alt+n. Empty disables. Reused CLI chords can be valid in different TUI contexts.</p>
+				<div class="space-y-2">{#each draftCliBindings as row, index (row.id)}{#if !shortcutSearch || `${row.id} ${row.description} ${row.keys.join(" ")}`.toLowerCase().includes(shortcutSearch.toLowerCase())}<div class="grid grid-cols-[1fr_210px] gap-3 rounded-lg border border-[#26343d] p-3"><div><strong class="block text-[10px]">{row.description}</strong><code class="text-[8px] text-[#657d8e]">{row.id}</code><p class="text-[9px] text-[#657d8e]">Default: {row.defaultKeys.join(" / ") || "Unbound"}</p></div><div><textarea aria-label={`CLI keys for ${row.id}`} class="w-full rounded border border-[#34414a] bg-[#0a0f13] p-2 text-[10px]" rows="2" value={row.keys.join("\n")} oninput={(event) => { const keys = event.currentTarget.value.split("\n"); draftCliBindings = draftCliBindings.map((item, position) => position === index ? { ...item, keys } : item); }}></textarea><button type="button" class="text-[9px] text-[#9cc0f2]" onclick={() => (draftCliBindings = draftCliBindings.map((item, position) => position === index ? { ...item, keys: [...item.defaultKeys] } : item))}>Reset to defaults</button></div></div>{/if}{/each}</div>
+				{/if}
 			</div>
 		{:else if tab === "mcp"}
 			<div class="mx-auto w-[min(720px,100%)] space-y-3">
@@ -1118,7 +1172,7 @@
 									<button type="button" class="h-7 w-full rounded-md border border-[#34414a] bg-transparent font-mono text-[9px] text-[#8b969e]" onclick={oncanceloauth}>Cancel login</button>
 								</div>
 							{:else}
-							<form class="mt-2 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(member.id); }}>
+							<form data-provider-save={member.id} class="mt-2 space-y-2" onsubmit={(event) => { event.preventDefault(); void saveConnect(member.id); }}>
 								<input value={form.key} oninput={(event) => setForm(member.id, { key: (event.currentTarget as HTMLInputElement).value })} type="password" placeholder={member.configured ? "new API key (optional)" : "API key"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
 								<input value={form.url} oninput={(event) => setForm(member.id, { url: (event.currentTarget as HTMLInputElement).value })} placeholder={member.defaultEndpoint ?? "endpoint override (optional)"} autocomplete="off" class="h-8 w-full rounded-md border border-[#2d3740] bg-[#000] px-2 font-mono text-[10px] text-white outline-0" />
 								{#if form.error}<p class="m-0 text-[9px] text-[#f3a49c]">{form.error}</p>{/if}

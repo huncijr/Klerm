@@ -20,6 +20,7 @@ import type {
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { BrowserAvailability } from "../../klerm/browser-agent.ts";
 import type { BrowserRunPublicState } from "../../klerm/browser-run-coordinator.ts";
+import type { CliBinding } from "../../klerm/cli-keybinding-store.ts";
 import type {
 	CodingHarnessDiscoveryResult,
 	CodingHarnessKind,
@@ -34,6 +35,7 @@ import type {
 	KlermWorkerRole,
 } from "../../klerm/config.ts";
 import type { CustomModelEntry } from "../../klerm/custom-models.ts";
+import type { DesktopBinding, DesktopKeybindingOverrides } from "../../klerm/desktop-keybindings.ts";
 import type { KanbanRegistry } from "../../klerm/kanban.ts";
 import type { LocalRuntimeDiscoveryResult } from "../../klerm/local-runtime-discovery.ts";
 import type { McpErrorKind, McpPromptMention, McpServerState, McpToolCapability } from "../../klerm/mcp/runtime.ts";
@@ -200,7 +202,8 @@ export interface RpcDesktopSettings {
 	cwd: string;
 	profiles: KlermProfileState;
 	customModels: CustomModelEntry[];
-	shortcuts: Array<{ action: string; keys: string }>;
+	shortcuts: DesktopBinding[];
+	cliKeybindings: CliBinding[];
 }
 
 export interface RpcPersonalBotProfileDraft {
@@ -377,6 +380,8 @@ export type RpcCommand =
 	| { id?: string; type: "reload_mcp_servers" }
 	| { id?: string; type: "get_desktop_settings" }
 	| { id?: string; type: "set_desktop_appearance"; appearance: DesktopAppearance }
+	| { id?: string; type: "set_desktop_keybindings"; overrides: DesktopKeybindingOverrides }
+	| { id?: string; type: "set_cli_keybindings"; overrides: Record<string, string[]> }
 	| { id?: string; type: "upsert_klerm_profile"; profile: KlermProfile }
 	| { id?: string; type: "delete_klerm_profile"; profileId: string }
 	| { id?: string; type: "assign_klerm_profile"; lane: KlermWorkerLane; profileId?: string | null }
@@ -755,6 +760,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "reload_mcp_servers"; success: true; data: RpcMcpStatus }
 	| { id?: string; type: "response"; command: "get_desktop_settings"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "set_desktop_appearance"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "set_desktop_keybindings"; success: true; data: RpcDesktopSettings }
+	| { id?: string; type: "response"; command: "set_cli_keybindings"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "upsert_klerm_profile"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "delete_klerm_profile"; success: true; data: RpcDesktopSettings }
 	| { id?: string; type: "response"; command: "assign_klerm_profile"; success: true; data: RpcDesktopSettings }

@@ -12,7 +12,8 @@
 	import MarkdownLite from "./MarkdownLite.svelte";
 	import ModelSelect from "./ModelSelect.svelte";
 	import PersonalBrowserPanel from "./PersonalBrowserPanel.svelte";
-	import { tick } from "svelte";
+	import { tick, onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 
 	let {
 		bots,
@@ -61,6 +62,11 @@
 	} = $props();
 
 	let selectedId = $state("");
+	const shortcuts = useDesktopShortcuts();
+	onMount(() => {
+		const remove = [shortcuts?.register("save", () => profileEditing ? saveProfile() : save(), () => !busy && (creating || configuring || profileEditing)), shortcuts?.register("close", () => { if (configuring || creating || profileEditing) closeConfiguration(); else onclose(); }), shortcuts?.register("newItem", beginCreate, () => !busy && !configuring), shortcuts?.register("run", send, () => !conversationBusy && !creating && !configuring), shortcuts?.register("stop", () => selected ? onabort(selected.id) : undefined, () => conversationBusy), shortcuts?.register("refresh", () => { if (selected) onselect(selected.id); }), shortcuts?.register("compose.focus", () => document.querySelector<HTMLTextAreaElement>('[data-personal-composer="true"]')?.focus())];
+		return () => { for (const cleanup of remove) cleanup?.(); };
+	});
 	let creating = $state(false);
 	let configuring = $state(false);
 	let settingsSection = $state<"ai" | "model" | "reasoning">("ai");
@@ -417,11 +423,12 @@
 				{/if}
 				<div class="mx-auto flex max-w-3xl flex-col gap-1.5 rounded-xl border border-[#2a3439] bg-[#11171a] p-2 focus-within:border-[#4e6964]">
 					<textarea
+						data-personal-composer="true"
 						class="max-h-32 min-h-10 w-full resize-none border-0 bg-transparent px-2 py-2 text-[12px] text-[#e5e9ea] outline-none placeholder:text-[#4f5a60]"
 						placeholder={`Message ${selected.name}`}
 						bind:value={chatDraft}
 						disabled={!isRunnable(selected) || conversationBusy}
-						onkeydown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+						onkeydown={(event) => { if (!event.isComposing && (shortcuts?.matches(event, "compose.send") || shortcuts?.matches(event, "run"))) { event.preventDefault(); void send(); } }}
 					></textarea>
 					<div class="flex min-w-0 items-center justify-end gap-1.5">
 						<div class="w-[min(210px,50%)] min-w-0" title="Model"><ModelSelect label="" value={model} options={models.map((value: string) => ({ value, label: value }))} disabled={busy || klermHarness?.available !== true || conversationBusy} placeholder="Model" onchange={(value: string) => { model = value; void save(); }} /></div>

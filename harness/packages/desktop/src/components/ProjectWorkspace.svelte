@@ -8,6 +8,8 @@
 	} from "../lib/model.ts";
 	import { codingHarnessDisplayName } from "../lib/coding-harnesses.ts";
 	import SessionRow from "./SessionRow.svelte";
+	import { onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	type ProjectPromptAgent = Pick<
 		CodingHarnessSetup["runnableAgents"][number],
 		"agentId" | "harness" | "model" | "effort"
@@ -49,6 +51,11 @@
 
 	const efforts: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 	let question = $state("");
+	const shortcuts = useDesktopShortcuts();
+	onMount(() => {
+		const remove = [shortcuts?.register("run", submit, () => !busy), shortcuts?.register("refresh", onrefresh, () => !busy), shortcuts?.register("close", onclose), shortcuts?.register("save", () => {}, () => false)];
+		return () => { for (const cleanup of remove) cleanup?.(); };
+	});
 	let selectedAgentId = $state("");
 	let effort = $state<ThinkingLevel>("medium");
 

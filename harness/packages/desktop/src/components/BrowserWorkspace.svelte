@@ -23,6 +23,7 @@
 		Sparkles,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import { mayAutoResumeBrowser, visibleBrowserActivity } from "../lib/browser-presentation.ts";
 	import type { BrowserActivityEvent, BrowserAvailability, BrowserRunState, PersonalBot, ThinkingLevel } from "../lib/model.ts";
 
@@ -43,6 +44,7 @@
 		ontakeover,
 		onresume,
 		onclose,
+		onnew,
 	}: {
 		sessionId: string;
 		personalAgents: PersonalBot[];
@@ -72,12 +74,19 @@
 		ontakeover: (reason?: string) => Promise<void>;
 		onresume: () => Promise<void>;
 		onclose: () => void;
+		onnew?: () => Promise<void>;
 	} = $props();
 
 	type ChatPlacement = "left" | "center" | "right";
 	type BrowserMessage = { id: number; role: "user" | "assistant"; text: string; tone?: "normal" | "error" };
 
 	let selectedModel = $state("");
+	const shortcuts = useDesktopShortcuts();
+	onMount(() => {
+		const removeNew = shortcuts?.register("newItem", () => onnew?.(), () => !running && !commandBusy);
+		const remove = [shortcuts?.register("run", submit, () => !running && !commandBusy), shortcuts?.register("stop", stop, () => running && !commandBusy), shortcuts?.register("close", onclose), shortcuts?.register("refresh", onrefresh, () => !running && !commandBusy), shortcuts?.register("browser.continue", () => resume(), () => running && run?.control === "human" && !commandBusy), shortcuts?.register("browser.takeover", () => takeover(), () => running && run?.control === "ai" && !commandBusy), shortcuts?.register("compose.focus", () => document.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Ask the browser"]')?.focus()), shortcuts?.register("save", () => {}, () => false)];
+		return () => { removeNew?.(); for (const cleanup of remove) cleanup?.(); };
+	});
 	let selectedPersonalBotId = $state("");
 	let selectedReasoning = $state<ThinkingLevel>("off");
 	let probeRetry = $state(0);
@@ -511,7 +520,7 @@
 	}
 
 	function handlePromptKeydown(event: KeyboardEvent): void {
-		if (event.key === "Enter" && !event.shiftKey) {
+		if (!event.isComposing && (shortcuts?.matches(event, "compose.send") || shortcuts?.matches(event, "run"))) {
 			event.preventDefault();
 			void submit();
 		}

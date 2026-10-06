@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, Eye, EyeOff, Hammer, ListTodo, Plus, Send, Square, Users, X } from "@lucide/svelte";
 	import { onMount, tick } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import {
 		filterMcpSuggestions,
 		findActiveMention,
@@ -186,6 +187,7 @@
 	];
 
 	let promptEl: HTMLTextAreaElement | undefined = $state();
+	const shortcuts = useDesktopShortcuts();
 	let fileEl: HTMLInputElement | undefined = $state();
 	let historyIndex = $state(-1);
 	let draftBeforeHistory = $state("");
@@ -284,12 +286,7 @@
 	});
 
 	onMount(() => {
-		const closeRoleMenu = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || (!roleMenuOpen && !pinnedAgentId)) return;
-			event.preventDefault();
-			roleMenuOpen = false;
-			pinnedAgentId = "";
-		};
+		const removeShortcuts = [shortcuts?.register("run", submit, () => !sendDisabled && !taskActive), shortcuts?.register("compose.focus", () => promptEl?.focus()), shortcuts?.register("close", () => { roleMenuOpen = false; pinnedAgentId = ""; mcpPickerOpen = false; }, undefined, 30, () => roleMenuOpen || Boolean(pinnedAgentId) || mcpPickerOpen)];
 		const closeRoleMenuOutside = (event: PointerEvent) => {
 			if (!roleMenuOpen || !(event.target instanceof Node) || roleMenuRoot?.contains(event.target)) return;
 			roleMenuOpen = false;
@@ -299,12 +296,11 @@
 			pinnedAgentId = "";
 		};
 		window.addEventListener("resize", resizePrompt);
-		window.addEventListener("keydown", closeRoleMenu);
 		document.addEventListener("pointerdown", closeRoleMenuOutside);
 		document.addEventListener("pointerdown", closeAgentMenuOutside);
 		return () => {
 			window.removeEventListener("resize", resizePrompt);
-			window.removeEventListener("keydown", closeRoleMenu);
+			for (const cleanup of removeShortcuts) cleanup?.();
 			document.removeEventListener("pointerdown", closeRoleMenuOutside);
 			document.removeEventListener("pointerdown", closeAgentMenuOutside);
 		};
@@ -442,6 +438,9 @@
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.isComposing) return;
+		if (shortcuts?.matches(event, "run")) { event.preventDefault(); submit(); return; }
+		if (shortcuts?.matches(event, "compose.send") && (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) { event.preventDefault(); submit(); return; }
+		if (shortcuts?.matches(event, "compose.newline")) { event.preventDefault(); if (mcpPickerOpen) mcpPickerOpen = false; insertNewline(); return; }
 		if (event.key === "Enter" && (event.shiftKey || event.ctrlKey || event.metaKey)) {
 			event.preventDefault();
 			if (mcpPickerOpen) mcpPickerOpen = false;
@@ -482,7 +481,7 @@
 				return;
 			}
 		}
-		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && draft.trim() === "/mode" && !externalMode) {
+		if (shortcuts?.matches(event, "compose.send") && draft.trim() === "/mode" && !externalMode) {
 			event.preventDefault();
 			draft = "";
 			roleMenuOpen = true;
@@ -503,7 +502,7 @@
 			navigateHistory(1);
 			return;
 		}
-		if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+		if (shortcuts?.matches(event, "compose.send")) {
 			event.preventDefault();
 			submit();
 		}
@@ -962,7 +961,7 @@
 	<div
 		class={`mx-auto flex w-[min(820px,100%)] justify-between px-[3px] pt-2 font-mono text-[8px] text-dim ${showMeta ? "" : "invisible"}`}
 	>
-		<span class="narrow-720:hidden">Enter to send, Shift+Enter for a new line</span>
+		<span class="narrow-720:hidden">{shortcuts?.label("compose.send") || "Send shortcut disabled"} to send, {shortcuts?.label("compose.newline") || "New-line shortcut disabled"} for a new line</span>
 		<span aria-live="polite" class="flex items-center gap-1.5">
 			{#if taskActive}
 				<span class="h-2 w-2 animate-spin rounded-full border border-[#4e5962] border-t-[#d7dde1]"></span>

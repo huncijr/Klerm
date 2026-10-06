@@ -13,6 +13,9 @@ budgets and server graph delivery remain G2+ work from the local GRAPH_PLAN.
 
 ## Using the graph
 
+Keyboard navigation, Save, Validate, Fit, Layout and selection removal can be
+configured in Settings → Shortcuts; see [Keyboard shortcuts](KEYBOARD_SHORTCUTS.md).
+
 1. Open the workspace menu → **Workflows / Graph**.
 2. Choose **New**, name the workflow, and use the right-side Add existing work
    catalog. Add buttons also support keyboard use; sources can be dragged onto

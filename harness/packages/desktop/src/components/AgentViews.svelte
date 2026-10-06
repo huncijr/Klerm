@@ -10,6 +10,8 @@
 		ThinkingLevel,
 	} from "../lib/model.ts";
 	import Feed from "./Feed.svelte";
+	import { onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 
 	let {
 		agents,
@@ -50,6 +52,15 @@
 	const visibleAgents = $derived(agents.filter((agent) => agent.enabled && visibleIds.includes(agent.id)).slice(0, 4));
 	const efforts: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 	let drafts = $state<Record<string, { text: string; images: ImageAttachment[] }>>({});
+	const shortcuts = useDesktopShortcuts();
+	function focusedAgent(): CodingHarnessSlotSettings | undefined {
+		const id = document.activeElement?.getAttribute("data-agent-composer");
+		return visibleAgents.find((agent) => agent.id === id);
+	}
+	onMount(() => {
+		const remove = shortcuts?.register("run", () => { const agent = focusedAgent(); if (agent) submit(agent); }, () => !sendDisabled && !taskActive, 20, () => Boolean(focusedAgent()));
+		return () => remove?.();
+	});
 	let fileInputs = $state<Record<string, HTMLInputElement | undefined>>({});
 
 	function agentItems(id: string): FeedItem[] {
@@ -215,6 +226,7 @@
 							</button>
 						{/if}
 						<textarea
+							data-agent-composer={agent.id}
 							rows="1"
 							placeholder={unavailable ? "Adapter unavailable" : `Message Agent ${agent.id.slice(5)}...`}
 							aria-label={`Message Agent ${agent.id.slice(5)}`}
@@ -223,7 +235,7 @@
 							value={draft.text}
 							oninput={(event) => (drafts = { ...drafts, [agent.id]: { text: event.currentTarget.value, images: draft.images } })}
 							onkeydown={(event) => {
-								if (event.key === "Enter" && !event.shiftKey) {
+								if (shortcuts?.matches(event, "compose.send")) {
 									event.preventDefault();
 									submit(agent);
 								}

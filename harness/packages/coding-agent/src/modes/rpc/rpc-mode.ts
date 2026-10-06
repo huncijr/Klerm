@@ -56,6 +56,7 @@ import {
 	type BrowserRunCoordinatorApi,
 	type BrowserRunCoordinatorOptions,
 } from "../../klerm/browser-run-coordinator.ts";
+import { getCliKeybindings, saveCliKeybindings } from "../../klerm/cli-keybinding-store.ts";
 import {
 	type CodingHarnessAdapter,
 	type CodingHarnessAdapterEvent,
@@ -93,6 +94,7 @@ import {
 	type RunnableCodingHarnessAgent,
 } from "../../klerm/coding-harness-setup.ts";
 import { isCustomModelApi, loadCustomModels, removeCustomModel, upsertCustomModel } from "../../klerm/custom-models.ts";
+import { getDesktopKeybindings, saveDesktopKeybindings } from "../../klerm/desktop-keybinding-store.ts";
 import { type GraphCatalogContext, graphCatalog, graphSourceDetails, graphSources } from "../../klerm/graph-catalog.ts";
 import type { KanbanRegistry, KanbanTask } from "../../klerm/kanban.ts";
 import {
@@ -346,6 +348,8 @@ const DESKTOP_COMMANDS = [
 	"reload_mcp_servers",
 	"get_desktop_settings",
 	"set_desktop_appearance",
+	"set_desktop_keybindings",
+	"set_cli_keybindings",
 	"upsert_klerm_profile",
 	"delete_klerm_profile",
 	"assign_klerm_profile",
@@ -2694,14 +2698,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 		cwd: session.sessionManager.getCwd(),
 		profiles: session.settingsManager.getKlermProfiles(),
 		customModels: await loadCustomModels(modelsPath()),
-		shortcuts: [
-			{ action: "Send prompt", keys: "Enter" },
-			{ action: "New line", keys: "Shift+Enter" },
-			{ action: "Stop task", keys: "Escape" },
-			{ action: "Open Settings", keys: "Ctrl/Cmd+," },
-			{ action: "Toggle files", keys: "Ctrl/Cmd+Shift+F" },
-			{ action: "New session", keys: "Ctrl/Cmd+N" },
-		],
+		shortcuts: await getDesktopKeybindings(session.settingsManager.getAgentDir()),
+		cliKeybindings: getCliKeybindings(session.settingsManager.getAgentDir()),
 	});
 
 	let cachedCodingHarnesses: Awaited<ReturnType<typeof discoverCodingHarnesses>> | undefined;
@@ -5181,6 +5179,33 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 				output({ type: "personal_bot_summaries_changed", conversation });
 				output({ type: "personal_bot_conversation_changed", conversation });
 				return success(id, "delete_personal_bot_summary", conversation);
+			}
+
+			case "set_cli_keybindings": {
+				try {
+					await saveCliKeybindings(session.settingsManager.getAgentDir(), command.overrides);
+					return success(id, command.type, await getDesktopSettingsPayload());
+				} catch (bindingError) {
+					return error(
+						id,
+						command.type,
+						bindingError instanceof Error ? bindingError.message : String(bindingError),
+						"INVALID_KEYBINDINGS",
+					);
+				}
+			}
+			case "set_desktop_keybindings": {
+				try {
+					await saveDesktopKeybindings(session.settingsManager.getAgentDir(), command.overrides);
+					return success(id, command.type, await getDesktopSettingsPayload());
+				} catch (bindingError) {
+					return error(
+						id,
+						command.type,
+						bindingError instanceof Error ? bindingError.message : String(bindingError),
+						"INVALID_KEYBINDINGS",
+					);
+				}
 			}
 
 			case "set_desktop_appearance": {

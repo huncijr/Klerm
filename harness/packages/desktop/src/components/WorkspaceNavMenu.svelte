@@ -2,6 +2,9 @@
 	import { Bot, Boxes, ChevronRight, MonitorUp, Network, PanelsTopLeft } from "@lucide/svelte";
 	import { onMount } from "svelte";
 	import type { WorkspaceView } from "../lib/model.ts";
+	import { useDesktopShortcuts, type DesktopAction } from "../lib/shortcuts.ts";
+	const shortcuts = useDesktopShortcuts();
+	const viewAction: Record<WorkspaceView, DesktopAction> = { "agents-routing": "view.agents", "personal-bots": "view.personal", kanban: "view.kanban", graph: "view.graph", browser: "view.browser" };
 
 	let {
 		activeView,
@@ -56,6 +59,7 @@
 				<button type="button" class={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left ${activeView === item.id ? "bg-[#1a242a]" : "hover:bg-[#141c21]"}`} onclick={() => select(item.id)}>
 					<span class={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${activeView === item.id ? "border-[rgba(214,255,63,.26)] bg-[rgba(214,255,63,.07)] text-accent" : "border-[#303b43] bg-[#10161b] text-[#9aa6ad]"}`}><Icon size={14} /></span>
 					<span class="min-w-0 flex-1"><strong class="block text-[10px] text-[#dce3e6]">{item.label}</strong><small class="mt-0.5 block truncate text-[8px] text-[#64717a]">{item.detail}</small></span>
+					<kbd class="text-[7px] text-[#688290]">{shortcuts?.label(viewAction[item.id])}</kbd>
 					<ChevronRight size={12} class="text-[#56626a]" />
 				</button>
 			{/each}

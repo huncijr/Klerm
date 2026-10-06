@@ -20,12 +20,13 @@ function account(id: string, configured: boolean) {
 describe("desktop settings helpers", () => {
 	it("marks duplicate shortcut chords", () => {
 		const conflicts = shortcutConflicts([
-			{ action: "Send", keys: "Ctrl+Enter" },
-			{ action: "Stop", keys: "Escape" },
-			{ action: "Save", keys: "ctrl+enter" },
+			{ id: "send", action: "Send", keys: "Ctrl+Enter" },
+			{ id: "stop", action: "Stop", keys: "Escape" },
+			{ id: "save", action: "Save", keys: "ctrl+enter" },
 		]);
-		expect(conflicts.has("ctrl+enter")).toBe(true);
-		expect(conflicts.has("escape")).toBe(false);
+		expect(conflicts.has("send")).toBe(true);
+		expect(conflicts.has("save")).toBe(true);
+		expect(conflicts.has("stop")).toBe(false);
 	});
 
 	it("orders curated providers first", () => {

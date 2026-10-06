@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, ChevronUp, CircleDot, ExternalLink, RefreshCw, ScrollText, Square, TerminalSquare } from "@lucide/svelte";
-	import { tick } from "svelte";
+	import { tick, onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import type { RunningService, StatusInfo } from "../lib/model.ts";
 
 	let {
@@ -41,6 +42,12 @@
 
 	let tab = $state<"terminal" | "running" | "logs">("running");
 	let command = $state("");
+	const shortcuts = useDesktopShortcuts();
+	const commandFocused = () => document.activeElement?.getAttribute("aria-label") === "Workspace terminal command";
+	onMount(() => {
+		const remove = [shortcuts?.register("run", submitCommand, () => !terminalBusy && status.state === "online", 30, commandFocused), shortcuts?.register("stop", onstopcommand, () => terminalBusy, 30, commandFocused), shortcuts?.register("save", () => {}, () => false, 30, commandFocused)];
+		return () => { for (const cleanup of remove) cleanup?.(); };
+	});
 	let historyIndex = $state(-1);
 	let terminalEl: HTMLDivElement | undefined = $state();
 	const history: string[] = [];

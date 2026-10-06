@@ -1,3 +1,6 @@
+import type { CliBinding } from "../../../coding-agent/src/klerm/cli-keybinding-store.ts";
+import type { DesktopBinding } from "../../../coding-agent/src/klerm/desktop-keybindings.ts";
+
 export type JsonObject = Record<string, unknown>;
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -249,10 +252,7 @@ export interface CustomModelEntry {
 	apiKey?: string;
 }
 
-export interface DesktopShortcut {
-	action: string;
-	keys: string;
-}
+export type DesktopShortcut = DesktopBinding;
 
 export interface ProviderAccount {
 	id: string;
@@ -297,6 +297,7 @@ export interface DesktopSettings {
 	profiles: KlermProfileState;
 	customModels: CustomModelEntry[];
 	shortcuts: DesktopShortcut[];
+	cliKeybindings: CliBinding[];
 }
 
 export interface ThinkingSetting {

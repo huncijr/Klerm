@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import { ArrowLeft, Plus, Save, RefreshCw, Trash2, Check, Maximize2, GitBranch, Search, X, Link } from "@lucide/svelte";
 	import type { GraphCatalogItem, GraphCatalogPage, GraphCatalogQuery, GraphSourceDetails, GraphSourceRef, WorkflowDefinition, WorkflowEdgeKind, WorkflowNodeKind, WorkflowValidation } from "../../../coding-agent/src/klerm/workflows.ts";
 	import { graphSourceKey, parseGraphSource, WORKFLOW_EDGE_KINDS } from "../../../coding-agent/src/klerm/workflows.ts";
 	import type { WorkflowSummary } from "../../../coding-agent/src/klerm/workflow-store.ts";
 	import { addGraphNode, blankWorkflow, connectGraphNodes, graphDropPosition, graphNodeColor, GRAPH_NODE_WIDTH, GRAPH_NODE_HEIGHT, removeGraphNode } from "../lib/graph.ts";
 
-	let { workspaceRoot, sourceRevision = 0, request, onclose, onopensource }: {
+	let { workspaceRoot, sourceRevision = 0, request, onclose, onopensource, ondirty }: {
 		workspaceRoot: string; sourceRevision?: number;
 		request: <T>(type: string, fields?: Record<string, unknown>) => Promise<T>;
 		onclose: () => void; onopensource: (ref: GraphSourceRef) => void;
+		ondirty?: (dirty: boolean) => void;
 	} = $props();
 	let workflows = $state<WorkflowSummary[]>([]);
 	let storageRoot = $state(untrack(() => workspaceRoot));
@@ -28,6 +30,7 @@
 	let details = $state<GraphSourceDetails>();
 	let validation = $state<WorkflowValidation>();
 	let dirty = $state(false);
+	$effect(() => { ondirty?.(dirty); });
 	let busy = $state(false);
 	let error = $state("");
 	let notice = $state("");
@@ -35,6 +38,7 @@
 	let showBottom = $state(true);
 	let confirmDelete = $state(false);
 	let mounted = false;
+	const shortcuts = useDesktopShortcuts();
 	let canvas: HTMLDivElement;
 	let catalogEpoch = 0;
 	let detailEpoch = 0;
@@ -216,8 +220,19 @@
 	}
 
 	onMount(() => {
+		const remove = [
+			shortcuts?.register("save", save, () => Boolean(workflow) && !busy),
+			shortcuts?.register("close", () => { if (connecting) connecting = ""; else if (confirmDelete) confirmDelete = false; else closeGraph(); }, () => !busy),
+			shortcuts?.register("newItem", create, () => !busy),
+			shortcuts?.register("refresh", async () => { await refreshCatalog(); await refreshNodeSources(); if (selectedNodeId) await inspect(selectedNodeId, false); }),
+			shortcuts?.register("graph.validate", validate, () => Boolean(workflow) && !busy),
+			shortcuts?.register("graph.fit", fit), shortcuts?.register("graph.layout", autoLayout),
+			shortcuts?.register("graph.remove", removeSelected, () => Boolean(selectedNodeId || selectedEdgeId)),
+			shortcuts?.register("run", () => {}, () => false),
+		];
 		mounted = true;
 		void (async () => { try { await refreshList(); if (workflows[0]) await load(workflows[0].id); await refreshCatalog(); } catch (failure) { error = String(failure); } })();
+		return () => { for (const cleanup of remove) cleanup?.(); };
 	});
 	$effect(() => {
 		category; search; owner;
@@ -244,7 +259,7 @@
 		<button type="button" class="graph-button" disabled={busy} onclick={create}><Plus size={12} /> New</button>
 		<select aria-label="Saved workflow" class="graph-input max-w-[240px]" value={workflow?.revision ? workflow.id : ""} disabled={busy} onchange={(event) => void load(event.currentTarget.value)}><option value="" disabled>Saved workflows ({workflows.length})</option>{#each workflows as item (item.id)}<option value={item.id}>{item.name} · r{item.revision}</option>{/each}</select>
 		{#if workflow}<input aria-label="Workflow name" class="graph-input w-44" maxlength="100" value={workflow.name} oninput={(event) => workflow && mutate({ ...workflow, name: event.currentTarget.value })} />{/if}
-		<button type="button" class="graph-button" disabled={!workflow || busy} onclick={() => void save()}><Save size={12} /> Save {dirty ? "*" : ""}</button>
+		<button type="button" class="graph-button" title={shortcuts?.label("save")} disabled={!workflow || busy} onclick={() => void save()}><Save size={12} /> Save {dirty ? "*" : ""}</button>
 		<button type="button" class="graph-button" disabled={!workflow || busy} onclick={() => void validate()}><Check size={12} /> Validate</button>
 		{#if dirty}<button type="button" class="graph-button" disabled={busy} onclick={() => void discard()}>Discard changes</button>{/if}
 		<button type="button" class="graph-button" disabled={!workflow || busy} onclick={() => (confirmDelete = !confirmDelete)}><Trash2 size={12} /> Delete graph</button>

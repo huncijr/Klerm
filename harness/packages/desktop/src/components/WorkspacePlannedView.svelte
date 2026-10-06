@@ -14,6 +14,7 @@
 		X,
 	} from "@lucide/svelte";
 	import { onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import type {
 		KanbanActivityEvent,
 		KanbanBoard,
@@ -38,6 +39,7 @@
 		ondelete,
 		focusBoardId,
 		focusTaskId,
+		onrefresh,
 	}: {
 		registry: KanbanRegistry;
 		workspaceRoot: string;
@@ -51,6 +53,7 @@
 		ondelete: (boardId: string) => Promise<void>;
 		focusBoardId?: string;
 		focusTaskId?: string;
+		onrefresh?: () => Promise<void>;
 	} = $props();
 
 	const columns: Array<{ id: KanbanTaskStatus; label: string; accent: string }> = [
@@ -66,6 +69,7 @@
 
 	let selectedBoardId = $state("");
 	let appliedGraphFocus = "";
+	const shortcuts = useDesktopShortcuts();
 	let selectedTaskId = $state("");
 	let boardName = $state("");
 	let draftPrompt = $state("");
@@ -133,7 +137,8 @@
 	}
 	onMount(() => {
 		const timer = window.setInterval(() => (nowMs = Date.now()), 1000);
-		return () => window.clearInterval(timer);
+		const remove = [shortcuts?.register("save", () => saveTask(true), () => Boolean(selectedTask) && selectedTask?.runStatus !== "running" && !operationBusy), shortcuts?.register("close", () => { if (confirmDelete) confirmDelete = false; else if (selectedTask) closeDrawer(); else onclose(); }, () => !operationBusy), shortcuts?.register("newItem", () => addTask(), () => !selectedTask && !operationBusy), shortcuts?.register("run", runTask, () => Boolean(selectedTask) && selectedTask?.runStatus !== "running" && !operationBusy), shortcuts?.register("stop", stopTask, () => selectedTask?.runStatus === "running" && !operationBusy), shortcuts?.register("refresh", () => onrefresh?.())];
+		return () => { window.clearInterval(timer); for (const cleanup of remove) cleanup?.(); };
 	});
 	$effect(() => {
 		if (board && selectedBoardId !== board.id) selectedBoardId = board.id;
@@ -481,7 +486,6 @@
 	}
 </script>
 
-<svelte:window onkeydown={(event) => { if (event.key === "Escape" && selectedTask) closeDrawer(); }} />
 
 <div
 	class="flex min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_45%_-20%,rgba(161,205,94,.11),transparent_36%),#080d11]"

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
 	import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
-	import { onMount, untrack } from "svelte";
+	import { onMount, untrack, setContext } from "svelte";
+	import { DesktopShortcutManager, effectiveDesktopBindings, SHORTCUT_CONTEXT, type DesktopBinding } from "./lib/shortcuts.ts";
 	import {
 		bridgeEventCard,
 		preventDesktopContextMenu,
@@ -129,6 +130,31 @@
 	let workspaceView = $state<WorkspaceView>();
 	let settingsFullscreen = $state(false);
 	let desktopSettings = $state<DesktopSettings | undefined>(undefined);
+	const shortcuts = new DesktopShortcutManager(() => desktopSettings?.shortcuts ?? effectiveDesktopBindings(), (error) => showError(toError(error).message));
+	setContext(SHORTCUT_CONTEXT, shortcuts);
+	let settingsFocusTab = $state<"shortcuts" | undefined>();
+	let settingsFocusRequest = $state(0);
+	let graphDraftDirty = $state(false);
+	let settingsDraftDirty = $state(false);
+	function shortcutNavigationAllowed(): boolean {
+		if (settingsOpen && settingsDraftDirty) { showNotification("Save or discard Settings changes before switching views."); return false; }
+		if (workspaceView === "graph" && graphDraftDirty) { showNotification("Save or discard the graph draft before switching views."); return false; }
+		return true;
+	}
+	async function saveDesktopShortcuts(rows: DesktopBinding[]): Promise<boolean> {
+		try { desktopSettings = await bridge.send<DesktopSettings>("set_desktop_keybindings", { overrides: Object.fromEntries(rows.map((row) => [row.id, row.keys])) }); return true; }
+		catch (error) { showError(toError(error).message); return false; }
+	}
+	async function saveCliShortcuts(overrides: Record<string, string[]>): Promise<boolean> {
+		try { desktopSettings = await bridge.send<DesktopSettings>("set_cli_keybindings", { overrides }); return true; }
+		catch (error) { showError(toError(error).message); return false; }
+	}
+	function openShortcutView(view: WorkspaceView): void {
+		if (!shortcutNavigationAllowed()) return;
+		settingsOpen = false; settingsFullscreen = false; selectedProjectId = undefined;
+		workspaceView = view === "agents-routing" ? undefined : view;
+		if (view === "kanban") void refreshKanban();
+	}
 	let systemPrefersDark = $state(true);
 	let currentRoutingState = $state<RoutingState | undefined>(undefined);
 	let lastState = $state<SessionState | undefined>(undefined);
@@ -3158,8 +3184,33 @@
 		}
 	}
 
-	onMount(() => {
+		onMount(() => {
 		if (window.innerWidth <= 900) workspacePanelOpen = false;
+		const removeShortcuts = [
+			shortcuts.register("save", () => {}, () => false, 0),
+			shortcuts.register("view.agents", () => openShortcutView("agents-routing"), undefined, 0),
+			shortcuts.register("view.personal", () => openShortcutView("personal-bots"), undefined, 0),
+			shortcuts.register("view.kanban", () => openShortcutView("kanban"), undefined, 0),
+			shortcuts.register("view.graph", () => openShortcutView("graph"), undefined, 0),
+			shortcuts.register("view.browser", () => openShortcutView("browser"), undefined, 0),
+			shortcuts.register("settings", () => { if (!shortcutNavigationAllowed()) return; settingsFocusTab = undefined; settingsOpen = true; workspaceView = undefined; selectedProjectId = undefined; }, undefined, 0),
+			shortcuts.register("shortcuts", () => { if (!settingsOpen && !shortcutNavigationAllowed()) return; settingsFocusTab = "shortcuts"; settingsFocusRequest += 1; settingsOpen = true; workspaceView = undefined; selectedProjectId = undefined; }, undefined, 0),
+			shortcuts.register("session.new", newSession, () => backendReady && !sessionTransitionActive && !workspaceView && !settingsOpen, 0),
+			shortcuts.register("compose.focus", () => { if (!workspaceView && !settingsOpen) composerFocusRequest += 1; }, undefined, 0),
+			shortcuts.register("files.toggle", () => { if (!workspaceView && !settingsOpen) workspacePanelOpen = !workspacePanelOpen; }, undefined, 0),
+			shortcuts.register("terminal.toggle", () => { if (!workspaceView && !settingsOpen) bottomPanelOpen = !bottomPanelOpen; }, undefined, 0),
+			shortcuts.register("refresh", async () => { await refreshSessions(); await refreshWorkspace(); }, () => backendReady && !workspaceView && !settingsOpen, 0),
+			shortcuts.register("stop", stopTask, () => taskActive && !workspaceView && !settingsOpen, 0),
+			shortcuts.register("close", () => {
+				if (pendingDelete) pendingDelete = undefined;
+				else if (settingsOpen) { settingsOpen = false; settingsFullscreen = false; }
+				else if (selectedProjectId) selectedProjectId = undefined;
+				else if (workspaceView === "browser") closeBrowserWorkspace();
+				else if (workspaceView) workspaceView = undefined;
+				else if (sidebarOpen) sidebarOpen = false;
+				else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
+			}, undefined, 0),
+		];
 		const onResize = () => {
 			if (window.innerWidth > 720) sidebarOpen = false;
 			else sessionsExpanded = true;
@@ -3167,22 +3218,13 @@
 			if (agentContextVisible) applyAgentViewsHeight(agentViewsHeight);
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			if (pendingDelete) pendingDelete = undefined;
-			else if (settingsOpen) {
-				settingsOpen = false;
-				settingsFullscreen = false;
-			}
-			else if (selectedProjectId) selectedProjectId = undefined;
-			else if (workspaceView === "browser") closeBrowserWorkspace();
-			else if (workspaceView) workspaceView = undefined;
-			else if (sidebarOpen) sidebarOpen = false;
-			else if (window.innerWidth <= 900 && workspacePanelOpen) workspacePanelOpen = false;
+			shortcuts.handle(event);
 		};
 		window.addEventListener("resize", onResize);
 		document.addEventListener("keydown", onKeyDown);
 		void boot();
 		return () => {
+			for (const remove of removeShortcuts) remove();
 			if (notificationTimer !== undefined) window.clearTimeout(notificationTimer);
 			window.removeEventListener("resize", onResize);
 			document.removeEventListener("keydown", onKeyDown);
@@ -3297,6 +3339,11 @@
 		{#if settingsOpen}
 			{#if desktopSettings}
 			<SettingsView
+				focusTab={settingsFocusTab}
+				ondirty={(dirty) => (settingsDraftDirty = dirty)}
+				focusTabRequest={settingsFocusRequest}
+				onshortcuts={saveDesktopShortcuts}
+				onclikeybindings={saveCliShortcuts}
 				personalAgents={personalBots.bots}
 				settings={desktopSettings}
 				klermConfig={currentConfig}
@@ -3368,12 +3415,13 @@
 		{:else if workspaceView === "graph"}
 			{#key workspace?.projectRoot ?? sessionCwd}
 			<GraphWorkspace workspaceRoot={workspace?.projectRoot ?? sessionCwd} sourceRevision={graphSourceRevision}
-				request={(type, fields) => bridge.send(type, fields)} onclose={() => (workspaceView = undefined)} onopensource={(ref) => void openGraphSource(ref)} />
+				request={(type, fields) => bridge.send(type, fields)} ondirty={(dirty) => (graphDraftDirty = dirty)} onclose={() => (workspaceView = undefined)} onopensource={(ref) => void openGraphSource(ref)} />
 			{/key}
 		{:else if workspaceView === "kanban"}
 			<WorkspacePlannedView
 				focusBoardId={graphKanbanFocus?.boardId}
 				focusTaskId={graphKanbanFocus?.taskId}
+				onrefresh={refreshKanban}
 				personalAgents={personalBots.bots}
 				registry={kanbanRegistry}
 				workspaceRoot={workspace?.projectRoot ?? sessionCwd}
@@ -3397,6 +3445,7 @@
 				</aside>
 				{#if selectedBrowserSessionId}{#key selectedBrowserSessionId}
 			<BrowserWorkspace
+				onnew={() => changeBrowserSession("create_browser_session")}
 				personalAgents={personalBots.bots}
 				sessionId={selectedBrowserSessionId}
 				availability={browserAvailability}

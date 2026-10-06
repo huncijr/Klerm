@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -388,7 +389,7 @@ describe("Klerm desktop RPC contract", () => {
 				data: {
 					appearance: "dark",
 					profiles: { profiles: expect.arrayContaining([expect.objectContaining({ id: "scout" })]) },
-					shortcuts: expect.arrayContaining([expect.objectContaining({ action: "Send prompt" })]),
+					shortcuts: expect.arrayContaining([expect.objectContaining({ id: "compose.send", keys: "Enter" })]),
 				},
 			});
 
@@ -808,6 +809,22 @@ describe("Klerm desktop RPC contract", () => {
 				.getKanbanRegistry()
 				.boards.find((board) => board.tasks.some((task) => task.title === "Personal card"))!;
 			const kanbanTask = kanbanBoard.tasks.find((task) => task.title === "Personal card")!;
+			const waitForKanbanDrain = async () => {
+				const attemptId = harness.session.settingsManager
+					.getKanbanRegistry()
+					.boards.find((board) => board.id === kanbanBoard.id)
+					?.tasks.find((task) => task.id === kanbanTask.id)
+					?.attempts?.at(-1)?.id;
+				// Terminal registry status precedes session disposal/reservation release.
+				// Wait for the durable release boundary before starting another attempt.
+				await vi.waitFor(async () => {
+					const events = (await readFile(join(harness.tempDir, ".klerm", "kanban-runs.jsonl"), "utf8"))
+						.trim()
+						.split("\n")
+						.map((line) => JSON.parse(line) as Record<string, unknown>);
+					expect(events).toContainEqual(expect.objectContaining({ event: "WORKSPACE_RELEASED", attemptId }));
+				});
+			};
 			harness.setResponses([fauxAssistantMessage("Review findings: no implementation requested.")]);
 			expect(
 				await send({
@@ -834,6 +851,7 @@ describe("Klerm desktop RPC contract", () => {
 				});
 			});
 			const buildRegistry = harness.session.settingsManager.getKanbanRegistry();
+			await waitForKanbanDrain();
 			const buildTask = buildRegistry.boards
 				.find((board) => board.id === kanbanBoard.id)!
 				.tasks.find((task) => task.id === kanbanTask.id)!;
@@ -860,6 +878,7 @@ describe("Klerm desktop RPC contract", () => {
 					runError: expect.stringContaining("No implementation changes"),
 				});
 			});
+			await waitForKanbanDrain();
 			harness.setResponses([
 				fauxAssistantMessage(
 					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('working');\n" })],
@@ -893,6 +912,7 @@ describe("Klerm desktop RPC contract", () => {
 					activity: expect.arrayContaining([expect.objectContaining({ text: "Writing kanban-smoke.js" })]),
 				});
 			});
+			await waitForKanbanDrain();
 			harness.setResponses([
 				fauxAssistantMessage(
 					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('updated');\n" })],
@@ -924,6 +944,7 @@ describe("Klerm desktop RPC contract", () => {
 					runError: "One or more verification commands still fail.",
 				});
 			});
+			await waitForKanbanDrain();
 			harness.setResponses([
 				fauxAssistantMessage(
 					[fauxToolCall("write", { path: "kanban-smoke.js", content: "console.log('initial');\n" })],
@@ -957,6 +978,7 @@ describe("Klerm desktop RPC contract", () => {
 				});
 			});
 			const runningRegistry = harness.session.settingsManager.getKanbanRegistry();
+			await waitForKanbanDrain();
 			const guardedTask = runningRegistry.boards
 				.find((board) => board.id === kanbanBoard.id)!
 				.tasks.find((candidate) => candidate.id === kanbanTask.id)!;

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added configurable context-owned desktop shortcuts with live Settings editing, atomic override persistence and a native Klerm CLI/TUI keybinding editor; added default new/tree/fork/resume session chords.
 - Added a backend-owned workflow draft registry, graph catalog of existing agents/cards/attempts, reference/port/DAG validation, revision-safe persistence and a desktop SVG graph editor/inspector without agent dispatch.
 - Added a single-owner headless Klerm HTTP/SSE server with browser controls, periodic native harness discovery, persistent request audit/deduplication, and Docker Compose deployment files.
 - Added a native Hermes ACP adapter with session reuse/load, attributed tool events, bounded cancellation, a persisted Full access profile, and explicit rejection of unsupported read-only Plan execution.

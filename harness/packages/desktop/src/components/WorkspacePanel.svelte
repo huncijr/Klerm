@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Braces, ChevronDown, Code2, ExternalLink, FileCode2, FolderTree, GitBranch, RefreshCw, RotateCcw, Save, X } from "@lucide/svelte";
 	import { onMount } from "svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
 	import WebActivityView from "./WebActivityView.svelte";
 	import {
 		resolveWorkspaceEditDraft,
@@ -65,6 +66,7 @@
 	} = $props();
 
 	let tab = $state<"diff" | "edit">("diff");
+	const shortcuts = useDesktopShortcuts();
 	let listTab = $state<"changes" | "files" | "web">("changes");
 	let lastWebUrl = "";
 	let lastWebOpenRequest = 0;
@@ -95,11 +97,12 @@
 	});
 
 	onMount(() => {
+		const remove = [shortcuts?.register("save", save, () => tab === "edit" && listTab !== "web" && Boolean(selectedPath) && !saving && !loading && workspace?.trusted === true, 5)];
 		const closeMenu = (event: PointerEvent) => {
 			if (!(event.target instanceof Node) || !editorRoot?.contains(event.target)) editorMenuOpen = false;
 		};
 		document.addEventListener("pointerdown", closeMenu);
-		return () => document.removeEventListener("pointerdown", closeMenu);
+		return () => { document.removeEventListener("pointerdown", closeMenu); for (const cleanup of remove) cleanup?.(); };
 	});
 
 	function statusBadgeClass(status: WorkspaceFileStatus["status"]): string {

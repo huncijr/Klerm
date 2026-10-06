@@ -12,6 +12,8 @@
 	import { portal } from "../lib/portal.ts";
 	import SessionRow from "./SessionRow.svelte";
 	import WorkspaceNavMenu from "./WorkspaceNavMenu.svelte";
+	import { useDesktopShortcuts } from "../lib/shortcuts.ts";
+	const shortcuts = useDesktopShortcuts();
 
 	let {
 		sessions,
@@ -180,22 +182,20 @@
 			transportMenuOpen = false;
 			mcpPopoverOpen = false;
 		};
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
+		const removeCloseShortcut = shortcuts?.register("close", () => {
 			if (transportMenuOpen) transportMenuOpen = false;
 			else mcpPopoverOpen = false;
-		};
+		}, undefined, 40, () => transportMenuOpen || mcpPopoverOpen);
 
 		updatePosition();
 		window.addEventListener("resize", updatePosition);
 		window.addEventListener("scroll", updatePosition, true);
 		document.addEventListener("pointerdown", handlePointerDown, true);
-		document.addEventListener("keydown", handleKeyDown);
 		return () => {
 			window.removeEventListener("resize", updatePosition);
 			window.removeEventListener("scroll", updatePosition, true);
 			document.removeEventListener("pointerdown", handlePointerDown, true);
-			document.removeEventListener("keydown", handleKeyDown);
+			removeCloseShortcut?.();
 		};
 	});
 
