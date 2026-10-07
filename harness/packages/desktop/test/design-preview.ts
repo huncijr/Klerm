@@ -4,7 +4,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { mount } from "svelte";
 import { effectiveDesktopBindings, parseDesktopKeybindings } from "../../coding-agent/src/klerm/desktop-keybindings.ts";
 import App from "../src/App.svelte";
-import type { DesktopSettings, KanbanRegistry, PersonalBotRegistry } from "../src/lib/model.ts";
+import type {
+	DesktopSettings,
+	KanbanRegistry,
+	KlermProfile,
+	PersonalBot,
+	PersonalBotChatMessage,
+	PersonalBotRegistry,
+} from "../src/lib/model.ts";
 import "../src/app.css";
 
 const params = new URLSearchParams(location.search);
@@ -48,6 +55,7 @@ const settings: DesktopSettings = {
 };
 const bots: PersonalBotRegistry = {
 	version: 1,
+	defaultsInitialized: true,
 	bots: [
 		{
 			id: "scout",
@@ -65,6 +73,24 @@ const bots: PersonalBotRegistry = {
 		},
 	],
 };
+const fixtureRequests: string[] = [];
+Object.defineProperty(window, "__klermDesign", {
+	value: {
+		requests: fixtureRequests,
+		get agents() {
+			return bots.bots;
+		},
+	},
+});
+const personalMessages: PersonalBotChatMessage[] = [
+	{ id: "personal-user", role: "user", text: "Help me plan a review of the session registry.", timestamp: time },
+	{
+		id: "personal-assistant",
+		role: "assistant",
+		text: "## A focused review\nStart with how sessions are saved and reopened. Check the revision rules before changing the registry.\n\n- Inspect the existing session tests.\n- Compare interrupted and completed runs.\n- Record the failure before proposing a fix.\n\nI can help turn the findings into a Kanban card when you are ready.",
+		timestamp: time,
+	},
+];
 const boards: KanbanRegistry = {
 	version: 1,
 	boards: [
@@ -187,7 +213,15 @@ const harnesses = {
 			},
 		],
 	},
-	harnesses: [{ kind: "klerm", builtin: true, available: true, adapterConnected: true, models: ["demo/worker"] }],
+	harnesses: [
+		{
+			kind: "klerm",
+			builtin: true,
+			available: true,
+			adapterConnected: true,
+			models: ["demo/worker", "demo/reviewer"],
+		},
+	],
 	effectiveRouting: "none",
 	externalPromptingAvailable: false,
 	workTogetherAvailable: false,
@@ -247,6 +281,8 @@ const commands = [
 	"get_coding_harness_setup",
 	"get_personal_bots",
 	"get_personal_bot_conversation",
+	"upsert_personal_bot",
+	"upsert_klerm_profile",
 	"get_projects",
 	"get_kanban_registry",
 	"get_browser_sessions",
@@ -320,7 +356,12 @@ function response(command: Record<string, unknown>): unknown {
 		case "get_local_runtimes":
 			return { runtimes: [] };
 		case "get_available_models":
-			return { models: [{ provider: "demo", id: "worker", name: "Workspace worker" }] };
+			return {
+				models: [
+					{ provider: "demo", id: "worker", name: "Workspace worker" },
+					{ provider: "demo", id: "reviewer", name: "Workspace reviewer" },
+				],
+			};
 		case "get_available_thinking_levels":
 			return { level: "medium", levels: ["off", "low", "medium", "high"] };
 		case "get_workspace_status":
@@ -402,21 +443,46 @@ function response(command: Record<string, unknown>): unknown {
 			return harnesses;
 		case "get_personal_bots":
 			return bots;
-		case "get_personal_bot_conversation":
+		case "upsert_personal_bot": {
+			const bot = command.bot as PersonalBot;
+			if (
+				!bot.name?.trim() ||
+				!bot.id ||
+				!settings.profiles.profiles.some((profile) => profile.id === bot.profileId)
+			)
+				throw new Error("Invalid fixture agent.");
+			bots.bots = [...bots.bots.filter((previous) => previous.id !== bot.id), { ...bot }];
+			return bots;
+		}
+		case "upsert_klerm_profile": {
+			const profile = command.profile as KlermProfile;
+			if (!profile.id || !profile.name?.trim()) throw new Error("Invalid fixture profile.");
+			settings.profiles.profiles = [
+				...settings.profiles.profiles.filter((previous) => previous.id !== profile.id),
+				{ ...profile },
+			];
+			return settings;
+		}
+		case "get_personal_bot_conversation": {
+			const bot = bots.bots.find((entry) => entry.id === command.botId);
 			return {
 				version: 1,
-				botId: "scout",
+				id: `fixture-${bot?.id}`,
+				botId: bot?.id,
+				cwd: root,
+				harness: "klerm",
+				model: bot?.model,
+				role: "planner",
+				nativeSessionId: bot?.id === "scout" ? "fixture-scout-session" : undefined,
 				status: "idle",
-				messages: [
-					{
-						id: "message",
-						role: "assistant",
-						text: "## Workspace review\nI can help inspect the project and discuss the next steps.",
-						timestamp: time,
-					},
-				],
+				messages: bot?.id === "scout" && !params.has("empty-personal") ? personalMessages : [],
+				eventSequence: 0,
+				linkedSuccessfulPromptCount: 0,
+				pendingSummarySources: [],
 				summaries: [],
+				updatedAt: time,
 			};
+		}
 		case "get_kanban_registry":
 			return boards;
 		case "get_browser_sessions":
@@ -453,6 +519,7 @@ mockIPC(
 		if (name === "browser_host_command") return;
 		if (name !== "rpc_send") return;
 		const command = (payload as { command: Record<string, unknown> }).command;
+		fixtureRequests.push(String(command.type));
 		try {
 			await emit("klerm://rpc", {
 				type: "response",

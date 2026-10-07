@@ -56,6 +56,27 @@ appearance changes. The cached preference is applied before app mount and in
 the HTML startup shell to avoid a dark-only startup flash. Invalid cached values
 fall back to Dark. Theme changes do not restart agent sessions.
 
+## Personal Bots layout
+
+The Personal Bots view gives the conversation the most space: a searchable
+agent list on the left, a centered chat column, and agent details in a panel
+that opens on demand. Agent creation and personality editing use a tabbed
+Identity & access / Model / Reasoning dialog with visible focus and
+keyboard-trapped tab order. The layout shares the semantic tokens above, so no
+separate Personal Bots palette exists.
+
+Real-UI smoke coverage (no backend, no model calls) runs from `harness`:
+
+```bash
+node packages/desktop/scripts/smoke-personal-bots.mjs
+```
+
+It checks both themes for chat rendering, agent search, the details panel,
+profile editing, agent creation with the selected model and reasoning effort,
+compact drawer behavior, and absence of model requests. Add `--screenshots`
+for review images. This reuses the same no-backend design fixture described
+below.
+
 ## How To Test
 
 From `harness/packages/desktop`:
