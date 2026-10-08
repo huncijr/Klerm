@@ -35,7 +35,7 @@ const runnableAgent = (
 	strengthBand: 3,
 	strengths: ["General coding"],
 	limits: ["No native child task events"],
-	capabilitySource: "model-profile-inference",
+	capabilitySource: "configuration",
 	adapterCapabilities: {
 		prompt: true,
 		abort: true,
@@ -57,13 +57,13 @@ describe("coding harness bridge", () => {
 		expect(shouldDelegateCodingHarnessTask("Review the frontend, backend, security, and tests.", 2)).toBe(true);
 	});
 
-	test("orders every peer by capability with stable agent ordering as a tie breaker", () => {
+	test("orders peers by configured role and specialties, ignoring model strength guesses", () => {
 		const coordinator = runnableAgent("agent6", { strengthBand: 5 });
 		const agent7 = runnableAgent("agent7", { role: "planner", specialties: ["review"] });
 		const agent8 = runnableAgent("agent8", { strengthBand: 4 });
 		expect(
 			selectCodingHarnessPeers([coordinator, agent7, agent8], coordinator.agentId).map((agent) => agent.agentId),
-		).toEqual(["agent8", "agent7"]);
+		).toEqual(["agent7", "agent8"]);
 		expect(
 			selectCodingHarnessPeers(
 				[coordinator, runnableAgent("agent8"), runnableAgent("agent7")],

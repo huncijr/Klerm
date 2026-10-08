@@ -437,7 +437,7 @@ describe("Klerm routing runtime", () => {
 		);
 	});
 
-	it("skips auto Agent 2 recommendation when Agent 2 is weaker", async () => {
+	it("uses task complexity and peer availability without treating a local model as weaker", async () => {
 		const strong = createModel("openai-codex", "gpt-5.5", "openai-completions");
 		const runtime = {
 			getAvailableSnapshot: () => [local, strong],
@@ -456,9 +456,10 @@ describe("Klerm routing runtime", () => {
 				"Design and implement a broad multi-file authentication architecture across the repository",
 			)
 		)?.commit();
-		expect(controller.routingState.delegationRecommended).toBe(false);
-		expect(controller.getSystemPromptContribution()).toContain("Agent 2 is weaker than you");
-		expect(controller.getSystemPromptContribution()).not.toContain("Klerm recommends Agent 2 because");
+		expect(controller.routingState.delegationRecommended).toBe(true);
+		expect(controller.getSystemPromptContribution()).toContain("Comparative model quality is unknown");
+		expect(controller.getSystemPromptContribution()).not.toContain("Agent 2 is weaker than you");
+		expect(controller.getSystemPromptContribution()).toContain("This is not a model quality ranking");
 	});
 
 	it("removes mutation tools from planner turns and restores them for builders", async () => {
@@ -1467,7 +1468,7 @@ describe("Klerm routing runtime", () => {
 			selectedTarget: "ollama/qwen2.5-coder:7b",
 		});
 		expect(controller.getSystemPromptContribution()).toContain(
-			"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
+			"Klerm recommends a configured available peer because this task meets the complexity policy.",
 		);
 		const decisions = (await readKlermRouteDecisionLog(tempDir))
 			.trim()
@@ -1543,7 +1544,7 @@ describe("Klerm routing runtime", () => {
 			);
 
 			expect(firstLocalSystemPrompt).toContain(
-				"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
+				"Klerm recommends a configured available peer because this task meets the complexity policy.",
 			);
 			expect(firstLocalSystemPrompt).toContain("Call delegate_frontier before creating or modifying many files.");
 			expect(localFaux.state.callCount).toBe(2);
@@ -1585,15 +1586,25 @@ describe("Klerm routing runtime", () => {
 		await (await controller.routePrompt("Create a React project with multiple components and files"))?.commit();
 
 		expect(await controller.enforceRequiredFrontierDelegation("Local work completed.")).toBeUndefined();
-		expect(controller.routingState).toMatchObject({ lane: "local", delegationRecommended: true });
+		expect(controller.routingState).toMatchObject({ lane: "local", delegationRecommended: false });
 		const decisions = (await readKlermRouteDecisionLog(tempDir))
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line) as { event: string; reason: string });
-		expect(decisions.at(-1)).toMatchObject({
-			event: "HANDOFF_REJECTED",
-			reason: "recommended frontier handoff skipped because no available frontier model is configured",
+		expect(decisions.some((decision) => decision.event === "DELEGATE_FRONTIER")).toBe(false);
+		expect(decisions[0]).toMatchObject({ event: "INITIAL_ROUTE", delegationRecommended: false });
+	});
+	it("does not alias unrelated harness brands to Agent 2, but honors the exact configured model", async () => {
+		const store = await KlermConfigStore.load(tempDir, {
+			routing: "local",
+			localModel: "ollama/qwen2.5-coder:7b",
+			frontierModel: "google/gemini-3.5-flash-lite",
 		});
+		const controller = new KlermRoutingController(tempDir, modelRuntime, store);
+		await (await controller.routePrompt("Ask an unregistered harness to explain this file"))?.commit();
+		expect(await controller.enforceRequiredFrontierDelegation("No matching agent configured.")).toBeUndefined();
+		await (await controller.routePrompt("Ask google/gemini-3.5-flash-lite to explain this file"))?.commit();
+		expect((await controller.enforceRequiredFrontierDelegation("Please hand off."))?.model).toBe(frontier);
 	});
 
 	it("does not bypass the local orchestrator when handback is disabled", async () => {

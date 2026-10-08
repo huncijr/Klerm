@@ -331,6 +331,26 @@ export {
 	type ProjectTrustUpdate,
 } from "./core/trust-manager.ts";
 export {
+	AGENT_ADAPTER_LOG_FILE,
+	type AgentAdapter,
+	AgentAdapterJournal,
+	AgentAdapterRegistry,
+	type AgentArtifact,
+	type AgentCapability,
+	type AgentDescriptor,
+	type AgentEvent,
+	type AgentPrompt,
+	type AgentReply,
+	type AgentRuntime,
+	type AgentRuntimeFactory,
+	type AgentSessionRef,
+	type AgentStartRequest,
+	type AgentStatus,
+	type AgentTask,
+	agentAdapterEventSink,
+	RuntimeAgentAdapter,
+} from "./klerm/agent-adapter-contract.ts";
+export {
 	CODING_HARNESS_KINDS,
 	type CodingHarnessCommandRunner,
 	type CodingHarnessDiscoveryResult,
@@ -349,6 +369,8 @@ export {
 	parseCodingHarnessSlots,
 	probeCodingHarnessVersion,
 } from "./klerm/coding-harness-setup.ts";
+export { FakeAgentAdapter, type FakeAgentTurn } from "./klerm/fake-agent-adapter.ts";
+export { PiAgentAdapter, type PiAgentSessionFactory } from "./klerm/pi-agent-adapter.ts";
 export {
 	DEFAULT_PROJECT_ID,
 	DEFAULT_PROJECT_NAME,

@@ -15,7 +15,7 @@ import type {
 	KlermRoutingMode,
 	KlermWorkerRole,
 } from "../config.ts";
-import { compareStrength, describeModelProfile, formatPeerLookup } from "../model-profile.ts";
+import { describeModelProfile, formatPeerLookup } from "../model-profile.ts";
 import { formatProfilePrompt, type KlermProfile } from "../profiles.ts";
 import { hasKlermResponseUsage } from "../response-usage.ts";
 import { isSensitiveToolCall } from "../tool-policy.ts";
@@ -323,12 +323,15 @@ export function projectKlermPlannerContext(
 	return changed ? projected : messages;
 }
 
-function explicitlyRequestsFrontier(task: string): boolean {
+function explicitlyRequestsFrontier(task: string, configuredModel?: string): boolean {
 	if (/\bdelegate_frontier\b|\bdelegate\s+task\b/iu.test(task)) return true;
-	const target = /\b(frontier|codex|claude|gemini)\b|(?:másik|masik)\s+modell?/iu;
+	const target = /\b(frontier|agent\s*2)\b|(?:másik|masik)\s+modell?|\bother\s+(?:configured\s+)?(?:model|agent)\b/iu;
 	const action =
 		/\b(delegate|delegál\w*|ask|kér\w*|consult|konzult\w*|use|használ\w*|h[ií]v\w*|hand\s*off)\b|(?:^|\s)(?:add|adjad|adja)\s+(?:át|at)(?:\s|$)/iu;
-	return target.test(task) && action.test(task);
+	return (
+		(target.test(task) || Boolean(configuredModel && task.toLowerCase().includes(configuredModel.toLowerCase()))) &&
+		action.test(task)
+	);
 }
 
 export function classifyKlermTaskIntent(task: string, previousIntent?: KlermTaskIntent): KlermTaskIntent {
@@ -361,7 +364,7 @@ export function classifyKlermTaskIntent(task: string, previousIntent?: KlermTask
 
 function assessDelegationRecommendation(
 	task: string,
-	peerIsStronger: boolean,
+	peerAvailable: boolean,
 ): {
 	delegationRecommended: boolean;
 	complexity: number;
@@ -419,16 +422,16 @@ function assessDelegationRecommendation(
 		factors.push("long multi-part task description");
 	}
 	const complex = complexity >= 7 || risk >= 0.65;
-	const delegationRecommended = complex && peerIsStronger;
+	const delegationRecommended = complex && peerAvailable;
 	return {
 		delegationRecommended,
 		complexity,
 		risk,
 		factors,
 		policyTriggers: delegationRecommended
-			? ["deterministic complexity policy recommends stronger Agent 2"]
+			? ["deterministic complexity policy recommends an available configured peer"]
 			: complex
-				? ["deterministic complexity policy skipped because Agent 2 is not stronger"]
+				? ["deterministic complexity policy skipped because no configured peer is available"]
 				: [],
 	};
 }
@@ -543,19 +546,6 @@ export class KlermRoutingController {
 		return findExactModelReferenceMatch(reference, [...this.modelRuntime.getAvailableSnapshot()]) !== undefined;
 	}
 
-	private peerIsStronger(): boolean {
-		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
-		const self = describeModelProfile(
-			this.config.localModel,
-			this.config.localModel ? findExactModelReferenceMatch(this.config.localModel, snapshot) : undefined,
-		);
-		const other = describeModelProfile(
-			this.config.frontierModel,
-			this.config.frontierModel ? findExactModelReferenceMatch(this.config.frontierModel, snapshot) : undefined,
-		);
-		return compareStrength(self, other) === "stronger";
-	}
-
 	private configuredWorkTogetherAgents(): CodingHarnessAgentSettings[] {
 		const slots = this.codingHarnessSlots?.();
 		if (!slots?.externalHarnessesEnabled || !slots.workTogetherEnabled) return [];
@@ -592,20 +582,13 @@ export class KlermRoutingController {
 	private selectWorkTogetherPeer(
 		taskIntent: KlermTaskIntent | undefined = this.state.taskIntent,
 	): CodingHarnessAgentSettings | undefined {
-		const snapshot = [...this.modelRuntime.getAvailableSnapshot()];
 		const workspaceChange = taskIntent === "workspace-change";
 		const agents = this.workTogetherAgents();
 		return agents
 			.filter((agent) => agent.id !== agents[0]?.id && agent.model)
 			.sort((left, right) => {
 				const score = (agent: CodingHarnessAgentSettings): number => {
-					const model = findExactModelReferenceMatch(agent.model!, snapshot);
-					const profile = describeModelProfile(agent.model, model);
-					return (
-						profile.band * 100 +
-						(profile.reasoning ? 10 : 0) +
-						(workspaceChange === (agent.role === "builder") ? 5 : 0)
-					);
+					return (workspaceChange === (agent.role === "builder") ? 5 : 0) + (agent.specialties?.length ?? 0);
 				};
 				return score(right) - score(left) || left.id.localeCompare(right.id, undefined, { numeric: true });
 			})[0];
@@ -619,7 +602,7 @@ export class KlermRoutingController {
 			const roster = workTogetherAgents.map((agent) => {
 				const model = findExactModelReferenceMatch(agent.model!, snapshot);
 				const profile = describeModelProfile(agent.model, model);
-				return `${agent.id}: ${profile.reference}; role ${agent.role}; strength ${profile.band}/5; reasoning ${profile.reasoning ? "yes" : "no"}; strengths ${profile.strengths.join(", ")}; tools ${agent.tools.join(", ") || "default"}`;
+				return `${agent.id}: ${profile.reference}; role ${agent.role}; declared reasoning ${profile.reasoning === undefined ? "unknown" : profile.reasoning ? "yes" : "no"}; configured specialties ${agent.specialties?.join(", ") || "none"}; tools ${agent.tools.join(", ") || "default"}; comparative quality unknown`;
 			});
 			const identity = [
 				"<klerm_identity>",
@@ -687,7 +670,7 @@ export class KlermRoutingController {
 				mustReturn
 					? `You are Klerm ${localAgent} handling a focused assignment from the ${frontierAgent} orchestrator.`
 					: returnedFromFrontier
-						? `You are Klerm ${localAgent} resumed after ${frontierAgent} work. Verify the returned result, complete focused work that fits your strength band, and answer the user when the task is ready.`
+						? `You are Klerm ${localAgent} resumed after ${frontierAgent} work. Verify the returned result, complete focused work allowed by your configured role and tools, and answer the user when the task is ready.`
 						: `You are Klerm ${localAgent} and may hand work to a peer agent.`,
 				`Current ${localAgent} model: ${localModel}`,
 				`Current ${localAgent} role: ${role}`,
@@ -723,12 +706,12 @@ export class KlermRoutingController {
 							]
 						: [
 								`Auto mode starts with you as the ${localAgent} orchestrator. Assess the task against the peer lookup before committing to the full implementation.`,
-								"Complete focused work that fits your strength band. For work beyond your band or listed Agent 2 strengths, inspect only enough context to create a precise handoff, then call delegate_frontier.",
+								"Assess task requirements, configured roles, tools and observed results. When peer input is needed, inspect enough context to create a precise handoff, then call delegate_frontier.",
 							]
 					: []),
 				...(recommendedDelegation
 					? [
-							"Klerm recommends Agent 2 because the peer lookup shows it is stronger for this task.",
+							"Klerm recommends a configured available peer because this task meets the complexity policy. This is not a model quality ranking.",
 							"Inspect only enough context to summarize the handoff.",
 							"Call delegate_frontier before creating or modifying many files.",
 						]
@@ -742,8 +725,8 @@ export class KlermRoutingController {
 							"This task is owned by the Agent 2 orchestrator. Complete only the focused assignment, then call return_to_frontier alone with a structured summary, draft result, changed files, verification, open issues, and recommended next action. Do not finish with a direct user answer.",
 						]
 					: [
-							"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to Agent 2, Codex, Claude, Gemini, or the other configured model. An explicit user request requires delegation even when the task is simple.",
-							"Also call delegate_frontier when the task exceeds your strength band, is unusually risky, or repeated tool attempts fail.",
+							"Call delegate_frontier when the user explicitly asks you to ask, consult, use, delegate to, or hand off to Agent 2 or the other configured model. An explicit user request requires delegation even when the task is simple. Never treat an unrelated harness or model name as an alias for that agent.",
+							"Also call delegate_frontier when peer input is needed for the task, it is unusually risky, or repeated tool attempts fail.",
 						]),
 				...(mustReturn
 					? [
@@ -755,7 +738,7 @@ export class KlermRoutingController {
 								: 'Invoke it through the native tool interface with exactly these string arguments: {"reason":"why Agent 2 is needed","summary":"completed Agent 1 work and findings","remainingWork":"what Agent 2 must do next"}.',
 							"Never print delegate_frontier as TypeScript, JSON, XML, Markdown, or a code block. Text that resembles a tool call does not execute the tool.",
 							"Before delegating, complete any specifically requested Agent 1-only observation. Put completed work and findings in summary, and give Agent 2 a precise remainingWork instruction. Call delegate_frontier alone, without other tool calls in the same turn.",
-							`After a peer return, finalize on ${localAgent} when possible. Delegate again only for a concrete unresolved issue that still exceeds your strength band.`,
+							`After a peer return, finalize on ${localAgent} when possible. Delegate again only for a concrete unresolved issue requiring peer input.`,
 							"Do not merely say that delegation is unnecessary or describe how to delegate. Invoke delegate_frontier and let Klerm perform the handoff.",
 							"PI_PROVIDER and PI_MODEL describe the model currently executing a shell command; inspecting them is not a substitute for a requested Agent 2 handoff.",
 							"Do not claim that Agent 2 answered unless the handoff occurred and Agent 2 actually responded.",
@@ -1231,7 +1214,7 @@ export class KlermRoutingController {
 		this.localToolErrors = 0;
 		this.lastToolSignature = undefined;
 		this.repeatedToolCalls = 0;
-		this.explicitFrontierRequest = explicitlyRequestsFrontier(task);
+		this.explicitFrontierRequest = explicitlyRequestsFrontier(task, this.config.frontierModel);
 		this.activeTaskAgents = this.configuredWorkTogetherAgents().map((agent) => ({
 			...agent,
 			tools: [...agent.tools],
@@ -1303,7 +1286,7 @@ export class KlermRoutingController {
 			reason = "active start lane forced local";
 			completionOwner = "local";
 			if (config.routing === "auto") {
-				delegationAssessment = assessDelegationRecommendation(task, this.peerIsStronger());
+				delegationAssessment = assessDelegationRecommendation(task, this.hasAvailablePeerModel("frontier"));
 			}
 		} else if (config.activeStartLane === "frontier") {
 			route = "FRONTIER";
@@ -1343,7 +1326,7 @@ export class KlermRoutingController {
 			} else {
 				const localModel = this.resolveModel(config.localModel, "local");
 				routerModel = modelReference(localModel);
-				delegationAssessment = assessDelegationRecommendation(task, this.peerIsStronger());
+				delegationAssessment = assessDelegationRecommendation(task, this.hasAvailablePeerModel("frontier"));
 				route = "LOCAL";
 				reason = "auto mode starts local orchestrator to assess the task and delegate when needed";
 				completionOwner = "local";
@@ -1466,8 +1449,8 @@ export class KlermRoutingController {
 				"Hand the current task to a peer. In Work together mode, set targetAgentId to the best matching agent from the capability roster.",
 			promptSnippet: "Hand the task to Agent 2, including completed work and precise remaining instructions.",
 			promptGuidelines: [
-				"When acting as Klerm Agent 1, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Codex, Agent 2, or the other configured model.",
-				"When acting as Klerm Agent 1, use delegate_frontier when the task exceeds your strength band or repeated tool attempts fail.",
+				"When acting as Klerm Agent 1, use delegate_frontier whenever the user explicitly asks to consult, ask, use, delegate to, or hand off to Agent 2 or the other configured model.",
+				"When acting as Klerm Agent 1, use delegate_frontier when task requirements need peer input or repeated tool attempts fail.",
 				"As Agent 1, do not replace a requested Agent 2 handoff with a textual explanation; invoke delegate_frontier.",
 				"Call delegate_frontier through the native tool interface with reason, summary, remainingWork, and the best matching targetAgentId when Work together is enabled. Never print a code example that imitates the call.",
 			],

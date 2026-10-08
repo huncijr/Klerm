@@ -192,7 +192,7 @@ export interface CodingHarnessSetup {
 		strengthBand: 1 | 2 | 3 | 4 | 5;
 		strengths: string[];
 		limits: string[];
-		capabilitySource: "model-profile-inference";
+		capabilitySource: "configuration";
 		adapterCapabilities: {
 			prompt: true;
 			abort: true;

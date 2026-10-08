@@ -142,10 +142,7 @@ export function selectCodingHarnessPeers(
 		.filter((agent) => agent.agentId !== coordinatorId)
 		.sort((left, right) => {
 			const score = (agent: RunnableCodingHarnessAgent) =>
-				agent.strengthBand * 100 +
-				(agent.role === "planner" ? 12 : 8) +
-				agent.specialties.length * 3 +
-				(agent.tools.length > 0 ? 1 : 0);
+				(agent.role === "planner" ? 12 : 8) + agent.specialties.length * 3 + (agent.tools.length > 0 ? 1 : 0);
 			return score(right) - score(left) || left.order - right.order;
 		});
 }
@@ -155,7 +152,7 @@ function rosterPrompt(roster: readonly RunnableCodingHarnessAgent[]): string {
 	return roster
 		.map(
 			(agent) =>
-				`- ${agent.agentId}: available; harness ${agent.harness}; model ${agent.model}; role ${agent.role}; effort ${agent.effort}; strength ${agent.strengthBand}/5; strengths ${agent.strengths.join(", ")}; limits ${agent.limits.join(", ")}; tools ${agent.tools.join(", ") || "native defaults"}; specialties ${agent.specialties.join(", ") || "none"}; native session resume ${agent.adapterCapabilities.resumeSession ? "supported" : "unsupported"}; role enforcement ${agent.adapterCapabilities.roleEnforcement ? "supported" : "prompt-only"}; capability source ${agent.capabilitySource}`,
+				`- ${agent.agentId}: available; harness ${agent.harness}; model ${agent.model}; role ${agent.role}; effort ${agent.effort}; configured specialties ${agent.specialties.join(", ") || "none"}; tools ${agent.tools.join(", ") || "native defaults"}; native session resume ${agent.adapterCapabilities.resumeSession ? "supported" : "unsupported"}; role enforcement ${agent.adapterCapabilities.roleEnforcement ? "supported" : "prompt-only"}; model quality unknown; capability source configuration`,
 		)
 		.join("\n");
 }

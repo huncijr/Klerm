@@ -19,24 +19,38 @@ function model(provider: string, id: string, extras: Partial<Model<Api>> = {}): 
 }
 
 describe("Klerm model profiles", () => {
-	it("scores a small local coder below a frontier cloud model", () => {
+	it("does not rank quality or invent cloud/privacy facts from model families or sizes", () => {
 		const local = describeModelProfile("ollama/qwen3.5:9b-q4_K_M", model("ollama", "qwen3.5:9b-q4_K_M"));
 		const frontier = describeModelProfile("openai-codex/gpt-5.5", model("openai-codex", "gpt-5.5"));
 		expect(local.kind).toBe("local-runtime");
-		expect(local.band).toBe(2);
-		expect(frontier.kind).toBe("cloud");
-		expect(frontier.band).toBe(5);
-		expect(compareStrength(local, frontier)).toBe("stronger");
-		expect(compareStrength(frontier, local)).toBe("weaker");
+		expect(local.band).toBe(3);
+		expect(frontier.kind).toBe("unknown");
+		expect(frontier.band).toBe(3);
+		expect(local.strengths).toEqual([]);
+		expect(frontier.strengths).toEqual([]);
+		expect(compareStrength(local, frontier)).toBe("unknown");
+		expect(compareStrength(frontier, local)).toBe("unknown");
 	});
 
-	it("builds a peer lookup that names both models and relative strength", () => {
+	it("names both exact models while keeping comparative quality explicitly unknown", () => {
 		const agent1 = describeModelProfile("ollama/qwen2.5-coder:7b", model("ollama", "qwen2.5-coder:7b"));
 		const agent2 = describeModelProfile("google/gemini-3.5-flash-lite", model("google", "gemini-3.5-flash-lite"));
 		const lookup = formatPeerLookup("Agent 1", agent1, "Agent 2", agent2);
 		expect(lookup).toContain("You are Agent 1 running ollama/qwen2.5-coder:7b");
 		expect(lookup).toContain("Peer lookup for Agent 2 (google/gemini-3.5-flash-lite)");
-		expect(lookup).toContain("Agent 2 is stronger than you");
-		expect(lookup).toContain("Strength band");
+		expect(lookup).toContain("Comparative model quality is unknown");
+		expect(lookup).not.toContain("Strength band");
+		expect(lookup).not.toContain("is stronger");
+	});
+	it("reports missing metadata as unknown and preserves arbitrary native model references", () => {
+		const profile = describeModelProfile("Vendor/Custom Max 700b");
+		expect(profile).toMatchObject({
+			reference: "Vendor/Custom Max 700b",
+			provider: "unknown",
+			kind: "unknown",
+			band: 3,
+		});
+		expect(profile.reasoning).toBeUndefined();
+		expect(formatPeerLookup("Agent 1", profile, "Agent 2", profile)).toContain("reasoning unknown");
 	});
 });

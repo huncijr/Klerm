@@ -4,7 +4,7 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
-import { describeModelProfile, type KlermStrengthBand } from "./model-profile.ts";
+import type { KlermStrengthBand } from "./model-profile.ts";
 
 export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline", "hermes"] as const;
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -70,7 +70,7 @@ export interface RunnableCodingHarnessAgent {
 	strengthBand: KlermStrengthBand;
 	strengths: string[];
 	limits: string[];
-	capabilitySource: "model-profile-inference";
+	capabilitySource: "configuration";
 	adapterCapabilities: {
 		prompt: true;
 		abort: true;
@@ -384,7 +384,6 @@ export function createCodingHarnessSetup(
 	};
 	const ordered = slots.agents.filter(runnable).sort(byAgentId);
 	const runnableAgents = ordered.map((agent, index) => {
-		const profile = describeModelProfile(agent.model);
 		return {
 			order: index + 1,
 			agentId: agent.id,
@@ -394,10 +393,11 @@ export function createCodingHarnessSetup(
 			effort: agent.effort,
 			tools: [...agent.tools],
 			specialties: [...(agent.specialties ?? [])],
-			strengthBand: profile.band,
-			strengths: profile.strengths,
-			limits: profile.limits,
-			capabilitySource: "model-profile-inference" as const,
+			// Retained numeric field is neutral, not a model quality estimate.
+			strengthBand: 3 as const,
+			strengths: [...(agent.specialties ?? [])],
+			limits: ["Model capability and quality are not inferred from its name."],
+			capabilitySource: "configuration" as const,
 			adapterCapabilities: {
 				prompt: true as const,
 				abort: true as const,

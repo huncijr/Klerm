@@ -61,7 +61,7 @@ describe("desktop coding harness slots", () => {
 			strengthBand: 3 as const,
 			strengths: [],
 			limits: [],
-			capabilitySource: "model-profile-inference" as const,
+			capabilitySource: "configuration" as const,
 			adapterCapabilities: {
 				prompt: true as const,
 				abort: true as const,

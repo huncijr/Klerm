@@ -30,6 +30,29 @@ afterEach(async () => {
 });
 
 describe("coding harness setup", () => {
+	it("does not infer quality, privacy, strengths or limits from external model names", () => {
+		const setup = createCodingHarnessSetup(
+			{
+				externalHarnessesEnabled: true,
+				agents: [
+					{ ...agent("agent1", "opencode"), model: "Local/Custom Mini 3b", specialties: ["review"] },
+					{ ...agent("agent2", "codex"), model: "Vendor/Unknown Frontier Max" },
+				],
+			},
+			[
+				{ kind: "opencode", builtin: false, available: true, models: [] },
+				{ kind: "codex", builtin: false, available: true, models: [] },
+			],
+			new Set(["opencode", "codex"]),
+		);
+		expect(setup.runnableAgents.map((agent) => agent.strengthBand)).toEqual([3, 3]);
+		expect(setup.runnableAgents.map((agent) => agent.strengths)).toEqual([["review"], []]);
+		expect(setup.runnableAgents.map((agent) => agent.model)).toEqual([
+			"Local/Custom Mini 3b",
+			"Vendor/Unknown Frontier Max",
+		]);
+		expect(setup.runnableAgents.every((agent) => agent.capabilitySource === "configuration")).toBe(true);
+	});
 	it("persists Hermes Full access and excludes unenforced Plan execution", () => {
 		const slots = {
 			externalHarnessesEnabled: true,
@@ -332,7 +355,7 @@ describe("coding harness setup", () => {
 			strengthBand: expect.any(Number),
 			strengths: expect.any(Array),
 			limits: expect.any(Array),
-			capabilitySource: "model-profile-inference",
+			capabilitySource: "configuration",
 			adapterCapabilities: expect.objectContaining({ prompt: true, abort: true, childTaskEvents: false }),
 		});
 		expect(
