@@ -6,6 +6,10 @@ agent tasks, built-in Kanban, configuration, native sessions, and existing logs.
 Closing the browser does not close the backend.
 
 This is the first server slice, not the completed always-on/Hermes roadmap.
+Current readiness and deployment gates: [STATUS.md](../../STATUS.md).
+OpenClaw's Gateway-backed ACP interface has been audited; its Klerm adapter and
+target-host acceptance are not implemented. The base image includes no external
+harness or Gateway. See STATUS.md before treating startup as full native readiness.
 
 ## Native Linux installation
 

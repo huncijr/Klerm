@@ -84,6 +84,7 @@ Local workers can use Ollama, LM Studio, vLLM, or llama.cpp. A local model is op
 [Personal Agents and Kanban](harness/packages/desktop/PERSONAL_AGENTS.md) · [Graph](harness/packages/desktop/GRAPH_WORKSPACE.md) · [CLI](harness/packages/coding-agent/README.md)
 [Windows/macOS/Linux setup](harness/packages/desktop/CROSS_PLATFORM.md) · [Shortcuts](harness/packages/desktop/KEYBOARD_SHORTCUTS.md)
 [Browser setup](harness/packages/browser-worker/README.md) · [Self-hosting and Docker](deploy/docker/README.md)
+[Current status and next steps](STATUS.md) · [Contributing workflow](DEVELOPMENT.md)
 
 Configuration lives in `~/.klerm/agent/`; task and decision logs live in the active
 workspace's `.klerm/`. Coding tools use the launching process's OS permissions.

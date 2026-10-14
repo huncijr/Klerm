@@ -147,6 +147,32 @@ Human checks on each OS:
    verify the changed control/behavior on both Windows and macOS. CI artifacts and
    `desktop-build.json` identify the source commit.
 
+### Real native harness acceptance
+
+From `harness`, with the selected native harness already installed and signed in:
+
+```sh
+node scripts/smoke-native-harness.mjs --live --harness "<installed-adapter-id>" --model "<native-model-id>"
+```
+
+Use the actual adapter/model IDs from your configured harness; the script does
+not assume a model family or select a provider. `--live` explicitly runs three
+real model turns under the harness's own account in a new temporary Git project:
+prompt/reply, remembered follow-up token in the same native session, then an
+attributed native tool reading a file. This is not a fake-provider test. It may
+consume account quota/tokens. `--profile full-access` is available for a native
+adapter that implements that profile; native permissions remain in effect.
+
+Expected: three `Passed:` lines and a report with `status: passed`. The script
+prints the retained temporary workspace, `native-verification.json` report and
+`.klerm/bridge-events.jsonl` audit path. These are separate from the user's real
+project/configuration. Unsupported adapters and failed native turns return a
+failure rather than claiming readiness.
+
+After this adapter check, complete the app actions above with the same harness,
+including Stop and restart. A transport or startup check alone is not evidence
+that every harness/tool/OS combination works.
+
 Decision/activity logs remain in the selected workspace's `.klerm/` directory,
 including `kanban-runs.jsonl`, `router-decisions.jsonl` and `personal-bot-events.jsonl`.
 The packaged Node runtime and upstream Pi license notices are included in resources.
@@ -156,8 +182,30 @@ The packaged Node runtime and upstream Pi license notices are included in resour
 Linux local checks passed: platform-plan tests, Rust runtime tests, packaged
 backend handshake with no system Node, release DEB build, native-window startup,
 and startup of the extracted installer outside the checkout in a path with spaces.
-Windows/macOS runners and hardware were not available in the Linux development
-environment; the added CI must pass before claiming native verification.
+CI run `37608473016` at revision `a8b0913` passed native builds, packaged-backend
+readiness and actual native-window startup on Windows x64, macOS x64/ARM64 and
+Linux x64. At revision `ecb4320`, run `37792473866` has also passed Windows x64,
+macOS ARM64, macOS x64 and Linux x64; all four jobs completed successfully. This
+proves packaged startup, not authenticated native-harness work on those runners.
+
+The local October 8 native adapter check passed prompt/reply, follow-up memory,
+same-session reuse and a real file tool with the installed authenticated Codex CLI worker
+on Linux x64. The installed Hermes worker still fails session creation; direct
+native launch reports no configured inference provider. Configure it through its
+own model/provider setup before repeating acceptance. Hermes prompt/tool support
+is not marked verified, and Windows/macOS native-harness flows remain unverified.
+
+Native harness discovery, model commands and adapter launch now use the shared
+platform process launcher, including Windows `.exe`/`.cmd`/`.bat` entry points.
+Discovery and adapter launch share user-level CLI locations, including Windows
+Roaming npm binaries; GUI launch does not require Finder's PATH to include them.
+CI has a real child-process/version/JSONL/ACP launcher check on every OS (a local
+fixture worker, not an authenticated AI harness). The launcher change needs a
+fresh CI run before its Windows/macOS result can be claimed.
+
+Current readiness, revision-scoped evidence and implementation order are in
+[STATUS.md](../../../STATUS.md). The launcher changes above are a working-tree
+follow-up, not part of the `ecb4320` platform result.
 
 The embedded CEF Browser remains Linux development functionality. Its optional
 Cargo binary is excluded from ordinary Windows/macOS builds; those platforms
