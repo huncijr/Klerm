@@ -1,8 +1,11 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { spawnHarnessProcess } from "../utils/child-process.ts";
+import type { AgentCapability, AgentPrompt } from "./agent-adapter-contract.ts";
 import type { CodingHarnessAgentSettings, CodingHarnessKind, CodingHarnessRole } from "./coding-harness-setup.ts";
 import { HermesAdapter } from "./hermes-adapter.ts";
+import { createRegisteredCodingHarnessAdapters } from "./registered-coding-harness-adapter.ts";
 
 export const CONNECTED_CODING_HARNESS_ADAPTERS = ["opencode", "codex", "hermes"] as const;
 export type ConnectedCodingHarnessKind = (typeof CONNECTED_CODING_HARNESS_ADAPTERS)[number];
@@ -40,14 +43,19 @@ export type CodingHarnessAdapterDebugEvent =
 
 export type CodingHarnessAdapterDebugListener = (event: CodingHarnessAdapterDebugEvent) => void;
 
+export type CodingHarnessPromptContext = Pick<AgentPrompt, "taskId" | "correlationId" | "sender" | "reason"> & {
+	replyTo?: string;
+};
+
 export interface CodingHarnessAdapter {
 	readonly kind: ConnectedCodingHarnessKind;
+	readonly capabilities?: AgentCapability;
 	startSession(
 		agent: CodingHarnessAgentSettings,
 		cwd: string,
 		nativeSessionId?: string,
 	): Promise<CodingHarnessSessionRef>;
-	prompt(session: CodingHarnessSessionRef, message: string): Promise<void>;
+	prompt(session: CodingHarnessSessionRef, message: string, context?: CodingHarnessPromptContext): Promise<void>;
 	abort(session: CodingHarnessSessionRef): Promise<void>;
 	closeSession(session: CodingHarnessSessionRef): Promise<void>;
 	subscribe(listener: CodingHarnessAdapterListener): () => void;
@@ -97,7 +105,7 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 	private readonly sessions = new Map<string, AdapterSessionState>();
 	private readonly spawnProcess: CodingHarnessProcessSpawner;
 
-	constructor(spawnProcess: CodingHarnessProcessSpawner = spawn) {
+	constructor(spawnProcess: CodingHarnessProcessSpawner = spawnHarnessProcess) {
 		this.spawnProcess = spawnProcess;
 	}
 
@@ -132,11 +140,14 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 			windowsHide: true,
 		});
 		state.child = child;
-		child.stdin.end(message);
 
 		let stderr = "";
 		let finalText = "";
 		let protocolFailure: string | undefined;
+		child.stdin.on("error", () => {
+			protocolFailure ??= "Native worker input closed.";
+		});
+		child.stdin.end(message);
 		const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
 		lines.on("line", (line) => {
 			if (!line.trim()) return;
@@ -230,6 +241,13 @@ abstract class JsonlCodingHarnessAdapter implements CodingHarnessAdapter {
 
 export class OpenCodeAdapter extends JsonlCodingHarnessAdapter {
 	readonly kind = "opencode" as const;
+	readonly capabilities: AgentCapability = {
+		nativeSessionIdentity: "on-prompt",
+		resumeSession: true,
+		interrupt: true,
+		tools: [],
+		enforcedRoles: ["planner", "builder"],
+	};
 
 	protected command(): string {
 		return "opencode";
@@ -286,6 +304,13 @@ export class OpenCodeAdapter extends JsonlCodingHarnessAdapter {
 
 export class CodexAdapter extends JsonlCodingHarnessAdapter {
 	readonly kind = "codex" as const;
+	readonly capabilities: AgentCapability = {
+		nativeSessionIdentity: "on-prompt",
+		resumeSession: true,
+		interrupt: true,
+		tools: [],
+		enforcedRoles: ["planner", "builder"],
+	};
 
 	protected command(): string {
 		return "codex";
@@ -359,11 +384,13 @@ export class CodexAdapter extends JsonlCodingHarnessAdapter {
 }
 
 export function createCodingHarnessAdapters(): Map<ConnectedCodingHarnessKind, CodingHarnessAdapter> {
-	return new Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>([
-		["opencode", new OpenCodeAdapter()],
-		["codex", new CodexAdapter()],
-		["hermes", new HermesAdapter()],
-	]);
+	return createRegisteredCodingHarnessAdapters(
+		new Map<ConnectedCodingHarnessKind, CodingHarnessAdapter>([
+			["opencode", new OpenCodeAdapter()],
+			["codex", new CodexAdapter()],
+			["hermes", new HermesAdapter()],
+		]),
+	);
 }
 
 export function hasConnectedCodingHarnessAdapter(kind: CodingHarnessKind): kind is ConnectedCodingHarnessKind {

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHarnessProcess } from "../utils/child-process.ts";
 
 /**
  * Agent Client Protocol (ACP) discovery, the same way Zed finds coding agents:
@@ -44,9 +44,9 @@ export async function probeAcpAgent(
 	timeoutMs = ACP_INITIALIZE_TIMEOUT_MS,
 ): Promise<AcpAgentScan | undefined> {
 	return new Promise((resolve) => {
-		let child: ReturnType<typeof spawn>;
+		let child: ReturnType<typeof spawnHarnessProcess>;
 		try {
-			child = spawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+			child = spawnHarnessProcess(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 		} catch {
 			resolve(undefined);
 			return;
@@ -72,6 +72,8 @@ export async function probeAcpAgent(
 
 		timer = setTimeout(() => finish(), timeoutMs);
 		child.on("error", () => finish());
+		stdin.on("error", () => finish());
+		child.stderr?.resume();
 		out.on("data", (chunk: Buffer) => {
 			stdout += chunk.toString("utf8");
 			if (stdout.length > ACP_MAX_OUTPUT_BYTES) return finish();

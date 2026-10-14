@@ -1,5 +1,6 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { spawnHarnessProcess } from "../utils/child-process.ts";
 import type { CodingHarnessProcessSpawner } from "./coding-harness-adapter.ts";
 
 export function acpRecord(value: unknown): Record<string, unknown> {
@@ -24,7 +25,7 @@ export class AcpConnection {
 		args: readonly string[],
 		cwd: string,
 		onMessage: (message: Record<string, unknown>) => void,
-		spawnProcess: CodingHarnessProcessSpawner = spawn,
+		spawnProcess: CodingHarnessProcessSpawner = spawnHarnessProcess,
 	) {
 		this.child = spawnProcess(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 		const lines = createInterface({ input: this.child.stdout, crlfDelay: Infinity });

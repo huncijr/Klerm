@@ -1,5 +1,7 @@
 # Agent adapter contract: first backend slice
 
+Current readiness and integration order: [STATUS.md](../../../../STATUS.md).
+
 This SDK foundation separates the agent, adapter, harness and model identities.
 `AgentDescriptor.harness.id` and adapter IDs are strings, not a closed brand enum.
 The native model reference is optional and opaque: no brand-based model choice,
@@ -23,6 +25,11 @@ unnamed. An explicitly requested model must match the runtime's reported model.
 - `AgentAdapterJournal`: ordered decisions, observer subscription and in-process
   replay. Share one journal between all participants. Audit-write failure blocks
   execution. Observer failure cannot change persisted events.
+- Live migration: `createCodingHarnessAdapters()` now returns registry-backed
+  adapters. Every configured native turn is validated, attributed and journaled
+  through the common contract; RPC passes the outer task/correlation IDs into
+  each native prompt. Native JSONL/ACP event parsing and session ownership stay
+  in the native adapters.
 
 Types and adapters are exported from the coding-agent SDK. To add a harness,
 implement `AgentAdapter` or supply its real structured runtime through
@@ -61,7 +68,7 @@ are no longer aliases for the second built-in model.
 From `harness/packages/coding-agent`:
 
 ```bash
-node ../../node_modules/vitest/dist/cli.js --run test/agent-adapter-contract.test.ts test/coding-harness-setup.test.ts test/coding-harness-bridge.test.ts test/coding-harness-adapter.test.ts test/klerm-model-profile.test.ts test/klerm-routing-runtime.test.ts
+node ../../node_modules/vitest/dist/cli.js --run test/agent-adapter-contract.test.ts test/registered-coding-harness-adapter.test.ts test/coding-harness-setup.test.ts test/coding-harness-bridge.test.ts test/coding-harness-adapter.test.ts test/klerm-model-profile.test.ts test/klerm-routing-runtime.test.ts
 ```
 
 Expected: all selected tests pass. The same basic contract runs against the fake
@@ -79,10 +86,10 @@ npm run check
 
 ## Remaining gates
 
-This is a backend SDK slice, not a new desktop harness picker. The existing
+This is a backend SDK slice plus the live native-dispatch migration, not a new
+desktop harness picker. The existing
 desktop/discovery/native-adapter supported-harness lists are still explicit.
-Migrating the existing native adapters and the live RPC dispatcher onto the common
-registry, exposing custom registered adapters, mixed runtime dispatch,
+Exposing custom registered adapters, mixed runtime dispatch,
 agent-authored directed conversation, budgets, timed intervention and durable
 restart reconciliation remain subsequent milestones. Journal replay is an
 in-process projection; it does not restore sessions or repeat native actions.

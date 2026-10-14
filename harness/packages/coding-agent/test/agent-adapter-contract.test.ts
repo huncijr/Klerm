@@ -281,3 +281,54 @@ test("persists one ordered shared journal without prompt, reply or native creden
 	).toEqual(journal.replay());
 	expect(journal.replay().map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
 });
+
+test("concurrent Stop requests publish one terminal decision", async () => {
+	const journal = new AgentAdapterJournal(async () => {});
+	const adapter = new FakeAgentAdapter(descriptor, [], journal);
+	cleanups.push(() => adapter.dispose());
+	const session = await adapter.start({ agentId: "worker", cwd: "/workspace" });
+	await Promise.all([adapter.stop(session), adapter.stop(session)]);
+	expect(journal.replay().filter((event) => event.type === "SESSION_STOPPED")).toHaveLength(1);
+});
+
+test("audit failure cannot prevent interruption and native resource cleanup", async () => {
+	let begin: () => void = () => {};
+	const started = new Promise<void>((resolve) => {
+		begin = resolve;
+	});
+	const interrupt = vi.fn(async () => {});
+	const dispose = vi.fn(async () => {});
+	const journal = new AgentAdapterJournal(async (event) => {
+		if (event.type === "INTERRUPT_REQUESTED") throw new Error("disk full");
+	});
+	const adapter = new RuntimeAgentAdapter(
+		descriptor,
+		async () => ({
+			nativeSessionId: "native",
+			prompt: async (_text, signal) => {
+				begin();
+				await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+				return { text: "" };
+			},
+			interrupt,
+			dispose,
+		}),
+		journal,
+	);
+	const session = await adapter.start({ agentId: "worker", cwd: "/workspace" });
+	const active = adapter.prompt(session, prompt()).catch((error: unknown) => error);
+	await started;
+	await expect(adapter.dispose()).rejects.toThrow();
+	expect(interrupt).toHaveBeenCalledOnce();
+	expect(dispose).toHaveBeenCalledOnce();
+	expect(await active).toBeInstanceOf(Error);
+});
+
+test("descriptor observers cannot rewrite registered identity or capabilities", async () => {
+	const adapter = new FakeAgentAdapter(descriptor, [], new AgentAdapterJournal(async () => {}));
+	cleanups.push(() => adapter.dispose());
+	adapter.descriptor.harness.id = "rewritten";
+	adapter.descriptor.capabilities.resumeSession = true;
+	expect(adapter.descriptor.harness.id).toBe(descriptor.harness.id);
+	expect(adapter.descriptor.capabilities.resumeSession).toBe(false);
+});

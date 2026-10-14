@@ -54,6 +54,8 @@ jobs:
       - run: npm run hydrate:model-data
       - name: Shared platform script tests
         run: node --test packages/desktop/scripts/*.test.mjs scripts/native-tar.test.mjs
+      - name: Native harness launcher and ACP transport
+        run: node --test packages/coding-agent/test/native-harness-launch.test.mjs
       - name: Build the same source revision on each native platform
         run: npm run tauri --workspace=@klerm/desktop -- build --ci
       - name: Packaged backend smoke (no system Node or auth)

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added live registry-backed native adapter dispatch: configured harness turns run through the shared adapter contract with correlated task/correlation attribution, while native JSONL/ACP parsing and session ownership stay in each native adapter.
+- Added an opt-in real native-harness acceptance command that checks prompt/reply, follow-up context, same-session reuse and native file tools with the user's configured account and model, retaining a report and ordered decision log.
 - Added an extensible SDK agent-adapter registry with independent harness/model identities, correlated prompt/reply envelopes, ordered audit decisions, a deterministic fake worker and a Pi/Klerm native-session wrapper with shared contract tests.
 - Added configurable context-owned desktop shortcuts with live Settings editing, atomic override persistence and a native Klerm CLI/TUI keybinding editor; added default new/tree/fork/resume session chords.
 - Added a backend-owned workflow draft registry, graph catalog of existing agents/cards/attempts, reference/port/DAG validation, revision-safe persistence and a desktop SVG graph editor/inspector without agent dispatch.
@@ -71,6 +73,8 @@
 
 ### Fixed
 
+- Fixed duplicate terminal audit events from concurrent Stop requests, audit-write failures blocking native interruption/cleanup, and externally mutable registered adapter descriptors in the shared adapter contract.
+- Fixed native harness discovery/model queries and JSONL/ACP adapters bypassing the shared Windows-aware process launcher and losing user CLI paths in GUI launches; resolve executable/shim extensions, share user-level PATH locations and preserve bounded timeout/output capture, with native OS transport coverage in desktop CI.
 - Fixed peer selection and prompt identity claiming model quality, strengths, privacy or latency from family names/parameter counts; use declared metadata, configured roles/specialties and available-peer complexity policy instead, and stop treating unrelated harness brands as Agent 2 aliases.
 - Fixed Windows model-data/Node extraction selecting Git Bash GNU tar by using the system BSD tar executable for native drive paths and ZIP archives.
 - Fixed fresh desktop/Docker builds failing when live catalogs omit expected providers by restoring a checksummed public model-data baseline; live catalog refresh remains an explicit operation.

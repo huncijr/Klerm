@@ -1983,14 +1983,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 			},
 		});
 		output({ type: "agent_start", agentId: target.agentId });
-		void adapter.prompt(adapterSession, effectiveMessage).catch((promptError) => {
-			handleCodingHarnessEvent({
-				type: "error",
-				agentId: target.agentId,
-				message: promptError instanceof Error ? promptError.message : String(promptError),
+		const assignedTask =
+			run.childTask?.recipient === target.agentId && run.phase !== "finalizing" ? run.childTask : run.rootTask;
+		void adapter
+			.prompt(adapterSession, effectiveMessage, {
+				taskId: assignedTask.taskId,
+				correlationId: run.rootTask.correlationId,
+				sender: run.phase === "finalizing" ? "klerm" : assignedTask.sender,
+				reason: run.phase === "finalizing" ? "Coordinator resumed for finalization." : assignedTask.reason,
+			})
+			.catch((promptError) => {
+				handleCodingHarnessEvent({
+					type: "error",
+					agentId: target.agentId,
+					message: promptError instanceof Error ? promptError.message : String(promptError),
+				});
+				handleCodingHarnessEvent({ type: "settled", agentId: target.agentId, status: "failed" });
 			});
-			handleCodingHarnessEvent({ type: "settled", agentId: target.agentId, status: "failed" });
-		});
 	}
 
 	async function finishCodingHarnessBridge(
@@ -4888,7 +4897,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					return error(
 						id,
 						"prompt_personal_bot",
-						"Independent Personal Bot chat currently requires Codex or OpenCode.",
+						"Independent Personal Bot chat requires a connected native session adapter.",
 						"PERSONAL_BOT_HARNESS_UNSUPPORTED",
 					);
 				}

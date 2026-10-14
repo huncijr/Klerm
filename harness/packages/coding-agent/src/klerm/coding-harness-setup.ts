@@ -1,8 +1,8 @@
-import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
+import { runProcess, spawnHarnessProcess } from "../utils/child-process.ts";
+import { nativeHarnessSearchDirectories } from "../utils/harness-environment.ts";
 import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
 import type { KlermStrengthBand } from "./model-profile.ts";
 
@@ -451,21 +451,17 @@ export function createCodingHarnessSetup(
 }
 
 async function resolveCodingHarnessExecutable(command: string): Promise<string> {
-	const home = homedir();
-	const directories = [
-		...(process.env.PATH ?? "").split(delimiter),
-		join(home, ".npm-global", "bin"),
-		join(home, ".local", "bin"),
-		join(home, ".bun", "bin"),
-		join(home, ".cargo", "bin"),
-	].filter(Boolean);
-	for (const directory of new Set(directories)) {
-		const candidate = join(directory, process.platform === "win32" ? `${command}.cmd` : command);
-		try {
-			await access(candidate, constants.X_OK);
-			return candidate;
-		} catch {
-			// Continue through known user-level executable locations.
+	for (const directory of nativeHarnessSearchDirectories()) {
+		const names =
+			process.platform === "win32" ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command] : [command];
+		for (const name of names) {
+			const candidate = join(directory, name);
+			try {
+				await access(candidate, constants.X_OK);
+				return candidate;
+			} catch {
+				// Continue through known user-level executable locations.
+			}
 		}
 	}
 	return command;
@@ -478,23 +474,7 @@ const runCodingHarnessCommand: CodingHarnessCommandRunner = async (
 	maxOutputBytes: number,
 ): Promise<CodingHarnessProbeResult> => {
 	const executable = await resolveCodingHarnessExecutable(command);
-	return new Promise((resolve, reject) => {
-		execFile(
-			executable,
-			[...args],
-			{
-				encoding: "utf8",
-				maxBuffer: maxOutputBytes,
-				shell: false,
-				timeout: timeoutMs,
-				windowsHide: true,
-			},
-			(error, stdout, stderr) => {
-				if (error) reject(error);
-				else resolve({ stdout, stderr });
-			},
-		);
-	});
+	return runProcess(executable, args, timeoutMs, maxOutputBytes);
 };
 
 export const probeCodingHarnessVersion: CodingHarnessProbe = (command, options) =>
@@ -528,7 +508,7 @@ function parsePiModels(output: string): string[] {
 async function discoverCodexModels(): Promise<string[]> {
 	const executable = await resolveCodingHarnessExecutable("codex");
 	return new Promise((resolve, reject) => {
-		const child = spawn(executable, ["app-server", "--listen", "stdio://"], {
+		const child = spawnHarnessProcess(executable, ["app-server", "--listen", "stdio://"], {
 			stdio: ["pipe", "pipe", "pipe"],
 			windowsHide: true,
 		});

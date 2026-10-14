@@ -10,6 +10,8 @@ export interface AgentDescriptor {
 }
 
 export interface AgentCapability {
+	/** Some structured CLIs report their native identity only on the first prompt. */
+	nativeSessionIdentity?: "on-start" | "on-prompt";
 	resumeSession: boolean;
 	interrupt: boolean;
 	tools: readonly string[];
@@ -22,7 +24,8 @@ export interface AgentSessionRef {
 	agentId: string;
 	adapterId: string;
 	harnessId: string;
-	nativeSessionId: string;
+	nativeSessionId?: string;
+	cwd: string;
 	/** Native identifier, never inferred from the harness name. */
 	model?: string;
 }
@@ -67,6 +70,7 @@ export interface AgentReply extends AgentTask {
 	sender: string;
 	recipient: string;
 	status: "completed" | "failed" | "aborted";
+	error?: string;
 	text: string;
 	artifacts: AgentArtifact[];
 	session: AgentSessionRef;
@@ -81,6 +85,9 @@ export interface AgentEvent {
 	timestamp: string;
 	type:
 		| "SESSION_STARTED"
+		| "SESSION_BOUND"
+		| "TOOL_STARTED"
+		| "TOOL_FINISHED"
 		| "PROMPT_ACCEPTED"
 		| "PROMPT_REJECTED"
 		| "REPLY_RETURNED"
@@ -96,6 +103,9 @@ export interface AgentEvent {
 	replyTo?: string;
 	status?: AgentReply["status"];
 	contentHash?: string;
+	toolCallId?: string;
+	toolName?: string;
+	isError?: boolean;
 }
 
 export interface AgentAdapter {
@@ -105,6 +115,7 @@ export interface AgentAdapter {
 	prompt(session: AgentSessionRef, prompt: AgentPrompt): Promise<AgentReply>;
 	interrupt(session: AgentSessionRef): Promise<void>;
 	stop(session: AgentSessionRef): Promise<void>;
+	close(session: AgentSessionRef): Promise<void>;
 	status(session: AgentSessionRef): AgentStatus;
 	dispose(): Promise<void>;
 }
@@ -188,9 +199,12 @@ export class AgentAdapterJournal {
 }
 
 export interface AgentRuntime {
-	readonly nativeSessionId: string;
+	readonly nativeSessionId?: string;
 	readonly model?: string;
-	prompt(text: string, signal: AbortSignal): Promise<{ text: string; failed?: boolean; artifacts?: AgentArtifact[] }>;
+	prompt(
+		text: string,
+		signal: AbortSignal,
+	): Promise<{ text: string; failed?: boolean; aborted?: boolean; error?: string; artifacts?: AgentArtifact[] }>;
 	interrupt(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -206,21 +220,29 @@ interface RuntimeState {
 	controller?: AbortController;
 	active?: Promise<AgentReply>;
 	closing: boolean;
+	nativeSessionIdAtStart?: string;
+	stopping?: Promise<void>;
+	closingPromise?: Promise<void>;
 }
 
 /** Common lifecycle validation around a runtime, independent of brand or model family. */
 export class RuntimeAgentAdapter implements AgentAdapter {
-	readonly descriptor: AgentDescriptor;
+	private readonly description: AgentDescriptor;
 	private readonly sessions = new Map<string, RuntimeState>();
 	private readonly factory: AgentRuntimeFactory;
 	private readonly journal: AgentAdapterJournal;
 	private disposed = false;
 	private starting = 0;
+	private disposing?: Promise<void>;
 
 	constructor(descriptor: AgentDescriptor, factory: AgentRuntimeFactory, journal: AgentAdapterJournal) {
-		this.descriptor = structuredClone(descriptor);
+		this.description = structuredClone(descriptor);
 		this.factory = factory;
 		this.journal = journal;
+	}
+
+	get descriptor(): AgentDescriptor {
+		return structuredClone(this.description);
 	}
 
 	async discover(): Promise<AgentDescriptor> {
@@ -239,7 +261,7 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 			const runtime = await this.factory(structuredClone(request));
 			try {
 				if (
-					!runtime.nativeSessionId ||
+					(!runtime.nativeSessionId && this.description.capabilities.nativeSessionIdentity !== "on-prompt") ||
 					(request.nativeSessionId && runtime.nativeSessionId !== request.nativeSessionId)
 				)
 					throw new Error("Runtime did not preserve the requested native session.");
@@ -251,6 +273,7 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 					adapterId: this.descriptor.id,
 					harnessId: this.descriptor.harness.id,
 					nativeSessionId: runtime.nativeSessionId,
+					cwd: request.cwd,
 					...(runtime.model !== undefined ? { model: runtime.model } : {}),
 				};
 				await this.journal.record({
@@ -267,6 +290,7 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 					lastSequence: 0,
 					messageIds: new Set(),
 					closing: false,
+					nativeSessionIdAtStart: runtime.nativeSessionId,
 				});
 				return structuredClone(ref);
 			} catch (error) {
@@ -285,8 +309,10 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 			session.agentId !== state.ref.agentId ||
 			session.adapterId !== state.ref.adapterId ||
 			session.harnessId !== state.ref.harnessId ||
-			session.nativeSessionId !== state.ref.nativeSessionId ||
-			session.model !== state.ref.model
+			(session.nativeSessionId !== state.ref.nativeSessionId &&
+				session.nativeSessionId !== state.nativeSessionIdAtStart) ||
+			session.model !== state.ref.model ||
+			session.cwd !== state.ref.cwd
 		)
 			throw new Error("Unknown or mismatched adapter session.");
 		return state;
@@ -360,13 +386,34 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 		});
 		let result: Awaited<ReturnType<AgentRuntime["prompt"]>> = { text: "" };
 		try {
-			if (state.runtime.nativeSessionId !== state.ref.nativeSessionId || state.runtime.model !== state.ref.model)
+			if (
+				(state.ref.nativeSessionId && state.runtime.nativeSessionId !== state.ref.nativeSessionId) ||
+				state.runtime.model !== state.ref.model
+			)
 				throw new Error("Native session configuration changed.");
 			if (!signal.aborted) result = await state.runtime.prompt(prompt.text, signal);
-			if (state.runtime.nativeSessionId !== state.ref.nativeSessionId || state.runtime.model !== state.ref.model)
-				result.failed = true;
-		} catch {
-			result = { text: "", failed: true };
+			if (
+				(state.ref.nativeSessionId && state.runtime.nativeSessionId !== state.ref.nativeSessionId) ||
+				state.runtime.model !== state.ref.model
+			)
+				result = { ...result, failed: true, error: "Native session configuration changed." };
+			if (!state.ref.nativeSessionId && state.runtime.nativeSessionId) {
+				state.ref.nativeSessionId = state.runtime.nativeSessionId;
+				await this.journal.record({
+					type: "SESSION_BOUND",
+					session: state.ref,
+					sender: state.ref.agentId,
+					recipient: "klerm",
+					reason: "Native protocol reported the session identity.",
+					taskId: prompt.taskId,
+					correlationId: prompt.correlationId,
+					messageId: prompt.messageId,
+				});
+			}
+			if (!signal.aborted && !result.aborted && !result.failed && !state.ref.nativeSessionId)
+				result = { ...result, failed: true, error: "Native protocol returned no session identity." };
+		} catch (error) {
+			result = { text: "", failed: true, error: error instanceof Error ? error.message : "Native turn failed." };
 		}
 		const reply: AgentReply = {
 			version: 1,
@@ -378,7 +425,8 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 			correlationId: prompt.correlationId,
 			sender: state.ref.agentId,
 			recipient: prompt.sender,
-			status: signal.aborted ? "aborted" : result.failed ? "failed" : "completed",
+			status: signal.aborted || result.aborted ? "aborted" : result.failed ? "failed" : "completed",
+			...(result.error ? { error: result.error } : {}),
 			text: result.text,
 			artifacts: result.artifacts ?? [],
 			session: structuredClone(state.ref),
@@ -407,46 +455,118 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 		if (!state.active) return;
 		const active = state.active;
 		const controller = state.controller;
-		await this.journal.record({
-			type: "INTERRUPT_REQUESTED",
-			session: state.ref,
-			sender: "user",
-			recipient: state.ref.agentId,
-			reason: "User requested interruption.",
-		});
+		let auditError: unknown;
+		try {
+			await this.journal.record({
+				type: "INTERRUPT_REQUESTED",
+				session: state.ref,
+				sender: "user",
+				recipient: state.ref.agentId,
+				reason: "User requested interruption.",
+			});
+		} catch (error) {
+			auditError = error;
+		}
+		let runtimeError: unknown;
 		if (state.controller === controller) {
 			controller?.abort();
-			await state.runtime.interrupt();
+			try {
+				await state.runtime.interrupt();
+			} catch (error) {
+				runtimeError = error;
+			}
 		}
-		await active;
+		try {
+			await active;
+		} catch (error) {
+			runtimeError ??= error;
+		}
+		if (auditError) throw auditError;
+		if (runtimeError) throw runtimeError;
 	}
 
 	async stop(session: AgentSessionRef): Promise<void> {
 		const state = this.state(session);
-		if (state.status === "stopped") return;
+		if (state.stopping) return state.stopping;
+		if (state.status === "stopped" && !state.closing) return;
 		state.closing = true;
+		let stopped = false;
+		let recorded = false;
+		state.stopping = (async () => {
+			let failure: unknown;
+			if (state.active) {
+				try {
+					await this.interrupt(session);
+				} catch (error) {
+					failure = error;
+				}
+			}
+			if (!state.active) {
+				state.status = "stopped";
+				stopped = true;
+			}
+			try {
+				await this.journal.record({
+					type: "SESSION_STOPPED",
+					session: state.ref,
+					sender: "user",
+					recipient: state.ref.agentId,
+					reason: "Session stopped; native context retained.",
+				});
+				recorded = true;
+			} catch (error) {
+				failure ??= error;
+			}
+			if (failure) throw failure;
+		})();
 		try {
-			if (state.active) await this.interrupt(session);
-			await this.journal.record({
-				type: "SESSION_STOPPED",
-				session: state.ref,
-				sender: "user",
-				recipient: state.ref.agentId,
-				reason: "Session stopped; native context retained.",
-			});
-			state.status = "stopped";
+			await state.stopping;
 		} finally {
-			if (state.status !== "stopped") state.closing = false;
+			state.stopping = undefined;
+			if (stopped && recorded) state.closing = false;
+		}
+	}
+
+	async close(session: AgentSessionRef): Promise<void> {
+		const state = this.state(session);
+		if (state.closingPromise) return state.closingPromise;
+		state.closingPromise = (async () => {
+			let stopError: unknown;
+			try {
+				await this.stop(session);
+			} catch (error) {
+				stopError = error;
+			}
+			await state.runtime.dispose();
+			this.sessions.delete(session.id);
+			if (stopError) throw stopError;
+		})();
+		try {
+			await state.closingPromise;
+		} finally {
+			state.closingPromise = undefined;
 		}
 	}
 
 	async dispose(): Promise<void> {
+		if (this.disposing) return this.disposing;
 		if (this.starting) throw new Error("Wait for session startup before disposal.");
 		this.disposed = true;
-		for (const state of this.sessions.values()) {
-			await this.stop(state.ref);
-			await state.runtime.dispose();
-			this.sessions.delete(state.ref.id);
+		this.disposing = (async () => {
+			const errors: unknown[] = [];
+			for (const state of [...this.sessions.values()]) {
+				try {
+					await this.close(state.ref);
+				} catch (error) {
+					errors.push(error);
+				}
+			}
+			if (errors.length) throw new AggregateError(errors, "Native adapter cleanup failed.");
+		})();
+		try {
+			await this.disposing;
+		} finally {
+			this.disposing = undefined;
 		}
 	}
 }

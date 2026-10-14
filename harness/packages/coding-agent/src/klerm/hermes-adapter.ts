@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AcpConnection, acpRecord } from "./acp-connection.ts";
+import type { AgentCapability } from "./agent-adapter-contract.ts";
 import type {
 	CodingHarnessAdapter,
 	CodingHarnessAdapterEvent,
@@ -22,6 +23,13 @@ interface HermesSession {
 /** Hermes v0.20 ACP; credentials, native tools and history stay in Hermes. */
 export class HermesAdapter implements CodingHarnessAdapter {
 	readonly kind = "hermes" as const;
+	readonly capabilities: AgentCapability = {
+		nativeSessionIdentity: "on-start",
+		resumeSession: true,
+		interrupt: true,
+		tools: [],
+		enforcedRoles: ["builder"],
+	};
 	private readonly sessions = new Map<string, HermesSession>();
 	private readonly listeners = new Set<CodingHarnessAdapterListener>();
 	private readonly spawnProcess?: CodingHarnessProcessSpawner;
