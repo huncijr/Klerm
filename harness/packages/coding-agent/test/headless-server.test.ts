@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Script } from "node:vm";
+import { createContext, Script } from "node:vm";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { HEADLESS_PAGE } from "../src/server/headless-page.ts";
 import { createHeadlessServer } from "../src/server/headless-server.ts";
 import type { HeadlessBackend } from "../src/server/rpc-process-backend.ts";
 
@@ -43,10 +45,78 @@ async function setup(directory?: string) {
 }
 
 describe("headless HTTP server", () => {
+	test("worker form uses declared capabilities and preserves the chosen model across async configuration reload", async () => {
+		interface Element {
+			value: string;
+			readOnly: boolean;
+			disabled: boolean;
+			textContent: string;
+			children: Element[];
+			onclick?: () => Promise<void>;
+			onchange?: () => void;
+			replaceChildren(...children: Element[]): void;
+		}
+		const elements = new Map<string, Element>();
+		const element = (): Element => ({
+			value: "",
+			readOnly: false,
+			disabled: false,
+			textContent: "",
+			children: [],
+			replaceChildren(...children) {
+				this.children = children;
+				if (!children.some((child) => child.value === this.value)) this.value = children[0]?.value ?? "";
+			},
+		});
+		const get = (id: string) => {
+			if (!elements.has(id)) elements.set(id, element());
+			return elements.get(id)!;
+		};
+		let slots = { externalHarnessesEnabled: false, agents: [] as Array<Record<string, unknown>> };
+		const harnesses = [
+			{
+				kind: "runtime-native",
+				available: true,
+				adapterConnected: true,
+				capabilities: { modelSelection: "native", executionProfiles: ["native"] },
+			},
+			{
+				kind: "runtime-explicit",
+				available: true,
+				adapterConnected: true,
+				capabilities: { modelSelection: "explicit", executionProfiles: ["native"] },
+			},
+		];
+		const context = createContext({
+			document: { getElementById: get, createElement: element },
+			crypto: { randomUUID },
+			fetch: async (_url: string, input: { body: string }) => {
+				const request = JSON.parse(input.body) as { type: string; slots?: typeof slots };
+				if (request.type === "set_coding_harness_slots") slots = request.slots!;
+				return { ok: true, json: async () => ({ success: true, data: { slots, harnesses } }) };
+			},
+		});
+		new Script(HEADLESS_PAGE.match(/<script>([\s\S]*)<\/script>/)![1]!).runInContext(context);
+		await new Script("loadSlots()").runInContext(context);
+		expect(get("model").value).toBe("native-default");
+		expect(get("model").readOnly).toBe(true);
+		expect(get("profile").children.map((child) => child.value)).toEqual(["native"]);
+		get("harness").value = "runtime-explicit";
+		get("harness").onchange?.();
+		get("agent").value = "agent2";
+		get("model").value = "Owner/Case Sensitive Model";
+		await get("configureWorker").onclick?.();
+		expect(slots.agents[0]).toMatchObject({
+			id: "agent2",
+			kind: "runtime-explicit",
+			model: "Owner/Case Sensitive Model",
+			executionProfile: "native",
+		});
+	});
 	test("serves a browser page with valid JavaScript and no private owner token", async () => {
 		const server = await setup();
 		const page = await (await fetch(server.url)).text();
-		expect(page).toContain("Configure Hermes");
+		expect(page).toContain("Configure worker");
 		expect(page).not.toContain("test-owner-token-");
 		const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1];
 		expect(script).toBeDefined();

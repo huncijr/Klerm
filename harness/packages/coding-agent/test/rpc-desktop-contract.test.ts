@@ -193,6 +193,7 @@ describe("Klerm desktop RPC contract", () => {
 		const adapterListeners = new Set<CodingHarnessAdapterListener>();
 		const fakeCodexAdapter: CodingHarnessAdapter = {
 			kind: "codex",
+			capabilities: { interrupt: true, resumeSession: true, tools: [], enforcedRoles: ["planner", "builder"] },
 			startSession: async (agent) => ({
 				id: `session-${agent.id}`,
 				agentId: agent.id,

@@ -4,9 +4,20 @@ import { join } from "node:path";
 import { runProcess, spawnHarnessProcess } from "../utils/child-process.ts";
 import { nativeHarnessSearchDirectories } from "../utils/harness-environment.ts";
 import { type AcpAgentScan, type CodingHarnessScanKind, scanAcpHarness } from "./acp-discovery.ts";
+import type { AgentCapability } from "./agent-adapter-contract.ts";
 import type { KlermStrengthBand } from "./model-profile.ts";
 
-export const CODING_HARNESS_KINDS = ["klerm", "pi", "claude-code", "codex", "opencode", "cline", "hermes"] as const;
+export const CODING_HARNESS_KINDS = [
+	"klerm",
+	"pi",
+	"claude-code",
+	"codex",
+	"opencode",
+	"cline",
+	"hermes",
+	"openclaw",
+] as const;
+export const NATIVE_MODEL_CONFIGURATION = "native-default";
 export const CODING_HARNESS_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type CodingHarnessKind = (typeof CODING_HARNESS_KINDS)[number];
 export type CodingHarnessEffort = (typeof CODING_HARNESS_EFFORTS)[number];
@@ -21,6 +32,7 @@ const CODING_HARNESS_LABELS: Record<CodingHarnessKind, string> = {
 	opencode: "OpenCode",
 	cline: "Cline",
 	hermes: "Hermes",
+	openclaw: "OpenClaw",
 };
 
 export function codingHarnessLabel(kind: CodingHarnessKind): string {
@@ -54,6 +66,7 @@ export interface CodingHarnessDiscoveryResult {
 	version?: string;
 	error?: string;
 	models: string[];
+	capabilities?: AgentCapability;
 	/** Present when the harness was identified through an ACP `initialize` handshake. */
 	acp?: AcpAgentScan;
 }
@@ -110,7 +123,7 @@ export interface CodingHarnessProbeResult {
 }
 
 export type CodingHarnessProbe = (
-	command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes",
+	command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes" | "openclaw",
 	options: CodingHarnessProbeOptions,
 ) => Promise<CodingHarnessProbeResult>;
 
@@ -368,7 +381,7 @@ export function createCodingHarnessAgent(id: string, kind: CodingHarnessSlot = "
 export function createCodingHarnessSetup(
 	slots: CodingHarnessSlots,
 	harnesses: CodingHarnessDiscoveryResult[],
-	connectedAdapters: ReadonlySet<CodingHarnessKind> = new Set(),
+	connectedAdapters: ReadonlyMap<CodingHarnessKind, AgentCapability> = new Map(),
 ): CodingHarnessSetup {
 	const discovery = new Map(harnesses.map((harness) => [harness.kind, harness]));
 	const byAgentId = (left: CodingHarnessAgentSettings, right: CodingHarnessAgentSettings) =>
@@ -378,9 +391,18 @@ export function createCodingHarnessSetup(
 	): agent is CodingHarnessAgentSettings & { kind: CodingHarnessKind; model: string } => {
 		if (!slots.externalHarnessesEnabled) return false;
 		if (!agent.enabled || !agent.kind || !agent.model || !discovery.get(agent.kind)?.available) return false;
-		if (agent.kind === "hermes" && agent.role === "planner") return false;
 		if (agent.kind === "klerm") return discovery.get("klerm")?.models.includes(agent.model) === true;
-		return connectedAdapters.has(agent.kind);
+		const capability = connectedAdapters.get(agent.kind);
+		return Boolean(
+			capability?.enforcedRoles.includes(agent.role) &&
+				(!capability.requiresAcpHandshake || discovery.get(agent.kind)?.acp?.protocolVersion === 1) &&
+				(capability.modelSelection !== "native" || agent.model === NATIVE_MODEL_CONFIGURATION) &&
+				(capability.supportsEffortOverride !== false || agent.effort === "off") &&
+				(capability.supportsToolOverrides !== false || agent.tools.length === 0) &&
+				(!agent.executionProfile ||
+					!capability.executionProfiles ||
+					capability.executionProfiles.includes(agent.executionProfile)),
+		);
 	};
 	const ordered = slots.agents.filter(runnable).sort(byAgentId);
 	const runnableAgents = ordered.map((agent, index) => {
@@ -401,9 +423,9 @@ export function createCodingHarnessSetup(
 			adapterCapabilities: {
 				prompt: true as const,
 				abort: true as const,
-				resumeSession:
-					agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode" || agent.kind === "hermes",
-				roleEnforcement: agent.kind === "klerm" || agent.kind === "codex" || agent.kind === "opencode",
+				resumeSession: agent.kind === "klerm" || connectedAdapters.get(agent.kind)?.resumeSession === true,
+				roleEnforcement:
+					agent.kind === "klerm" || connectedAdapters.get(agent.kind)?.enforcedRoles.includes("planner") === true,
 				childTaskEvents: false as const,
 			},
 		};
@@ -420,14 +442,48 @@ export function createCodingHarnessSetup(
 			if (!discovery.get(agent.kind)?.available)
 				return [{ agentId: agent.id, reason: `${label} is not available.` }];
 			if (!agent.model) return [{ agentId: agent.id, reason: `${label} has no configured model.` }];
-			if (agent.kind === "hermes" && agent.role === "planner")
-				return [{ agentId: agent.id, reason: `${label} does not enforce read-only Plan mode. Select Build.` }];
 			if (agent.kind === "klerm" && !discovery.get("klerm")?.models.includes(agent.model)) {
 				return [{ agentId: agent.id, reason: `${label} model is not available.` }];
 			}
 			if (agent.kind !== "klerm" && !connectedAdapters.has(agent.kind)) {
 				return [{ agentId: agent.id, reason: `${label} has no connected prompt adapter.` }];
 			}
+			const capability = connectedAdapters.get(agent.kind);
+			if (agent.kind !== "klerm" && !capability?.enforcedRoles.includes(agent.role))
+				return [
+					{
+						agentId: agent.id,
+						reason:
+							agent.role === "planner"
+								? `${label} does not enforce read-only Plan mode. Select Build.`
+								: `${label} does not support this role.`,
+					},
+				];
+			if (capability?.requiresAcpHandshake && discovery.get(agent.kind)?.acp?.protocolVersion !== 1)
+				return [
+					{
+						agentId: agent.id,
+						reason: `${label} needs a successful native ACP/Gateway connection. Check native setup and Refresh.`,
+					},
+				];
+			if (capability?.modelSelection === "native" && agent.model !== NATIVE_MODEL_CONFIGURATION)
+				return [{ agentId: agent.id, reason: `${label} owns model selection. Select Native configuration.` }];
+			if (
+				(capability?.supportsEffortOverride === false && agent.effort !== "off") ||
+				(capability?.supportsToolOverrides === false && agent.tools.length)
+			)
+				return [
+					{
+						agentId: agent.id,
+						reason: `${label} owns reasoning/tools configuration. Clear Klerm overrides and configure the native runtime.`,
+					},
+				];
+			if (
+				agent.executionProfile &&
+				capability?.executionProfiles &&
+				!capability.executionProfiles.includes(agent.executionProfile)
+			)
+				return [{ agentId: agent.id, reason: `${label} does not support the selected execution profile.` }];
 			return [];
 		});
 	const blockingReason =
@@ -440,6 +496,9 @@ export function createCodingHarnessSetup(
 		harnesses: harnesses.map((harness) => ({
 			...harness,
 			adapterConnected: harness.kind === "klerm" || connectedAdapters.has(harness.kind),
+			...(connectedAdapters.get(harness.kind)
+				? { capabilities: structuredClone(connectedAdapters.get(harness.kind)!) }
+				: {}),
 		})),
 		effectiveRouting,
 		externalPromptingAvailable,
@@ -596,6 +655,7 @@ export async function discoverCodingHarnessModels(
 		return parseModelLines(result.stdout ?? "");
 	}
 	if (kind === "codex") return codexModels();
+	if (kind === "openclaw") return [NATIVE_MODEL_CONFIGURATION];
 	if (kind === "pi") {
 		const result = await run("pi", ["--list-models"], 15_000, 1_048_576);
 		return parsePiModels(result.stdout ?? "");
@@ -624,6 +684,7 @@ export async function discoverCodingHarnesses(
 				["opencode", "opencode"],
 				["cline", "cline"],
 				["hermes", "hermes"],
+				["openclaw", "openclaw"],
 			] as const
 		).map(async ([kind, command]) => {
 			// ACP-first discovery (Zed style): a completed `initialize` handshake
@@ -634,7 +695,7 @@ export async function discoverCodingHarnesses(
 					kind,
 					available: true,
 					builtin: false,
-					models: kind === "hermes" ? ["native-default"] : [],
+					models: kind === "hermes" || kind === "openclaw" ? [NATIVE_MODEL_CONFIGURATION] : [],
 					...(acp.agentVersion ? { version: acp.agentVersion.slice(0, MAX_VERSION_LENGTH) } : {}),
 					acp,
 				};
@@ -645,7 +706,7 @@ export async function discoverCodingHarnesses(
 					kind,
 					available: true,
 					builtin: false,
-					models: kind === "hermes" ? ["native-default"] : [],
+					models: kind === "hermes" || kind === "openclaw" ? [NATIVE_MODEL_CONFIGURATION] : [],
 					...(version ? { version } : {}),
 				};
 			} catch {

@@ -10,6 +10,12 @@ export interface AgentDescriptor {
 }
 
 export interface AgentCapability {
+	/** Native configuration is a selector, never a resolved model identity. */
+	modelSelection?: "explicit" | "native" | "explicit-or-native";
+	requiresAcpHandshake?: boolean;
+	executionProfiles?: readonly string[];
+	supportsEffortOverride?: boolean;
+	supportsToolOverrides?: boolean;
 	/** Some structured CLIs report their native identity only on the first prompt. */
 	nativeSessionIdentity?: "on-start" | "on-prompt";
 	resumeSession: boolean;
@@ -70,6 +76,7 @@ export interface AgentReply extends AgentTask {
 	sender: string;
 	recipient: string;
 	status: "completed" | "failed" | "aborted";
+	uncertain?: boolean;
 	error?: string;
 	text: string;
 	artifacts: AgentArtifact[];
@@ -106,6 +113,7 @@ export interface AgentEvent {
 	toolCallId?: string;
 	toolName?: string;
 	isError?: boolean;
+	uncertain?: boolean;
 }
 
 export interface AgentAdapter {
@@ -204,7 +212,14 @@ export interface AgentRuntime {
 	prompt(
 		text: string,
 		signal: AbortSignal,
-	): Promise<{ text: string; failed?: boolean; aborted?: boolean; error?: string; artifacts?: AgentArtifact[] }>;
+	): Promise<{
+		text: string;
+		failed?: boolean;
+		aborted?: boolean;
+		uncertain?: boolean;
+		error?: string;
+		artifacts?: AgentArtifact[];
+	}>;
 	interrupt(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -425,7 +440,14 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 			correlationId: prompt.correlationId,
 			sender: state.ref.agentId,
 			recipient: prompt.sender,
-			status: signal.aborted || result.aborted ? "aborted" : result.failed ? "failed" : "completed",
+			status: result.uncertain
+				? "failed"
+				: signal.aborted || result.aborted
+					? "aborted"
+					: result.failed
+						? "failed"
+						: "completed",
+			...(result.uncertain ? { uncertain: true } : {}),
 			...(result.error ? { error: result.error } : {}),
 			text: result.text,
 			artifacts: result.artifacts ?? [],
@@ -442,6 +464,7 @@ export class RuntimeAgentAdapter implements AgentAdapter {
 			messageId: reply.messageId,
 			replyTo: reply.replyTo,
 			status: reply.status,
+			...(reply.uncertain ? { uncertain: true } : {}),
 			contentHash: createHash("sha256").update(reply.text).digest("hex"),
 		});
 		reply.sequence = recorded.sequence;

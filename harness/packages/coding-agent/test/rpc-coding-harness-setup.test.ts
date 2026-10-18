@@ -110,6 +110,7 @@ describe("coding harness setup RPC", () => {
 		};
 		const opencodeAdapter: CodingHarnessAdapter = {
 			kind: "opencode",
+			capabilities: { interrupt: true, resumeSession: true, tools: [], enforcedRoles: ["planner", "builder"] },
 			startSession: vi.fn(async () => adapterSession),
 			prompt: vi.fn(async () => {
 				adapterListener?.({ type: "message", agentId: "agent5", text: "OpenCode reply" });
@@ -279,6 +280,11 @@ describe("coding harness setup RPC", () => {
 				expect(opencodeAdapter.prompt).toHaveBeenCalledWith(
 					adapterSession,
 					expect.stringContaining("use OpenCode"),
+					expect.objectContaining({
+						sender: "user",
+						taskId: expect.any(String),
+						correlationId: expect.any(String),
+					}),
 				),
 			);
 			expect(responses()).toEqual(
@@ -342,6 +348,7 @@ describe("coding harness setup RPC", () => {
 		const debugRecords: AiDebugTraceEvent[] = [];
 		const adapter = (kind: "opencode" | "codex"): CodingHarnessAdapter => ({
 			kind,
+			capabilities: { interrupt: true, resumeSession: true, tools: [], enforcedRoles: ["planner", "builder"] },
 			startSession: vi.fn(async (configured) => ({
 				id: `${kind}-${configured.id}`,
 				agentId: configured.id,

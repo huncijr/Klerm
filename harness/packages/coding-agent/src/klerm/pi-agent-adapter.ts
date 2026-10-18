@@ -25,16 +25,23 @@ export class PiAgentAdapter extends RuntimeAgentAdapter {
 					async prompt(text, signal) {
 						let result = "";
 						let failed = false;
+						let aborted = false;
 						const unsubscribe = session.subscribe((event) => {
 							if (event.type !== "message_end" || event.message.role !== "assistant") return;
 							result = event.message.content
 								.flatMap((part) => (part.type === "text" ? [part.text] : []))
 								.join("\n");
 							failed = event.message.stopReason === "error" || event.message.stopReason === "aborted";
+							aborted = event.message.stopReason === "aborted";
 						});
 						try {
 							if (!signal.aborted) await session.prompt(text, { expandPromptTemplates: false });
-							return { text: result, failed };
+							return { text: result, failed, aborted };
+						} catch (error) {
+							// AgentSession.abort drains the local native loop. Unlike a remote
+							// Gateway losing its cancel acknowledgement, this is a known abort.
+							if (signal.aborted) return { text: result, aborted: true };
+							throw error;
 						} finally {
 							unsubscribe();
 						}

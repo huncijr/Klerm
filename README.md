@@ -34,7 +34,7 @@ Planner / Builder / Reviewer iterations. Handoffs and tool activity stay visible
 | --- | --- |
 | Klerm / inherited Pi runtime | Built-in coding tools and model routing |
 | Codex CLI, OpenCode | Native prompt/session adapters connected |
-| Hermes | Experimental adapter; end-to-end acceptance and shared Kanban/cron incomplete |
+| Hermes, OpenClaw | Native ACP adapters; real acceptance and shared Kanban/cron incomplete |
 | Claude Code, standalone Pi, Cline | Discovery/setup; prompt bridge not connected yet |
 
 Install and authenticate external harnesses yourself. Discovery does not mean
@@ -83,7 +83,7 @@ Local workers can use Ollama, LM Studio, vLLM, or llama.cpp. A local model is op
 
 [Personal Agents and Kanban](harness/packages/desktop/PERSONAL_AGENTS.md) · [Graph](harness/packages/desktop/GRAPH_WORKSPACE.md) · [CLI](harness/packages/coding-agent/README.md)
 [Windows/macOS/Linux setup](harness/packages/desktop/CROSS_PLATFORM.md) · [Shortcuts](harness/packages/desktop/KEYBOARD_SHORTCUTS.md)
-[Browser setup](harness/packages/browser-worker/README.md) · [Self-hosting and Docker](deploy/docker/README.md)
+[Browser setup](harness/packages/browser-worker/README.md) · [OpenClaw](harness/packages/coding-agent/docs/openclaw.md) · [Self-hosting and Docker](deploy/docker/README.md)
 [Current status and next steps](STATUS.md) · [Contributing workflow](DEVELOPMENT.md)
 
 Configuration lives in `~/.klerm/agent/`; task and decision logs live in the active

@@ -24,15 +24,15 @@ function agent(kind: "opencode" | "codex", role: "planner" | "builder" = "builde
 }
 
 function processSpawner(runs: string[][]) {
-	const calls: Array<{ command: string; args: readonly string[]; input: string }> = [];
-	const spawnProcess: CodingHarnessProcessSpawner = (command, args) => {
+	const calls: Array<{ command: string; args: readonly string[]; input: string; cwd: string }> = [];
+	const spawnProcess: CodingHarnessProcessSpawner = (command, args, options) => {
 		const child = new EventEmitter() as ChildProcessWithoutNullStreams;
 		const stdin = new PassThrough();
 		const stdout = new PassThrough();
 		const stderr = new PassThrough();
 		Object.assign(child, { stdin, stdout, stderr, killed: false });
 		child.kill = vi.fn(() => true);
-		const call = { command, args, input: "" };
+		const call = { command, args, input: "", cwd: options.cwd };
 		calls.push(call);
 		stdin.on("data", (chunk: Buffer) => {
 			call.input += chunk.toString("utf8");
@@ -104,8 +104,9 @@ describe("coding harness adapters", () => {
 		await adapter.prompt(session, "second");
 
 		expect(session.nativeSessionId).toBe("ses_native");
-		expect(fake.calls[0]).toMatchObject({ command: "opencode", input: "first" });
-		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "build", "--dir", "/repo"]));
+		expect(fake.calls[0]).toMatchObject({ command: "opencode", input: "first", cwd: "/repo" });
+		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "build"]));
+		expect(fake.calls[0]?.args).not.toContain("--dir");
 		expect(fake.calls[0]?.args).not.toContain("--session");
 		expect(fake.calls[1]?.args).toContain("ses_native");
 		expect(events).toEqual([
@@ -138,7 +139,31 @@ describe("coding harness adapters", () => {
 		const session = await adapter.startSession(agent("opencode", "planner"), "/repo");
 		await adapter.prompt(session, "plan this change");
 
-		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "plan", "--dir", "/repo"]));
+		expect(fake.calls[0]).toMatchObject({ cwd: "/repo" });
+		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--agent", "plan"]));
+		expect(fake.calls[0]?.args).not.toContain("--dir");
+	});
+
+	test("OpenCode reports native GPT authentication errors instead of completing or selecting another model", async () => {
+		const fake = processSpawner([
+			[
+				JSON.stringify({
+					type: "error",
+					sessionID: "ses_denied",
+					error: { type: "provider.auth", message: "Request failed: 401" },
+				}),
+			],
+		]);
+		const adapter = new OpenCodeAdapter(fake.spawnProcess);
+		const events: CodingHarnessAdapterEvent[] = [];
+		adapter.subscribe((event) => events.push(event));
+		const session = await adapter.startSession({ ...agent("opencode"), model: "openai/gpt-6.1-sol" }, "/repo");
+		await adapter.prompt(session, "GPT-only acceptance");
+		expect(fake.calls).toHaveLength(1);
+		expect(fake.calls[0]?.args).toEqual(expect.arrayContaining(["--model", "openai/gpt-6.1-sol"]));
+		expect(events).toContainEqual({ type: "error", agentId: "agent5", message: "Request failed: 401" });
+		expect(events.at(-1)).toEqual({ type: "settled", agentId: "agent5", status: "failed" });
+		await adapter.closeSession(session);
 	});
 
 	test("Codex maps its structured lifecycle and gives planners a read-only sandbox", async () => {

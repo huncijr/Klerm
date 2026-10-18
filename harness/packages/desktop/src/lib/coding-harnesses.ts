@@ -22,6 +22,7 @@ const codingHarnessMetadata: Record<CodingHarnessKind, CodingHarnessMetadata> = 
 	opencode: { label: "OpenCode", supportsModelDiscovery: true },
 	cline: { label: "Cline", supportsModelDiscovery: false },
 	hermes: { label: "Hermes", supportsModelDiscovery: false },
+	openclaw: { label: "OpenClaw", supportsModelDiscovery: false },
 };
 
 export function getCodingHarnessMetadata(kind: CodingHarnessKind): CodingHarnessMetadata {
@@ -91,7 +92,10 @@ export function codingHarnessModelOptions(
 	return (
 		setup?.harnesses
 			.find((harness) => harness.kind === agent.kind)
-			?.models.map((model) => ({ value: model, label: model })) ?? []
+			?.models.map((model) => ({
+				value: model,
+				label: model === "native-default" ? "Native configuration (runtime-owned model)" : model,
+			})) ?? []
 	);
 }
 

@@ -204,8 +204,13 @@ fixture worker, not an authenticated AI harness). The launcher change needs a
 fresh CI run before its Windows/macOS result can be claimed.
 
 Current readiness, revision-scoped evidence and implementation order are in
-[STATUS.md](../../../STATUS.md). The launcher changes above are a working-tree
-follow-up, not part of the `ecb4320` platform result.
+[STATUS.md](../../../STATUS.md). The launcher changes shipped in `73291bf` /
+`96af208`. CI run `38573420931` passed Windows/Linux, but both macOS jobs stopped
+at the launcher fixture: `/var/...` and `/private/var/...` were compared as raw
+strings even though they name the same physical directory. The local correction
+compares realpaths and exercises an explicit symlink/Windows junction. A fresh
+CI run must verify the complete macOS build/startup again; the earlier successful
+`ecb4320` result does not prove the new adapter code on every platform.
 
 The embedded CEF Browser remains Linux development functionality. Its optional
 Cargo binary is excluded from ordinary Windows/macOS builds; those platforms

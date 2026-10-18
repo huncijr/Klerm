@@ -123,6 +123,7 @@ describe("registered native dispatch", () => {
 		for (const content of ["private prompt", "private input", "private output", "first response"])
 			expect(JSON.stringify(records)).not.toContain(content);
 		await adapter.closeSession(ref);
+		await adapter.closeSession(ref);
 	});
 
 	test("settled observers may submit a follow-up only after both native and common ownership drained", async () => {

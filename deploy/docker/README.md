@@ -5,11 +5,12 @@ coding-agent RPC backend and a small browser control page. The same backend owns
 agent tasks, built-in Kanban, configuration, native sessions, and existing logs.
 Closing the browser does not close the backend.
 
-This is the first server slice, not the completed always-on/Hermes roadmap.
+This is the first server slice, not the completed always-on/native-worker roadmap.
 Current readiness and deployment gates: [STATUS.md](../../STATUS.md).
-OpenClaw's Gateway-backed ACP interface has been audited; its Klerm adapter and
-target-host acceptance are not implemented. The base image includes no external
-harness or Gateway. See STATUS.md before treating startup as full native readiness.
+OpenClaw's Gateway-backed ACP adapter and shared setup/dispatch are implemented;
+real Gateway and target-host acceptance remain open. The base image includes no
+external harness or Gateway. [OpenClaw setup and acceptance](../../harness/packages/coding-agent/docs/openclaw.md)
+describes the native prerequisites and unsupported operations.
 
 ## Native Linux installation
 
@@ -137,8 +138,10 @@ On the Klerm browser page:
 1. Connect and click Refresh discovery. Hermes is probed via ACP initialize,
    with the fixed version command as fallback. Scans also run every 60 seconds
    through the same backend registry; overlapping scans share one operation.
-2. Select an agent, keep model `native-default` to use Hermes's own configured
-   model, select Native or Full access, and click Configure Hermes.
+2. Select an agent and the installed harness from **Harness**, keep model
+   `native-default` to use its own configured model, choose an advertised profile,
+   and click **Configure worker**. Full access is offered only when the adapter
+   declares it. An explicit model ID stays available where the native adapter supports it.
 3. Submit a short prompt using Send to selected agent. Hermes owns the native
    tools, authentication, and history. Tool activity and final replies appear
    in the event feed, and the existing bridge logs record task attribution.
@@ -151,6 +154,13 @@ container permissions. Native profile answers permission requests with denial
 because an interactive Hermes approval UI is not included in this slice.
 Changing the profile affects the next run and reconstructs the adapter session;
 it does not change an active turn's captured profile.
+
+The worker form is capability-driven and also exposes OpenClaw when installed.
+For OpenClaw select Native configuration, Build, Off reasoning and no Klerm tool
+overrides; the native Gateway owns those settings. A successful ACP handshake is
+required, and unsupported Plan/Full access are rejected. Permission requests are
+denied visibly until an interactive native relay exists; native Gateway policy
+can allow the intended operations without changing Klerm's other workers.
 
 Hermes's ACP does not enforce a read-only Plan role. Klerm excludes Hermes Plan
 slots and rejects their startup rather than describing a prompt as enforcement.

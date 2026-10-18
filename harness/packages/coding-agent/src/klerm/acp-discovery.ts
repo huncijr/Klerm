@@ -18,7 +18,7 @@ export interface AcpAgentScan {
 
 export type AcpScanRunner = (kind: CodingHarnessScanKind) => Promise<AcpAgentScan | undefined>;
 
-export type CodingHarnessScanKind = "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes";
+export type CodingHarnessScanKind = "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes" | "openclaw";
 
 /** Known ACP adapter commands per harness kind, mirroring the agents Zed connects to. */
 export const ACP_AGENT_COMMANDS: Readonly<Record<CodingHarnessScanKind, readonly string[]>> = {
@@ -28,6 +28,7 @@ export const ACP_AGENT_COMMANDS: Readonly<Record<CodingHarnessScanKind, readonly
 	opencode: ["opencode-acp"],
 	cline: ["cline-acp"],
 	hermes: ["hermes"],
+	openclaw: ["openclaw"],
 };
 
 const ACP_INITIALIZE_TIMEOUT_MS = 5_000;
@@ -128,8 +129,8 @@ export async function scanAcpHarness(kind: CodingHarnessScanKind): Promise<AcpAg
 		// Hermes cold-starts a Python runtime before accepting ACP frames.
 		const scan = await probeAcpAgent(
 			command,
-			kind === "hermes" ? ["acp"] : [],
-			kind === "hermes" ? 15_000 : ACP_INITIALIZE_TIMEOUT_MS,
+			kind === "hermes" || kind === "openclaw" ? ["acp"] : [],
+			kind === "hermes" || kind === "openclaw" ? 15_000 : ACP_INITIALIZE_TIMEOUT_MS,
 		);
 		if (scan) return scan;
 	}

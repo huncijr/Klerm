@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added an OpenClaw Gateway-backed ACP worker in live discovery/setup/dispatch, isolated acknowledged Gateway session keys, explicit safe resume, attributed tools, native model ownership and truthful cancellation/permission failures; real Gateway/platform acceptance remains open.
+- Added capability-driven native worker configuration on the headless control page and native adapter contracts in the desktop OS CI matrix.
 - Added live registry-backed native adapter dispatch: configured harness turns run through the shared adapter contract with correlated task/correlation attribution, while native JSONL/ACP parsing and session ownership stay in each native adapter.
 - Added an opt-in real native-harness acceptance command that checks prompt/reply, follow-up context, same-session reuse and native file tools with the user's configured account and model, retaining a report and ordered decision log.
 - Added an extensible SDK agent-adapter registry with independent harness/model identities, correlated prompt/reply envelopes, ordered audit decisions, a deterministic fake worker and a Pi/Klerm native-session wrapper with shared contract tests.
@@ -73,6 +75,13 @@
 
 ### Fixed
 
+- Fixed OpenCode v2.0.28 rejecting the adapter's unsupported `run --dir` option; use the already-configured child process cwd and preserve explicit model selection/native authentication errors.
+- Fixed Hermes event observers being able to terminate native execution or mutate another observer's tool attribution; isolate callbacks and deep-copy events, with same-session follow-up regressions.
+- Fixed Hermes reporting token/turn-limit, refusal and unknown ACP stop reasons as completed; preserve uncertain execution on bridge loss or unacknowledged Stop and reject cancellation without native confirmation.
+- Fixed OpenClaw bridge disconnection immediately after Stop falsely reporting a confirmed abort; failed native completion now retains uncertainty in shared reply/audit events and reports that Gateway work may still be active.
+- Fixed macOS launcher CI treating `/var` and `/private/var` aliases as different workspaces; compare realpaths and exercise symlink/Windows-junction cwd transport.
+- Fixed built-in prompts waiting for external CLI/Gateway discovery while external dispatch is disabled; explicit Settings/Refresh still scans normally.
+- Fixed unacknowledged remote cancellation being reported as an ordinary abort; preserve explicit uncertainty through the shared registry, and make repeated native-session close idempotent after resource retirement.
 - Fixed duplicate terminal audit events from concurrent Stop requests, audit-write failures blocking native interruption/cleanup, and externally mutable registered adapter descriptors in the shared adapter contract.
 - Fixed native harness discovery/model queries and JSONL/ACP adapters bypassing the shared Windows-aware process launcher and losing user CLI paths in GUI launches; resolve executable/shim extensions, share user-level PATH locations and preserve bounded timeout/output capture, with native OS transport coverage in desktop CI.
 - Fixed peer selection and prompt identity claiming model quality, strengths, privacy or latency from family names/parameter counts; use declared metadata, configured roles/specialties and available-peer complexity policy instead, and stop treating unrelated harness brands as Agent 2 aliases.

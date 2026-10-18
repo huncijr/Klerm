@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { createCodingHarnessAdapters } from "../src/klerm/coding-harness-adapter.ts";
 import {
 	type CodingHarnessKind,
+	type CodingHarnessProbe,
 	createCodingHarnessAgent,
 	createCodingHarnessSetup,
 	discoverCodingHarnesses,
@@ -16,6 +18,7 @@ import {
 } from "../src/klerm/coding-harness-setup.ts";
 
 const tempDirs: string[] = [];
+const connected = new Map([...createCodingHarnessAdapters()].map(([kind, adapter]) => [kind, adapter.capabilities!]));
 const agent = (id: string, kind: CodingHarnessKind | null, enabled = kind !== null) => ({
 	id,
 	kind,
@@ -43,7 +46,7 @@ describe("coding harness setup", () => {
 				{ kind: "opencode", builtin: false, available: true, models: [] },
 				{ kind: "codex", builtin: false, available: true, models: [] },
 			],
-			new Set(["opencode", "codex"]),
+			connected,
 		);
 		expect(setup.runnableAgents.map((agent) => agent.strengthBand)).toEqual([3, 3]);
 		expect(setup.runnableAgents.map((agent) => agent.strengths)).toEqual([["review"], []]);
@@ -63,7 +66,7 @@ describe("coding harness setup", () => {
 		const setup = createCodingHarnessSetup(
 			{ ...slots, agents: [{ ...slots.agents[0]!, role: "planner" }] },
 			[{ kind: "hermes", builtin: false, available: true, models: ["native-default"] }],
-			new Set(["hermes"]),
+			connected,
 		);
 		expect(setup.runnableAgents).toHaveLength(0);
 		expect(setup.excludedAgents[0]?.reason).toContain("read-only Plan");
@@ -190,7 +193,7 @@ describe("coding harness setup", () => {
 	});
 
 	it("discovers builtin Klerm and probes only fixed external version commands", async () => {
-		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes") => {
+		const probe = vi.fn(async (command: Parameters<CodingHarnessProbe>[0]) => {
 			if (command === "codex" || command === "cline") throw new Error("not installed");
 			return { stdout: `${command} 2.0\n${"ignored".repeat(100)}` };
 		});
@@ -203,6 +206,7 @@ describe("coding harness setup", () => {
 			{ kind: "opencode", available: true, builtin: false, models: [], version: "opencode 2.0" },
 			{ kind: "cline", available: false, builtin: false, models: [] },
 			{ kind: "hermes", available: true, builtin: false, models: ["native-default"], version: "hermes 2.0" },
+			{ kind: "openclaw", available: true, builtin: false, models: ["native-default"], version: "openclaw 2.0" },
 		]);
 		expect(probe).toHaveBeenNthCalledWith(1, "pi", {
 			args: ["--version"],
@@ -233,7 +237,7 @@ describe("coding harness setup", () => {
 	});
 
 	it("prefers an ACP initialize handshake over the version probe", async () => {
-		const probe = vi.fn(async (command: "pi" | "claude" | "codex" | "opencode" | "cline" | "hermes") => {
+		const probe = vi.fn(async (command: Parameters<CodingHarnessProbe>[0]) => {
 			if (command === "opencode") throw new Error("should not be called when ACP succeeds");
 			return { stdout: `${command} 2.0` };
 		});
@@ -271,6 +275,7 @@ describe("coding harness setup", () => {
 			},
 			{ kind: "cline", available: true, builtin: false, models: [], version: "cline 2.0" },
 			{ kind: "hermes", available: true, builtin: false, models: ["native-default"], version: "hermes 2.0" },
+			{ kind: "openclaw", available: true, builtin: false, models: ["native-default"], version: "openclaw 2.0" },
 		]);
 	});
 
@@ -335,7 +340,7 @@ describe("coding harness setup", () => {
 				],
 			},
 			harnesses,
-			new Set(["opencode", "codex"]),
+			connected,
 		);
 		expect(setup).toMatchObject({
 			effectiveRouting: "auto",

@@ -5,9 +5,10 @@ import { spawnHarnessProcess } from "../utils/child-process.ts";
 import type { AgentCapability, AgentPrompt } from "./agent-adapter-contract.ts";
 import type { CodingHarnessAgentSettings, CodingHarnessKind, CodingHarnessRole } from "./coding-harness-setup.ts";
 import { HermesAdapter } from "./hermes-adapter.ts";
+import { OpenClawAdapter } from "./openclaw-adapter.ts";
 import { createRegisteredCodingHarnessAdapters } from "./registered-coding-harness-adapter.ts";
 
-export const CONNECTED_CODING_HARNESS_ADAPTERS = ["opencode", "codex", "hermes"] as const;
+export const CONNECTED_CODING_HARNESS_ADAPTERS = ["opencode", "codex", "hermes", "openclaw"] as const;
 export type ConnectedCodingHarnessKind = (typeof CONNECTED_CODING_HARNESS_ADAPTERS)[number];
 
 export interface CodingHarnessSessionRef {
@@ -31,7 +32,7 @@ export type CodingHarnessAdapterEvent =
 			output: unknown;
 			isError: boolean;
 	  }
-	| { type: "settled"; agentId: string; status: "completed" | "failed" | "aborted" }
+	| { type: "settled"; agentId: string; status: "completed" | "failed" | "aborted"; uncertain?: boolean }
 	| { type: "error"; agentId: string; message: string };
 
 export type CodingHarnessAdapterListener = (event: CodingHarnessAdapterEvent) => void;
@@ -262,8 +263,6 @@ export class OpenCodeAdapter extends JsonlCodingHarnessAdapter {
 			state.ref.model,
 			"--agent",
 			state.role === "planner" ? "plan" : "build",
-			"--dir",
-			state.cwd,
 			...(state.ref.nativeSessionId ? ["--session", state.ref.nativeSessionId] : []),
 			"-",
 		];
@@ -389,6 +388,7 @@ export function createCodingHarnessAdapters(): Map<ConnectedCodingHarnessKind, C
 			["opencode", new OpenCodeAdapter()],
 			["codex", new CodexAdapter()],
 			["hermes", new HermesAdapter()],
+			["openclaw", new OpenClawAdapter()],
 		]),
 	);
 }

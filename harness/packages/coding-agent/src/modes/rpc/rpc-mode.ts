@@ -2730,12 +2730,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime, options: RunR
 					await session.setKlermThinkingLevel(agent.id === "agent1" ? "local" : "frontier", agent.effort);
 			}
 		}
-		const harnesses = await loadCodingHarnesses(refreshDiscovery);
+		// Disabled external dispatch must not delay a built-in prompt with native
+		// CLI/Gateway cold starts. Explicit Settings/Refresh still scans normally.
+		const harnesses =
+			!refreshDiscovery && !slots.externalHarnessesEnabled
+				? (cachedCodingHarnesses ?? [{ kind: "klerm" as const, builtin: true, available: true, models: [] }])
+				: await loadCodingHarnesses(refreshDiscovery);
 		const klermModels = session.modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}/${model.id}`);
 		const setup = createCodingHarnessSetup(
 			slots,
 			harnesses.map((harness) => (harness.kind === "klerm" ? { ...harness, models: klermModels } : harness)),
-			new Set(codingHarnessAdapters.keys()),
+			new Map(
+				[...codingHarnessAdapters].flatMap(([kind, adapter]) =>
+					adapter.capabilities ? [[kind, adapter.capabilities] as const] : [],
+				),
+			),
 		);
 		const externalRoster = setup.runnableAgents.filter(
 			(agent) => agent.harness !== "klerm" && codingHarnessAdapters.has(agent.harness as ConnectedCodingHarnessKind),

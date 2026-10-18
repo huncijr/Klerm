@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
@@ -52,7 +52,20 @@ if (args[0] === "--echo") {
 		child.stdout.on("data", chunk => output += chunk);
 		child.stdin.end("native prompt\nsecond line");
 		assert.equal(await waitForChildProcess(child), 0);
-		assert.deepEqual(JSON.parse(output), { args, input: "native prompt\nsecond line", cwd: root });
+		const received = JSON.parse(output);
+		assert.deepEqual({ ...received, cwd: await realpath(received.cwd) }, { args, input: "native prompt\nsecond line", cwd: await realpath(root) });
+		// macOS /var -> /private/var is a normal alias. Exercise that same
+		// physical-directory behavior on every platform, including Windows junctions.
+		const alias = join(root, "cwd alias");
+		await symlink(await realpath(root), alias, process.platform === "win32" ? "junction" : "dir");
+		const linked = spawnHarnessProcess(launcher, ["--echo"], { cwd: alias, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+		let linkedOutput = "";
+		linked.stdout.setEncoding("utf8");
+		linked.stdout.on("data", chunk => linkedOutput += chunk);
+		linked.stdin.end("aliased project");
+		assert.equal(await waitForChildProcess(linked), 0);
+		const linkedResult = JSON.parse(linkedOutput);
+		assert.deepEqual({ ...linkedResult, cwd: await realpath(linkedResult.cwd) }, { args: [], input: "aliased project", cwd: await realpath(root) });
 		const scan = await probeAcpAgent(launcher, [], 10000);
 		assert.equal(scan?.agentName, "native-worker");
 		assert.equal(await probeAcpAgent(join(root, "missing-native-worker"), [], 10000), undefined);

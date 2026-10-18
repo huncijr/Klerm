@@ -364,12 +364,14 @@ export {
 	type CodingHarnessSlots,
 	discoverCodingHarnesses,
 	discoverCodingHarnessModels,
+	NATIVE_MODEL_CONFIGURATION,
 	normalizeCodingHarnessKind,
 	normalizeCodingHarnessSlots,
 	parseCodingHarnessSlots,
 	probeCodingHarnessVersion,
 } from "./klerm/coding-harness-setup.ts";
 export { FakeAgentAdapter, type FakeAgentTurn } from "./klerm/fake-agent-adapter.ts";
+export { OpenClawAdapter } from "./klerm/openclaw-adapter.ts";
 export { PiAgentAdapter, type PiAgentSessionFactory } from "./klerm/pi-agent-adapter.ts";
 export {
 	DEFAULT_PROJECT_ID,

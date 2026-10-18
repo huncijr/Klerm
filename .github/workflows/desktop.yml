@@ -56,6 +56,9 @@ jobs:
         run: node --test packages/desktop/scripts/*.test.mjs scripts/native-tar.test.mjs
       - name: Native harness launcher and ACP transport
         run: node --test packages/coding-agent/test/native-harness-launch.test.mjs
+      - name: Registered native adapter contracts (no provider credentials)
+        working-directory: harness/packages/coding-agent
+        run: node ../../node_modules/vitest/dist/cli.js --run test/openclaw-adapter.test.ts test/registered-coding-harness-adapter.test.ts test/coding-harness-setup.test.ts test/acp-discovery.test.ts
       - name: Build the same source revision on each native platform
         run: npm run tauri --workspace=@klerm/desktop -- build --ci
       - name: Packaged backend smoke (no system Node or auth)

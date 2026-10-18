@@ -16,6 +16,8 @@ interface HermesSession {
 	fullAccess: boolean;
 	running?: Promise<void>;
 	aborted: boolean;
+	uncertain?: boolean;
+	failure?: string;
 	tools: Map<string, string>;
 	text: string;
 }
@@ -24,6 +26,8 @@ interface HermesSession {
 export class HermesAdapter implements CodingHarnessAdapter {
 	readonly kind = "hermes" as const;
 	readonly capabilities: AgentCapability = {
+		modelSelection: "explicit-or-native",
+		executionProfiles: ["native", "full-access"],
 		nativeSessionIdentity: "on-start",
 		resumeSession: true,
 		interrupt: true,
@@ -120,6 +124,8 @@ export class HermesAdapter implements CodingHarnessAdapter {
 		if (!state) throw new Error("Unknown Hermes session.");
 		if (state.running) throw new Error(`${ref.agentId} is already working.`);
 		state.aborted = false;
+		state.uncertain = false;
+		state.failure = undefined;
 		state.tools.clear();
 		state.text = "";
 		state.running = (async () => {
@@ -132,17 +138,31 @@ export class HermesAdapter implements CodingHarnessAdapter {
 					),
 				);
 				const cancelled = state.aborted || result.stopReason === "cancelled";
+				const incomplete = result.stopReason !== "end_turn" && result.stopReason !== "cancelled";
 				if (state.text) this.emit({ type: "message", agentId: ref.agentId, text: state.text });
-				this.emit({ type: "settled", agentId: ref.agentId, status: cancelled ? "aborted" : "completed" });
+				if (incomplete)
+					this.emit({
+						type: "error",
+						agentId: ref.agentId,
+						message: "Hermes stopped without completing the native turn.",
+					});
+				this.emit({
+					type: "settled",
+					agentId: ref.agentId,
+					status: incomplete ? "failed" : cancelled ? "aborted" : "completed",
+				});
 			} catch (error) {
+				// Closing the ACP process does not confirm settlement of its native work.
+				state.uncertain = true;
+				state.failure ??= `${error instanceof Error ? error.message : "Hermes prompt failed."} Native completion was not confirmed. Hermes work may still be active; inspect it before retrying.`;
 				await state.connection.close();
 				this.sessions.delete(ref.id);
 				this.emit({
 					type: "error",
 					agentId: ref.agentId,
-					message: error instanceof Error ? error.message : "Hermes prompt failed.",
+					message: state.failure,
 				});
-				this.emit({ type: "settled", agentId: ref.agentId, status: state.aborted ? "aborted" : "failed" });
+				this.emit({ type: "settled", agentId: ref.agentId, status: "failed", uncertain: true });
 			}
 		})();
 		try {
@@ -158,21 +178,28 @@ export class HermesAdapter implements CodingHarnessAdapter {
 		state.aborted = true;
 		state.connection.notify("session/cancel", { sessionId: ref.nativeSessionId });
 		const timer = setTimeout(() => {
-			void state.connection.close();
+			state.uncertain = true;
+			state.failure =
+				"Hermes did not acknowledge cancellation. Hermes work may still be active; inspect it before retrying.";
+			void state.connection.close().catch(() => {});
 		}, 5000);
 		try {
 			await state.running;
 		} finally {
 			clearTimeout(timer);
 		}
+		if (state.uncertain) throw new Error(state.failure);
 	}
 
 	async closeSession(ref: CodingHarnessSessionRef): Promise<void> {
 		const state = this.sessions.get(ref.id);
 		if (!state) return;
-		await this.abort(ref);
-		await state.connection.close();
-		this.sessions.delete(ref.id);
+		try {
+			await this.abort(ref);
+		} finally {
+			await state.connection.close();
+			this.sessions.delete(ref.id);
+		}
 	}
 
 	subscribe(listener: CodingHarnessAdapterListener): () => void {
@@ -181,7 +208,13 @@ export class HermesAdapter implements CodingHarnessAdapter {
 	}
 
 	private emit(event: CodingHarnessAdapterEvent): void {
-		for (const listener of this.listeners) listener(event);
+		for (const listener of this.listeners) {
+			try {
+				listener(structuredClone(event));
+			} catch {
+				/* Observers cannot change native execution or another observer's events. */
+			}
+		}
 	}
 
 	private handleMessage(state: HermesSession, message: Record<string, unknown>): void {

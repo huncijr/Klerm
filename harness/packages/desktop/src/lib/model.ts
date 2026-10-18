@@ -1,3 +1,4 @@
+import type { AgentCapability } from "../../../coding-agent/src/klerm/agent-adapter-contract.ts";
 import type { CliBinding } from "../../../coding-agent/src/klerm/cli-keybinding-store.ts";
 import type { DesktopBinding } from "../../../coding-agent/src/klerm/desktop-keybindings.ts";
 
@@ -7,7 +8,7 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export type WorkerRole = "planner" | "builder";
 export type ApprovalMode = "always" | "risky" | "never";
 export type DesktopAppearance = "dark" | "light" | "system";
-export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes";
+export type CodingHarnessKind = "klerm" | "pi" | "claude-code" | "codex" | "opencode" | "cline" | "hermes" | "openclaw";
 export type CodingHarnessSlot = CodingHarnessKind | null;
 export type CodingHarnessEffectiveRouting = "auto" | "none" | "disabled";
 export type WorkspaceView = "agents-routing" | "personal-bots" | "kanban" | "browser" | "graph";
@@ -168,6 +169,7 @@ export interface CodingHarnessSetup {
 		version?: string;
 		error?: string;
 		models: string[];
+		capabilities?: AgentCapability;
 		acp?: {
 			command: string;
 			protocolVersion: number;

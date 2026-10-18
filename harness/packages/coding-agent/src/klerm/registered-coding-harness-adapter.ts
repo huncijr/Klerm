@@ -16,7 +16,11 @@ import type {
 	CodingHarnessSessionRef,
 	ConnectedCodingHarnessKind,
 } from "./coding-harness-adapter.ts";
-import { type CodingHarnessAgentSettings, codingHarnessLabel } from "./coding-harness-setup.ts";
+import {
+	type CodingHarnessAgentSettings,
+	codingHarnessLabel,
+	NATIVE_MODEL_CONFIGURATION,
+} from "./coding-harness-setup.ts";
 
 interface Binding {
 	native: CodingHarnessSessionRef;
@@ -27,6 +31,7 @@ interface Binding {
 	text: string;
 	error?: string;
 	nativeStatus?: "completed" | "failed" | "aborted";
+	nativeUncertain?: boolean;
 	nativeSessionIdAtStart?: string;
 	request?: AgentPrompt;
 	active?: Promise<void>;
@@ -96,7 +101,11 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 							return ref.nativeSessionId;
 						},
 						get model() {
-							return ref.model;
+							return (native.capabilities?.modelSelection === "native" ||
+								native.capabilities?.modelSelection === "explicit-or-native") &&
+								ref.model === NATIVE_MODEL_CONFIGURATION
+								? undefined
+								: ref.model;
 						},
 						async prompt(text, signal) {
 							if (!signal.aborted) await native.prompt(ref, text);
@@ -104,6 +113,7 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 								text: binding.text,
 								failed: binding.nativeStatus !== "completed",
 								aborted: binding.nativeStatus === "aborted",
+								uncertain: binding.nativeUncertain,
 								error: binding.error,
 							};
 						},
@@ -135,9 +145,18 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 		};
 		this.starts.set(settings.id, pending);
 		try {
-			const shared = await this.registry
-				.get(this.kind)
-				.start({ agentId: settings.id, cwd, model: settings.model, role: settings.role, nativeSessionId });
+			const shared = await this.registry.get(this.kind).start({
+				agentId: settings.id,
+				cwd,
+				model:
+					(this.capabilities.modelSelection === "native" ||
+						this.capabilities.modelSelection === "explicit-or-native") &&
+					settings.model === NATIVE_MODEL_CONFIGURATION
+						? undefined
+						: settings.model,
+				role: settings.role,
+				nativeSessionId,
+			});
 			const binding = pending.binding;
 			if (!binding) throw new Error("Native session startup returned no binding.");
 			binding.shared = shared;
@@ -154,7 +173,7 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 			!binding ||
 			ref.agentId !== binding.shared.agentId ||
 			ref.harness !== this.kind ||
-			ref.model !== binding.shared.model ||
+			ref.model !== binding.native.model ||
 			ref.role !== binding.native.role ||
 			ref.executionProfile !== binding.native.executionProfile
 		)
@@ -173,6 +192,7 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 		binding.text = "";
 		binding.error = undefined;
 		binding.nativeStatus = undefined;
+		binding.nativeUncertain = false;
 		const id = randomUUID();
 		const request: AgentPrompt = {
 			version: 1,
@@ -212,7 +232,12 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 		if (reply?.text) this.emit({ type: "message", agentId: ref.agentId, text: reply.text });
 		const error = failure ?? reply?.error ?? (reply?.status === "failed" ? "Native turn failed." : undefined);
 		if (error) this.emit({ type: "error", agentId: ref.agentId, message: error });
-		this.emit({ type: "settled", agentId: ref.agentId, status: failure ? "failed" : (reply?.status ?? "failed") });
+		this.emit({
+			type: "settled",
+			agentId: ref.agentId,
+			status: failure ? "failed" : (reply?.status ?? "failed"),
+			...(reply?.uncertain ? { uncertain: true } : {}),
+		});
 	}
 
 	private onNativeEvent(event: CodingHarnessAdapterEvent): void {
@@ -228,6 +253,7 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 		}
 		if (event.type === "settled") {
 			binding.nativeStatus = event.status;
+			binding.nativeUncertain = event.uncertain;
 			return;
 		}
 		const request = binding.request;
@@ -270,6 +296,7 @@ class RegisteredCodingHarnessAdapter implements CodingHarnessAdapter {
 	}
 
 	async closeSession(ref: CodingHarnessSessionRef): Promise<void> {
+		if (!this.bindings.has(ref.id)) return;
 		const binding = this.binding(ref);
 		if (binding.closePromise) return binding.closePromise;
 		binding.closing = true;

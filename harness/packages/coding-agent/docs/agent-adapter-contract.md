@@ -36,6 +36,30 @@ implement `AgentAdapter` or supply its real structured runtime through
 `RuntimeAgentAdapter`, then explicitly register it. Registering a name alone is
 not an integration. No commands/protocols are guessed for an unconnected harness.
 
+Live setup now receives a capability map, not a set of harness names. Supported
+roles, resume, native model selection, Gateway-handshake prerequisites and
+override/profile restrictions come from the registered adapter. Native
+configuration selectors are not written as resolved model identities in the
+shared journal. See [OpenClaw](openclaw.md) for the first Gateway-backed adapter.
+
+Hermes accepts `end_turn` as native completion and `cancelled` as native
+cancellation. Token/turn limits, refusal and unrecognized stop reasons fail the
+turn rather than claiming success. Connection loss or a five-second Stop timeout
+without native completion yields a failed, `uncertain: true` reply and audit
+event; Stop rejects instead of confirming cancellation. Closing the ACP process
+does not prove that native work or its side effects have stopped. Inspect the
+native worker before retrying uncertain work.
+Hermes event observers receive independent deep copies; a throwing observer
+cannot terminate native execution or prevent other observers/shared audit from
+receiving the event. Confirmed cancellation and incomplete native turns keep the
+same session available for an explicit follow-up; disconnected sessions do not.
+
+OpenCode runs in the child process's configured workspace; no `run --dir` flag
+is required (OpenCode v2.0.28 rejects it). Explicit provider/model arguments stay
+unchanged. Native authentication failures such as `401` fail the turn without
+choosing another account/model. The local GPT-only acceptance results and native
+runtime versions are recorded in [STATUS.md](../../../../STATUS.md).
+
 ## Ordering and logs
 
 Every prompt has a version, message/task/correlation IDs, sender, recipient,
@@ -68,7 +92,7 @@ are no longer aliases for the second built-in model.
 From `harness/packages/coding-agent`:
 
 ```bash
-node ../../node_modules/vitest/dist/cli.js --run test/agent-adapter-contract.test.ts test/registered-coding-harness-adapter.test.ts test/coding-harness-setup.test.ts test/coding-harness-bridge.test.ts test/coding-harness-adapter.test.ts test/klerm-model-profile.test.ts test/klerm-routing-runtime.test.ts
+node ../../node_modules/vitest/dist/cli.js --run test/agent-adapter-contract.test.ts test/registered-coding-harness-adapter.test.ts test/openclaw-adapter.test.ts test/hermes-adapter.test.ts test/coding-harness-setup.test.ts test/coding-harness-bridge.test.ts test/coding-harness-adapter.test.ts test/klerm-model-profile.test.ts test/klerm-routing-runtime.test.ts
 ```
 
 Expected: all selected tests pass. The same basic contract runs against the fake
